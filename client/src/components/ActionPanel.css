@@ -1,0 +1,30 @@
+.action-background {
+
+    border-color: rgb(138, 80, 183);
+    border-width: 1px;
+    border-style: solid;
+
+    height: 8vh;
+
+    display: flex;
+    align-items:    center;
+    justify-content: center;
+}
+
+.action-button {
+    height: 45px;
+    width: 80px;
+
+    margin: 2vh;
+    padding: 5px;
+    
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+    text-align: center;
+
+    border-style: solid;
+    border-radius: 15px;
+    border-width: 2px;
+    border-color: rgb(175, 146, 132);
+}
