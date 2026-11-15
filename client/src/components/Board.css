@@ -3,14 +3,13 @@
     border-color: aquamarine;
     border-width: 1px;
     border-style: solid;
-    width: 80px;
-    height: 80px;
+    width: 90px;
+    height: 90px;
 }
 
 
 .board-background {
-
-    border-color: red;
+    border-color: rgb(118, 200, 46);
     border-width: 1px;
     border-style: solid;
 
@@ -24,8 +23,8 @@
 
 .board {
     background-color: burlywood;
-    width: 400px;
-    height: 400px;
+    width: 420px;
+    height: 420px;
     position: relative;
     align-self: center;
     vertical-align: middle;
@@ -33,5 +32,12 @@
     border-color: red;
     border-width: 1px;
     border-style: solid;
+
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    /* gap: 5px; */
+
+    padding-top: 10px;
+    padding-left: 10px;
 }
 
