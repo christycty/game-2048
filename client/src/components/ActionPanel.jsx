@@ -1,15 +1,15 @@
 import "./ActionPanel.css"
 
-function ActionPanel() {
+function ActionPanel({ onNewGame }) {
     return (
         <>
             <div className="action-background">
-                <div className="action-button">
+                <button type="button" className="action-button" onClick={onNewGame}>
                     New Game
-                </div>
-                <div className="action-button">
+                </button>
+                <button type="button" className="action-button">
                     AI
-                </div>
+                </button>
             </div>
         </>
     )

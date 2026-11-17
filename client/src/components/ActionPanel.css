@@ -1,30 +1,36 @@
 .action-background {
-
-    border-color: rgb(138, 80, 183);
-    border-width: 1px;
-    border-style: solid;
-
-    height: 8vh;
-
+    box-sizing: border-box;
+    width: 420px;
+    margin: 4px auto 32px;
     display: flex;
-    align-items:    center;
+    align-items: center;
     justify-content: center;
+    gap: 12px;
 }
 
 .action-button {
-    height: 45px;
-    width: 80px;
+    width: 124px;
+    height: 44px;
+    padding: 0 16px;
+    border: none;
+    border-radius: 6px;
+    background: #8f7a66;
+    color: #f9f6f2;
+    font: inherit;
+    font-size: 16px;
+    font-weight: bold;
+    cursor: pointer;
+}
 
-    margin: 2vh;
-    padding: 5px;
-    
-    display: flex;
-    flex-direction: column;
-    justify-content: center;
-    text-align: center;
+.action-button:hover {
+    background: #9f8a75;
+}
 
-    border-style: solid;
-    border-radius: 15px;
-    border-width: 2px;
-    border-color: rgb(175, 146, 132);
+.action-button:active {
+    background: #7c6a59;
+}
+
+.action-button:focus-visible {
+    outline: 2px solid #776e65;
+    outline-offset: 3px;
 }
