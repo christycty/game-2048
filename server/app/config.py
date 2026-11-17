@@ -10,4 +10,5 @@ class Settings(BaseSettings):
     ollama_base_url: str = "http://localhost:11434"
     ollama_model: str = "llama3.2"
     llm_max_attempts: int = 3
-    otel_exporter_otlp_endpoint: str | None = None
+    phoenix_collector_endpoint: str = "http://localhost:6006"
+    phoenix_api_key: str | None = None
