@@ -1,10 +1,10 @@
 import { useLayoutEffect, useRef } from "react";
 import { SLIDE_MS } from "../game";
+import { swipeDirection } from "../swipe";
 import "./Board.css";
 
 const CELL = 90;
 const GAP = 12;
-const SWIPE_THRESHOLD = 24;
 
 function tileTransform(row, col) {
     const step = CELL + GAP;
@@ -76,14 +76,8 @@ function Board({ tiles, lost, onSwipe }) {
         swipeRef.current = null;
         if (!start || start.pointerId !== event.pointerId) return;
 
-        const dx = event.clientX - start.x;
-        const dy = event.clientY - start.y;
-        if (Math.max(Math.abs(dx), Math.abs(dy)) < SWIPE_THRESHOLD) return;
-
-        const direction = Math.abs(dx) > Math.abs(dy)
-            ? (dx > 0 ? "right" : "left")
-            : (dy > 0 ? "down" : "up");
-        onSwipe(direction);
+        const direction = swipeDirection(event.clientX - start.x, event.clientY - start.y);
+        if (direction) onSwipe(direction);
     }
 
     return (
