@@ -129,6 +129,40 @@ def test_ollama_client_parses_structured_output() -> None:
     assert move == "left"
 
 
+def _ollama_client(handler) -> tuple[TestClient, httpx.Client]:
+    transport = httpx.MockTransport(handler)
+    http = httpx.Client(transport=transport, base_url="http://ollama.test")
+    app = create_app(Settings(llm_max_attempts=2), OllamaClient(Settings(), client=http))
+    return TestClient(app), http
+
+
+def test_suggest_falls_back_when_ollama_http_fails() -> None:
+    def handler(_request: httpx.Request) -> httpx.Response:
+        return httpx.Response(500, json={"error": "unavailable"})
+
+    client, http = _ollama_client(handler)
+    try:
+        response = client.post("/suggest", json={"board": OPEN_BOARD, "mode": "llm"})
+    finally:
+        http.close()
+    assert response.status_code == 200
+    assert response.json() == {"move": "right", "mode": "llm", "source": "fallback"}
+
+
+def test_suggest_falls_back_when_message_is_null() -> None:
+    def handler(_request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json={"message": None})
+
+    client, http = _ollama_client(handler)
+    try:
+        response = client.post("/suggest", json={"board": OPEN_BOARD, "mode": "llm"})
+    finally:
+        http.close()
+    assert response.status_code == 200
+    assert response.json()["source"] == "fallback"
+    assert response.json()["move"] == "right"
+
+
 def test_ollama_client_rejects_unusable_output() -> None:
     def handler(_request: httpx.Request) -> httpx.Response:
         return httpx.Response(200, json={"message": {"content": "not-json"}})

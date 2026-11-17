@@ -46,18 +46,24 @@ class OllamaClient:
         except (httpx.HTTPError, ValueError) as exc:
             raise LlmError("ollama request failed") from exc
 
-        content = body.get("message", {}).get("content", "")
-        return parse_move(content)
+        if not isinstance(body, dict):
+            raise LlmError("ollama response is not an object")
+        message = body.get("message")
+        if not isinstance(message, dict):
+            raise LlmError("ollama response has no message")
+        return parse_move(message.get("content", ""))
 
 
 def parse_move(content: str | dict) -> str:
     if isinstance(content, dict):
         payload = content
-    else:
+    elif isinstance(content, str):
         try:
             payload = json.loads(content)
         except json.JSONDecodeError as exc:
             raise LlmError("model output is not json") from exc
+    else:
+        raise LlmError("model output is not json")
     if not isinstance(payload, dict):
         raise LlmError("model output is not an object")
     move = payload.get("move")
