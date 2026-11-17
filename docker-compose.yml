@@ -1,14 +1,33 @@
+# Every service is behind a profile. `docker compose up` starts nothing
+# unless you pass --profile dev or --profile prod.
+# host-gateway makes host.docker.internal resolve on Linux Docker Engine.
+# Ollama that listens only on 127.0.0.1 is still unreachable from the container.
+
 services:
   phoenix:
     image: arizephoenix/phoenix:latest
     profiles: ["dev", "prod"]
+    # Localhost only. PHOENIX_API_KEY on the API is an outbound header and
+    # does not lock this UI or the OTLP port.
     ports:
-      - "6006:6006"
-      - "4317:4317"
+      - "127.0.0.1:6006:6006"
+      - "127.0.0.1:4317:4317"
     environment:
       PHOENIX_WORKING_DIR: /phoenix
     volumes:
       - phoenix-data:/phoenix
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "python3",
+          "-c",
+          "import urllib.request; urllib.request.urlopen('http://localhost:6006/healthz')",
+        ]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+      start_period: 15s
 
   dev:
     profiles: ["dev"]
@@ -16,8 +35,11 @@ services:
       context: ./server
     ports:
       - "8000:8000"
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     depends_on:
-      - phoenix
+      phoenix:
+        condition: service_healthy
     environment:
       APP_ENV: dev
       OLLAMA_BASE_URL: ${OLLAMA_BASE_URL:-http://host.docker.internal:11434}
@@ -35,8 +57,11 @@ services:
       context: ./server
     ports:
       - "8000:8000"
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     depends_on:
-      - phoenix
+      phoenix:
+        condition: service_healthy
     environment:
       APP_ENV: prod
       OLLAMA_BASE_URL: ${OLLAMA_BASE_URL:-http://host.docker.internal:11434}
