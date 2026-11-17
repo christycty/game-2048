@@ -7,6 +7,7 @@ from app.config import Settings
 from app.llm import LlmClient, OllamaClient
 from app.schemas import HealthResponse, SuggestRequest, SuggestResponse
 from app.suggester import MoveSuggester, NoLegalMove
+from app.telemetry import setup_telemetry
 
 
 def create_app(
@@ -44,6 +45,7 @@ def create_app(
         allow_methods=["GET", "POST"],
         allow_headers=["*"],
     )
+    setup_telemetry(app, settings)
 
     @app.get("/health", response_model=HealthResponse)
     def health() -> HealthResponse:
