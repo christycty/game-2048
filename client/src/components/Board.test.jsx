@@ -5,6 +5,7 @@ import { afterEach, beforeEach, expect, test, vi } from "vitest";
 import { SLIDE_MS } from "../game";
 import Board from "./Board.jsx";
 
+// jsdom does not load the component CSS, so stacking and slide distance use the real file.
 const boardCss = readFileSync(resolve(process.cwd(), "src/components/Board.css"), "utf8");
 
 beforeEach(() => {
@@ -32,6 +33,7 @@ test("game over stays above the tile layer", () => {
         />,
     );
 
+    // The overlay sits beside the tile layer, so it covers every tile, including one drawn above its neighbors.
     const overlay = screen.getByText("Game over");
     const layer = document.querySelector(".tile-layer");
     const overlayZ = Number(getComputedStyle(overlay).zIndex);
@@ -53,6 +55,7 @@ test("game over stays above the tile layer", () => {
 
 test("a tile starts on its old cell and slides to the new one", () => {
     let frame = null;
+    // Hold the frame so the tile can be seen on its old cell, then on the new one.
     const raf = vi.spyOn(window, "requestAnimationFrame").mockImplementation((callback) => {
         frame = callback;
         return 1;
@@ -73,6 +76,7 @@ test("a tile starts on its old cell and slides to the new one", () => {
             return probe.style.transform;
         };
         const tile = document.querySelector(".tile");
+        // The slide step is the same cell and gap the grid uses.
         expect(boardCss).toContain("grid-template-columns: repeat(var(--size), var(--cell))");
         expect(boardCss).toContain("gap: var(--gap)");
         expect(tile.style.transition).toBe("none");
@@ -114,6 +118,7 @@ test("a long drag on the board is a swipe", () => {
     );
     const board = container.querySelector(".board");
 
+    // Only the downward drag qualifies. A short drag, a right-click, and a cancelled pointer do not.
     drag(board, { from: [20, 20], to: [20, 100] });
     drag(board, { from: [20, 20], to: [30, 20] });
     drag(board, { from: [20, 20], to: [120, 20], button: 2, pointerType: "mouse" });
@@ -136,6 +141,7 @@ test("another pointer's release keeps the swipe that is still down", () => {
     );
     const board = container.querySelector(".board");
 
+    // Pointer 1 lifts while pointer 2 is still down. Only pointer 2's downward drag counts.
     fireEvent.pointerDown(board, { clientX: 20, clientY: 20, pointerId: 1, button: 0, pointerType: "touch" });
     fireEvent.pointerDown(board, { clientX: 40, clientY: 40, pointerId: 2, button: 0, pointerType: "touch" });
     fireEvent.pointerUp(board, { clientX: 140, clientY: 20, pointerId: 1, pointerType: "touch" });
@@ -146,6 +152,7 @@ test("another pointer's release keeps the swipe that is still down", () => {
 
 test("a release outside the board still counts after the board captures the pointer", () => {
     const original = Element.prototype.setPointerCapture;
+    // jsdom does not retarget pointerup to the element that captured the pointer. This stand-in does.
     Element.prototype.setPointerCapture = function capture(pointerId) {
         const element = this;
         const onUp = (event) => {

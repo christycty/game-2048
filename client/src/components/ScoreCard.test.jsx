@@ -18,6 +18,7 @@ test("a press outside the help closes it", () => {
     fireEvent.click(screen.getByRole("button", { name: "How to play" }));
     expect(screen.getByText("Arrow keys or swipe")).toBeTruthy();
 
+    // This press is a later one. The click that opened the help has already finished.
     fireEvent.pointerDown(document.body);
     expect(screen.queryByText("Arrow keys or swipe")).toBeNull();
 });

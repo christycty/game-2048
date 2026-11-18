@@ -3,6 +3,7 @@ import { afterEach, beforeEach, expect, test, vi } from "vitest";
 import App from "./App.jsx";
 import { applyMove, createInitialTiles, SETTLE_MS } from "./game";
 
+// These tests lock input and score timing. The move rules are covered in game.test.js.
 vi.mock("./game", async () => {
     const actual = await vi.importActual("./game");
     return {
@@ -12,6 +13,7 @@ vi.mock("./game", async () => {
     };
 });
 
+// The board before any move, and the board a new game deals.
 const opening = [{ id: 1, row: 0, col: 0, value: 2 }];
 const restarted = [{ id: 9, row: 2, col: 2, value: 8 }];
 
@@ -27,6 +29,7 @@ beforeEach(() => {
     createInitialTiles.mockReset();
     applyMove.mockReset();
     createInitialTiles.mockReturnValue(opening);
+    // The clock stays still until a test moves it past the end of the slide.
     vi.useFakeTimers();
 });
 
@@ -47,6 +50,7 @@ test("a move scores after the slide and ignores input until then", () => {
 
     render(<App />);
     press("ArrowRight");
+    // This key arrives while the slide is still playing, so it is ignored.
     press("ArrowDown");
 
     expect(applyMove).toHaveBeenCalledTimes(1);
@@ -59,6 +63,7 @@ test("a move scores after the slide and ignores input until then", () => {
         vi.advanceTimersByTime(SETTLE_MS);
     });
 
+    // The slide has finished, so the score updates and the next key is accepted.
     expect(scoreValue("SCORE")).toBe("8");
     expect(scoreValue("BEST")).toBe("8");
     expect(document.querySelector(".tile-inner").textContent).toBe("16");
@@ -80,6 +85,7 @@ test("a swipe uses the same move path as the arrow keys", () => {
 
     render(<App />);
     const board = document.querySelector(".board");
+    // The finger travels farther sideways than up or down, so the move is to the right.
     fireEvent.pointerDown(board, { clientX: 10, clientY: 40, pointerId: 1, button: 0, pointerType: "touch" });
     fireEvent.pointerUp(board, { clientX: 100, clientY: 40, pointerId: 1, pointerType: "touch" });
 
@@ -115,6 +121,7 @@ test("best score keeps the higher result after a new game", () => {
     expect(scoreValue("SCORE")).toBe("8");
     expect(scoreValue("BEST")).toBe("8");
 
+    // New Game clears the score and keeps the best score from the first game.
     fireEvent.click(screen.getByRole("button", { name: "New Game" }));
     expect(scoreValue("SCORE")).toBe("0");
     expect(scoreValue("BEST")).toBe("8");
@@ -124,6 +131,7 @@ test("best score keeps the higher result after a new game", () => {
     act(() => {
         vi.advanceTimersByTime(SETTLE_MS);
     });
+    // The second game scores 2, which does not replace the best of 8.
     expect(scoreValue("SCORE")).toBe("2");
     expect(scoreValue("BEST")).toBe("8");
 });
@@ -141,6 +149,7 @@ test("a new game drops a slide that has not finished", () => {
 
     render(<App />);
     press("ArrowRight");
+    // New Game happens before the slide finishes. The old 2 must not come back, and its score must not be added.
     fireEvent.click(screen.getByRole("button", { name: "New Game" }));
     act(() => {
         vi.advanceTimersByTime(SETTLE_MS);
@@ -148,6 +157,7 @@ test("a new game drops a slide that has not finished", () => {
 
     expect(scoreValue("SCORE")).toBe("0");
     expect(scoreValue("BEST")).toBe("0");
+    // The 8 is the tile dealt by the new game.
     expect(screen.getByText("8")).toBeTruthy();
     expect(screen.queryByText("2")).toBeNull();
 
@@ -167,6 +177,7 @@ test("a lost game ignores later moves", () => {
 
     render(<App />);
     press("ArrowUp");
+    // The overlay waits until the slide finishes.
     expect(screen.queryByText("Game over")).toBeNull();
 
     act(() => {
@@ -189,6 +200,7 @@ test("a move that does not change the board can be followed immediately", () => 
     });
 
     render(<App />);
+    // Enter is not a direction. Both Left presses count, because a blocked move does not lock the board.
     press("ArrowLeft");
     press("ArrowLeft");
     press("Enter");
@@ -225,6 +237,7 @@ test("a new game clears a loss and accepts another move", () => {
     expect(screen.getByText("Game over")).toBeTruthy();
 
     fireEvent.click(screen.getByRole("button", { name: "New Game" }));
+    // The overlay is gone, and the next key moves the new board.
     expect(screen.queryByText("Game over")).toBeNull();
 
     press("ArrowLeft");
