@@ -74,11 +74,11 @@ function App() {
   }, []);
 
   return (
-    <>
+    <div className="app">
       <ScoreCard score={currentScore} bestScore={bestScore}></ScoreCard>
       <Board tiles={tiles} lost={lost} onSwipe={handleMove}></Board>
       <ActionPanel onNewGame={startGame}></ActionPanel>
-    </>
+    </div>
   );
 }
 

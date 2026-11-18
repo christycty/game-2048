@@ -3,12 +3,12 @@ import { SLIDE_MS } from "../game";
 import { swipeDirection } from "../swipe";
 import "./Board.css";
 
-const CELL = 90;
-const GAP = 12;
+// One step is a cell plus the gap. Percentages are of the tile, so the same
+// ratio stays aligned when the board shrinks.
+const STEP = "(100% + (100% * 12 / 90))";
 
 function tileTransform(row, col) {
-    const step = CELL + GAP;
-    return `translate(${col * step}px, ${row * step}px)`;
+    return `translate(calc(${col} * ${STEP}), calc(${row} * ${STEP}))`;
 }
 
 function tileZIndex(tile) {
@@ -88,32 +88,30 @@ function Board({ tiles, lost, onSwipe }) {
 
     return (
         <div className="board-background">
-            <div
-                className="board"
-                style={{
-                    "--cell": `${CELL}px`,
-                    "--gap": `${GAP}px`,
-                    "--slide": `${SLIDE_MS}ms`,
-                }}
-                onPointerDown={onPointerDown}
-                onPointerUp={finishSwipe}
-                onPointerCancel={() => {
-                    swipeRef.current = null;
-                }}
-            >
-                <div className="board-cells">
-                    {Array.from({ length: 16 }, (_, index) => (
-                        <div className="cell" key={index} />
-                    ))}
-                </div>
-                <div className="tile-layer">
-                    {[...tiles]
-                        .sort((a, b) => a.id - b.id)
-                        .map((tile) => (
-                            <Tile tile={tile} key={tile.id} />
+            <div className="board-sizer">
+                <div
+                    className="board"
+                    style={{ "--slide": `${SLIDE_MS}ms` }}
+                    onPointerDown={onPointerDown}
+                    onPointerUp={finishSwipe}
+                    onPointerCancel={() => {
+                        swipeRef.current = null;
+                    }}
+                >
+                    <div className="board-cells">
+                        {Array.from({ length: 16 }, (_, index) => (
+                            <div className="cell" key={index} />
                         ))}
+                    </div>
+                    <div className="tile-layer">
+                        {[...tiles]
+                            .sort((a, b) => a.id - b.id)
+                            .map((tile) => (
+                                <Tile tile={tile} key={tile.id} />
+                            ))}
+                    </div>
+                    {lost && <div className="game-over">Game over</div>}
                 </div>
-                {lost && <div className="game-over">Game over</div>}
             </div>
         </div>
     );

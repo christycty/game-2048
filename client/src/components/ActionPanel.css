@@ -1,7 +1,7 @@
 .action-background {
     box-sizing: border-box;
-    width: 420px;
-    margin: 4px auto 32px;
+    width: 100%;
+    margin: 4px 0 0;
     display: flex;
     align-items: center;
     justify-content: center;
@@ -9,7 +9,7 @@
 }
 
 .action-button {
-    width: 124px;
+    width: min(124px, 46%);
     height: 44px;
     padding: 0 16px;
     border: none;

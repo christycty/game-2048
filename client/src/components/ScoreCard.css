@@ -1,7 +1,7 @@
 .scorecard-background {
     box-sizing: border-box;
-    width: 420px;
-    margin: 28px auto 0;
+    width: 100%;
+    margin: 0;
     display: flex;
     align-items: center;
     gap: 8px;
@@ -9,7 +9,7 @@
 
 .game-title {
     margin: 0 0 0 0;
-    font-size: 52px;
+    font-size: clamp(28px, 12cqw, 52px);
     font-weight: bold;
     line-height: 1;
     color: #776e65;
@@ -62,8 +62,9 @@
 
 .scorecard {
     box-sizing: border-box;
-    min-width: 88px;
-    padding: 6px 14px 8px;
+    width: clamp(68px, 22cqw, 96px);
+    min-width: 0;
+    padding: 6px 10px 8px;
     border-radius: 6px;
     background: #bbada0;
     color: #eee4da;
@@ -78,7 +79,7 @@
 
 .scorecard-value {
     margin-top: 2px;
-    font-size: 22px;
+    font-size: clamp(16px, 5cqw, 22px);
     font-weight: bold;
     line-height: 1.1;
     color: #ffffff;
