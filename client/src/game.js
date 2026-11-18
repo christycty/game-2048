@@ -1,8 +1,8 @@
-import getRandomInt from "./utils.js";
-
 export const GRID_SIZE = 4;
 export const GRID_COUNT = GRID_SIZE * GRID_SIZE;
 export const SLIDE_MS = 140;
+// The merged numbers replace the slide once the transition has painted its last frame.
+export const SETTLE_MS = SLIDE_MS + 20;
 
 const DIRECTIONS = {
     left: { row: 0, col: -1 },
@@ -11,10 +11,8 @@ const DIRECTIONS = {
     down: { row: 1, col: 0 },
 };
 
-let nextTileId = 1;
-
-function createTile(row, col, value) {
-    return { id: nextTileId++, row, col, value };
+function createTile(id, row, col, value) {
+    return { id, row, col, value };
 }
 
 function inBounds(row, col) {
@@ -22,8 +20,8 @@ function inBounds(row, col) {
 }
 
 function buildTraversals(vector) {
-    const rows = [0, 1, 2, 3];
-    const cols = [0, 1, 2, 3];
+    const rows = Array.from({ length: GRID_SIZE }, (_, index) => index);
+    const cols = Array.from({ length: GRID_SIZE }, (_, index) => index);
     if (vector.row > 0) rows.reverse();
     if (vector.col > 0) cols.reverse();
     return { rows, cols };
@@ -39,15 +37,18 @@ function emptyCells(grid) {
     return cells;
 }
 
-// values locks the spawned number (opening tiles are always 2).
-// otherwise a move spawns a 2 most of the time and a 4 the rest.
-function spawnTile(grid, values) {
+function roll(random, count) {
+    return Math.floor(random() * count);
+}
+
+// choices limits the spawn (opening tiles pass [2]); otherwise a 2, or a 4 one time in ten.
+function spawnTile(grid, id, random, choices) {
     const open = emptyCells(grid);
     if (open.length === 0) return null;
 
-    const spot = open[getRandomInt(open.length)];
-    const value = values ? values[getRandomInt(values.length)] : (getRandomInt(10) === 0 ? 4 : 2);
-    const tile = createTile(spot.row, spot.col, value);
+    const spot = open[roll(random, open.length)];
+    const value = choices ? choices[roll(random, choices.length)] : (roll(random, 10) === 0 ? 4 : 2);
+    const tile = createTile(id, spot.row, spot.col, value);
     grid[spot.row][spot.col] = tile;
     return tile;
 }
@@ -56,10 +57,14 @@ function blankGrid() {
     return Array.from({ length: GRID_SIZE }, () => Array(GRID_SIZE).fill(null));
 }
 
-export function createInitialTiles() {
+function nextTileId(tiles) {
+    return tiles.reduce((max, tile) => Math.max(max, tile.id), 0) + 1;
+}
+
+export function createInitialTiles(random = Math.random) {
     const grid = blankGrid();
-    const first = spawnTile(grid, [2]);
-    const second = spawnTile(grid, [2]);
+    const first = spawnTile(grid, 1, random, [2]);
+    const second = spawnTile(grid, 2, random, [2]);
     return [first, second].filter(Boolean);
 }
 
@@ -79,14 +84,14 @@ export function hasMoves(tiles) {
     return false;
 }
 
-function presentTile(tile, { value, isNew = false, isMerged = false, absorbing = false, sliding = false }) {
+function presentTile(tile, { value, fromRow, fromCol, isNew = false, isMerged = false, absorbing = false, sliding = false }) {
     return {
         id: tile.id,
         value,
         row: tile.row,
         col: tile.col,
-        fromRow: tile.fromRow ?? tile.startRow ?? tile.row,
-        fromCol: tile.fromCol ?? tile.startCol ?? tile.col,
+        fromRow,
+        fromCol,
         isNew,
         isMerged,
         absorbing,
@@ -97,7 +102,7 @@ function presentTile(tile, { value, isNew = false, isMerged = false, absorbing =
 // Slide every tile as far as it can go. Equal values merge once per tile.
 // visualTiles is what animates (old numbers, including tiles that get absorbed).
 // resolvedTiles is the board after the slide finishes, including the spawned tile.
-export function applyMove(tiles, direction) {
+export function applyMove(tiles, direction, random = Math.random) {
     const vector = DIRECTIONS[direction];
     if (!vector) {
         return { moved: false, scoreGained: 0, visualTiles: tiles, resolvedTiles: tiles, lost: false };
@@ -170,16 +175,19 @@ export function applyMove(tiles, direction) {
     }
 
     const survivors = grid.flat().filter(Boolean);
-
-    const spawned = spawnTile(grid);
+    const spawned = spawnTile(grid, nextTileId(tiles), random);
 
     const visualTiles = [
         ...survivors.map((tile) => presentTile(tile, {
             value: tile.value,
+            fromRow: tile.startRow,
+            fromCol: tile.startCol,
             sliding: tile.row !== tile.startRow || tile.col !== tile.startCol,
         })),
         ...absorbed.map((tile) => presentTile(tile, {
             value: tile.value,
+            fromRow: tile.fromRow,
+            fromCol: tile.fromCol,
             absorbing: true,
             sliding: true,
         })),
@@ -187,11 +195,18 @@ export function applyMove(tiles, direction) {
 
     const resolvedTiles = survivors.map((tile) => presentTile(tile, {
         value: tile.pendingValue ?? tile.value,
+        fromRow: tile.startRow,
+        fromCol: tile.startCol,
         isMerged: tile.pendingValue != null,
     }));
 
     if (spawned) {
-        resolvedTiles.push(presentTile(spawned, { value: spawned.value, isNew: true }));
+        resolvedTiles.push(presentTile(spawned, {
+            value: spawned.value,
+            fromRow: spawned.row,
+            fromCol: spawned.col,
+            isNew: true,
+        }));
     }
 
     return {
