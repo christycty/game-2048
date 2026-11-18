@@ -39,11 +39,12 @@ class OllamaClient:
     def __init__(self, settings: Settings, client: httpx.Client | None = None) -> None:
         self._model = settings.ollama_model
         self._structured_output = settings.ollama_structured_output
+        self._attempt_timeout = settings.llm_attempt_timeout_seconds
         self._owns_client = client is None
         self._closed = False
         self._client = client or httpx.Client(
             base_url=settings.ollama_base_url.rstrip("/"),
-            timeout=30.0,
+            timeout=self._attempt_timeout,
         )
 
     def suggest_move(
@@ -72,7 +73,11 @@ class OllamaClient:
         if self._structured_output:
             payload["format"] = _move_schema(legal)
         try:
-            response = self._client.post("/api/chat", json=payload)
+            response = self._client.post(
+                "/api/chat",
+                json=payload,
+                timeout=self._attempt_timeout,
+            )
             response.raise_for_status()
             body = response.json()
         except (httpx.HTTPError, ValueError) as exc:

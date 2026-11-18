@@ -1,10 +1,13 @@
 import logging
+import time
+from collections.abc import Callable
 
 from app.llm import LlmClient, LlmError
 from app.moves import FALLBACK_ORDER, legal_moves
 from app.schemas import Mode, SuggestResponse
 
 logger = logging.getLogger(__name__)
+_Clock = Callable[[], float]
 
 
 class NoLegalMove(Exception):
@@ -12,9 +15,19 @@ class NoLegalMove(Exception):
 
 
 class MoveSuggester:
-    def __init__(self, llm: LlmClient, max_attempts: int = 3) -> None:
+    def __init__(
+        self,
+        llm: LlmClient,
+        max_attempts: int = 3,
+        budget_seconds: float = 20,
+        attempt_timeout_seconds: float = 10,
+        clock: _Clock | None = None,
+    ) -> None:
         self._llm = llm
         self._max_attempts = max_attempts
+        self._budget_seconds = budget_seconds
+        self._attempt_timeout_seconds = attempt_timeout_seconds
+        self._clock = clock or time.monotonic
 
     def suggest(self, board: list[list[int]], mode: Mode) -> SuggestResponse:
         legal = legal_moves(board)
@@ -27,7 +40,14 @@ class MoveSuggester:
         rejected: list[str] = []
         invalid_reply = False
         failures: list[str] = []
+        # Start a call only when the remaining budget covers its timeout.
+        deadline = self._clock() + self._budget_seconds
         for attempt in range(1, self._max_attempts + 1):
+            remaining = deadline - self._clock()
+            if remaining < self._attempt_timeout_seconds:
+                failures.append("time budget")
+                logger.warning("llm suggestion stopped with %.1f seconds left", remaining)
+                break
             try:
                 suggestion = self._llm.suggest_move(
                     board,

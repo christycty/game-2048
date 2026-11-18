@@ -12,8 +12,10 @@ class Settings(BaseSettings):
     ollama_model: str = "gemma4:latest"
     # Dev can opt into a JSON schema. Prod always parses plain JSON from the prompt.
     ollama_structured_output: bool = True
-    # One attempt can block for the HTTP timeout, so the cap stays small.
+    # One hung call must not consume the whole suggestion, and the env cannot raise these.
     llm_max_attempts: int = Field(default=3, ge=1, le=5)
+    llm_attempt_timeout_seconds: float = Field(default=10, gt=0, le=10)
+    llm_suggest_budget_seconds: float = Field(default=20, gt=0, le=20)
 
     @model_validator(mode="after")
     def prod_uses_plain_json(self) -> "Settings":

@@ -9,6 +9,7 @@ from pydantic import ValidationError
 from app.llm import LlmError, ModelSuggestion, OllamaClient, _prompt, parse_move
 from app.main import create_app
 from app.schemas import MAX_TILE
+from app.suggester import MoveSuggester
 from helpers import isolated_settings
 
 OPEN_BOARD = [
@@ -397,6 +398,10 @@ def test_attempt_count_stays_between_one_and_five() -> None:
         isolated_settings(llm_max_attempts=0)
     with pytest.raises(ValidationError):
         isolated_settings(llm_max_attempts=6)
+    with pytest.raises(ValidationError):
+        isolated_settings(llm_attempt_timeout_seconds=30)
+    with pytest.raises(ValidationError):
+        isolated_settings(llm_suggest_budget_seconds=90)
 
 
 def test_fallback_logs_the_failed_attempts(caplog: pytest.LogCaptureFixture) -> None:
@@ -458,6 +463,21 @@ def test_health_rejects_a_different_tag() -> None:
         app = create_app(settings, OllamaClient(settings, client=http))
         response = TestClient(app).get("/health")
     assert response.status_code == 503
+
+
+def test_time_budget_stops_further_attempts() -> None:
+    llm = FakeLLM([LlmError("slow")] * 3)
+    ticks = iter([0.0, 0.0, 11.0])
+    suggester = MoveSuggester(
+        llm,
+        max_attempts=3,
+        budget_seconds=20,
+        attempt_timeout_seconds=10,
+        clock=lambda: next(ticks),
+    )
+    response = suggester.suggest(OPEN_BOARD, "llm")
+    assert response.source == "fallback"
+    assert llm.calls == 1
 
 
 def test_lifespan_closes_the_owned_client(monkeypatch: pytest.MonkeyPatch) -> None:

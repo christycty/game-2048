@@ -16,7 +16,12 @@ def create_app(
     settings = settings or Settings()
     owns_llm = llm_client is None
     llm = llm_client or OllamaClient(settings)
-    suggester = MoveSuggester(llm, max_attempts=settings.llm_max_attempts)
+    suggester = MoveSuggester(
+        llm,
+        max_attempts=settings.llm_max_attempts,
+        budget_seconds=settings.llm_suggest_budget_seconds,
+        attempt_timeout_seconds=settings.llm_attempt_timeout_seconds,
+    )
 
     @asynccontextmanager
     async def lifespan(_app: FastAPI):
