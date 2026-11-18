@@ -1,6 +1,6 @@
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
-import { cleanup, render, screen } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
 import Board from "./Board.jsx";
 
@@ -80,6 +80,83 @@ test("a tile starts on its old cell and slides to the new one", () => {
         expect(tile.style.transform).toBe(at(2, 0));
     } finally {
         raf.mockRestore();
+    }
+});
+
+function drag(board, { from, to, pointerId = 1, button = 0, pointerType = "touch" }) {
+    fireEvent.pointerDown(board, {
+        clientX: from[0],
+        clientY: from[1],
+        pointerId,
+        button,
+        pointerType,
+    });
+    fireEvent.pointerUp(board, {
+        clientX: to[0],
+        clientY: to[1],
+        pointerId,
+        button,
+        pointerType,
+    });
+}
+
+test("a long drag on the board is a swipe", () => {
+    const swipes = [];
+    const { container } = render(
+        <Board
+            tiles={[{ id: 1, row: 0, col: 0, value: 2 }]}
+            lost={false}
+            onSwipe={(direction) => swipes.push(direction)}
+        />,
+    );
+    const board = container.querySelector(".board");
+
+    drag(board, { from: [20, 20], to: [20, 100] });
+    drag(board, { from: [20, 20], to: [30, 20] });
+    drag(board, { from: [20, 20], to: [120, 20], button: 2, pointerType: "mouse" });
+
+    fireEvent.pointerDown(board, { clientX: 20, clientY: 20, pointerId: 2, button: 0, pointerType: "touch" });
+    fireEvent.pointerCancel(board, { pointerId: 2 });
+    fireEvent.pointerUp(board, { clientX: 120, clientY: 20, pointerId: 2, pointerType: "touch" });
+
+    expect(swipes).toEqual(["down"]);
+});
+
+test("a release outside the board still counts after the board captures the pointer", () => {
+    const original = Element.prototype.setPointerCapture;
+    Element.prototype.setPointerCapture = function capture(pointerId) {
+        const element = this;
+        const onUp = (event) => {
+            if (event.pointerId !== pointerId || event.target === element) return;
+            document.removeEventListener("pointerup", onUp, true);
+            element.dispatchEvent(new PointerEvent("pointerup", {
+                bubbles: true,
+                cancelable: true,
+                clientX: event.clientX,
+                clientY: event.clientY,
+                pointerId,
+                button: 0,
+                pointerType: "touch",
+            }));
+        };
+        document.addEventListener("pointerup", onUp, true);
+    };
+
+    try {
+        const swipes = [];
+        const { container } = render(
+            <Board
+                tiles={[{ id: 1, row: 0, col: 0, value: 2 }]}
+                lost={false}
+                onSwipe={(direction) => swipes.push(direction)}
+            />,
+        );
+        const board = container.querySelector(".board");
+        fireEvent.pointerDown(board, { clientX: 20, clientY: 20, pointerId: 1, button: 0, pointerType: "touch" });
+        fireEvent.pointerUp(document.body, { clientX: 140, clientY: 24, pointerId: 1, pointerType: "touch" });
+        expect(swipes).toEqual(["right"]);
+    } finally {
+        Element.prototype.setPointerCapture = original;
     }
 });
 
