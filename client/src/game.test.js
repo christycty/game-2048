@@ -26,7 +26,11 @@ function expectMove(start, direction, expected, score) {
     const result = applyMove(board(start), direction);
     assert.equal(result.moved, true, `${direction} should change the board`);
     assert.equal(result.scoreGained, score);
-    assert.equal(result.lost, !hasMoves(result.resolvedTiles));
+    assert.equal(
+        result.visualTiles.length,
+        start.flat().filter(Boolean).length,
+        "the spawned tile appears after the slide",
+    );
 
     const grid = gridOf(result.resolvedTiles);
     for (let row = 0; row < 4; row++) {
@@ -69,7 +73,7 @@ test("a row of four 2s becomes two 4s and does not merge again", () => {
         [[4, 4, 0, 0], [0, 0, 0, 0], [0, 0, 0, 0], [0, 0, 0, 0]],
         8,
     );
-    assert.equal(result.resolvedTiles.filter((tile) => tile.value === 4).length, 2);
+    assert.equal(result.resolvedTiles.filter((tile) => tile.isMerged).length, 2);
 });
 
 test("three 2s merge the leading pair and leave the third 2", () => {

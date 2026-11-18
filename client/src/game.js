@@ -96,7 +96,7 @@ function presentTile(tile, { value, isNew = false, isMerged = false, absorbing =
 
 // Slide every tile as far as it can go. Equal values merge once per tile.
 // visualTiles is what animates (old numbers, including tiles that get absorbed).
-// resolvedTiles is the board after the slide finishes.
+// resolvedTiles is the board after the slide finishes, including the spawned tile.
 export function applyMove(tiles, direction) {
     const vector = DIRECTIONS[direction];
     if (!vector) {
@@ -191,8 +191,7 @@ export function applyMove(tiles, direction) {
     }));
 
     if (spawned) {
-        visualTiles.push(presentTile(spawned, { value: spawned.value, isNew: true }));
-        resolvedTiles.push(presentTile(spawned, { value: spawned.value }));
+        resolvedTiles.push(presentTile(spawned, { value: spawned.value, isNew: true }));
     }
 
     return {
