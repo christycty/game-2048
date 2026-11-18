@@ -1,4 +1,10 @@
+import os
+
 import pytest
+
+# The imported app is built at import time. Keep that process from exporting
+# to a live collector. Tests that need spans pass export_traces=True.
+os.environ["EXPORT_TRACES"] = "false"
 
 
 def pytest_addoption(parser: pytest.Parser) -> None:

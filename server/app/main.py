@@ -2,6 +2,7 @@ from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
+from opentelemetry.sdk.trace.export import SpanProcessor
 
 from app.config import Settings
 from app.llm import LlmClient, OllamaClient
@@ -13,6 +14,7 @@ from app.telemetry import setup_telemetry
 def create_app(
     settings: Settings | None = None,
     llm_client: LlmClient | None = None,
+    span_processor: SpanProcessor | None = None,
 ) -> FastAPI:
     settings = settings or Settings()
     owns_llm = llm_client is None
@@ -45,7 +47,7 @@ def create_app(
         allow_methods=["GET", "POST"],
         allow_headers=["*"],
     )
-    setup_telemetry(app, settings)
+    setup_telemetry(app, settings, span_processor)
 
     @app.get("/health", response_model=HealthResponse)
     def health() -> HealthResponse:
