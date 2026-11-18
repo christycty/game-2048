@@ -11,6 +11,12 @@ function tileTransform(row, col) {
     return `translate(${col * step}px, ${row * step}px)`;
 }
 
+function tileZIndex(tile) {
+    if (tile.absorbing) return 3;
+    if (tile.sliding) return 2;
+    return 1;
+}
+
 function Tile({ tile }) {
     const ref = useRef(null);
     const fromRow = tile.fromRow ?? tile.row;
@@ -47,7 +53,7 @@ function Tile({ tile }) {
         <div
             ref={ref}
             className={classes.join(" ")}
-            style={{ zIndex: tile.id }}
+            style={{ zIndex: tileZIndex(tile) }}
         >
             <div className={`tile-inner ${valueClass}`}>{tile.value}</div>
         </div>

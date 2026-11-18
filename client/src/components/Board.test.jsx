@@ -18,12 +18,13 @@ afterEach(() => {
     document.head.querySelector("[data-board-css]")?.remove();
 });
 
-test("game over covers tiles even when a tile id outranks the overlay", () => {
+test("game over stays above the tile layer", () => {
     render(
         <Board
             tiles={[
-                { id: 40, row: 0, col: 0, value: 2 },
-                { id: 41, row: 1, col: 1, value: 4 },
+                { id: 40, row: 0, col: 0, value: 2, sliding: true, absorbing: true },
+                { id: 41, row: 0, col: 1, value: 8, sliding: true },
+                { id: 42, row: 1, col: 1, value: 4 },
             ]}
             lost
             onSwipe={() => {}}
@@ -34,15 +35,19 @@ test("game over covers tiles even when a tile id outranks the overlay", () => {
     const layer = document.querySelector(".tile-layer");
     const overlayZ = Number(getComputedStyle(overlay).zIndex);
     const layerZ = Number(getComputedStyle(layer).zIndex);
-    const tileZ = Math.max(
-        ...[...document.querySelectorAll(".tile")].map((tile) => Number(getComputedStyle(tile).zIndex)),
-    );
+    const moving = [...document.querySelectorAll(".tile")].find((tile) => tile.textContent === "2");
+    const sliding = [...document.querySelectorAll(".tile")].find((tile) => tile.textContent === "8");
+    const parked = [...document.querySelectorAll(".tile")].find((tile) => tile.textContent === "4");
 
-    expect(layerZ).toBeGreaterThan(0);
-    expect(overlayZ).toBeGreaterThan(layerZ);
-    expect(tileZ).toBe(41);
-    // Tile ids keep climbing, so the overlay has to sit above the layer rather than above every id.
-    expect(tileZ).toBeGreaterThan(overlayZ);
+    expect(layer.contains(moving)).toBe(true);
+    expect(overlay.parentElement).toBe(layer.parentElement);
+    expect(getComputedStyle(layer).position).toBe("absolute");
+    expect(getComputedStyle(overlay).position).toBe("absolute");
+    expect(layerZ).toBe(1);
+    expect(overlayZ).toBe(2);
+    expect(Number(getComputedStyle(moving).zIndex)).toBe(3);
+    expect(Number(getComputedStyle(sliding).zIndex)).toBe(2);
+    expect(Number(getComputedStyle(parked).zIndex)).toBe(1);
 });
 
 test("the overlay stays hidden while the game can still be played", () => {
