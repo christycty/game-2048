@@ -2,13 +2,14 @@ from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
+from opentelemetry import trace
 from opentelemetry.sdk.trace.export import SpanProcessor
 
 from app.config import Settings
 from app.llm import LlmClient, OllamaClient
 from app.schemas import HealthResponse, SuggestRequest, SuggestResponse
 from app.suggester import MoveSuggester, NoLegalMove
-from app.telemetry import setup_telemetry
+from app.telemetry import mark_chain_io, setup_telemetry
 
 
 def create_app(
@@ -58,10 +59,17 @@ def create_app(
 
     @app.post("/suggest", response_model=SuggestResponse)
     def suggest(body: SuggestRequest) -> SuggestResponse:
+        span = trace.get_current_span()
         try:
-            return suggester.suggest(body.board, body.mode)
+            result = suggester.suggest(body.board, body.mode)
         except NoLegalMove:
             raise HTTPException(status_code=409, detail="no legal move") from None
+        mark_chain_io(
+            span,
+            input_payload={"board": body.board, "mode": body.mode},
+            output_payload=result.model_dump(),
+        )
+        return result
 
     return app
 

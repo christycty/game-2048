@@ -22,6 +22,7 @@ from app.telemetry import (
     OPENINFERENCE_SPAN_KIND,
     OUTPUT_VALUE,
     SERVICE_NAME,
+    SPAN_KIND_CHAIN,
     SPAN_KIND_LLM,
     exporter_headers,
     install_tracer_provider,
@@ -87,6 +88,7 @@ def test_each_app_keeps_its_own_exporter() -> None:
     assert app_two.state.trace_endpoint == "http://phoenix:6006/v1/traces"
     assert app_one.state.tracer_provider.resource.attributes["service.name"] == SERVICE_NAME
 
+    # Nested CHAIN/LLM spans use the global provider; point it at the app under test.
     install_tracer_provider(app_one.state.tracer_provider)
     TestClient(app_one).post("/suggest", json={"board": OPEN_BOARD, "mode": "llm"})
     assert first.get_finished_spans()
@@ -111,11 +113,16 @@ def test_health_and_asgi_noise_are_not_traced() -> None:
     response = client.post("/suggest", json={"board": OPEN_BOARD, "mode": "llm"})
     assert response.status_code == 200
     names = {span.name for span in exporter.get_finished_spans()}
-    assert names == {"POST /suggest"}
+    assert names == {"POST /suggest", "suggest"}
     assert not any("http send" in name or "http receive" in name for name in names)
 
+    root = next(span for span in exporter.get_finished_spans() if span.name == "POST /suggest")
+    assert root.attributes[OPENINFERENCE_SPAN_KIND] == SPAN_KIND_CHAIN
+    assert '"mode": "llm"' in root.attributes[INPUT_VALUE]
+    assert '"source": "llm"' in root.attributes[OUTPUT_VALUE]
 
-def test_ollama_call_records_an_openinference_llm_span() -> None:
+
+def test_suggest_nests_llm_under_suggest_chain() -> None:
     def handler(request: httpx.Request) -> httpx.Response:
         return httpx.Response(
             200,
@@ -151,13 +158,22 @@ def test_ollama_call_records_an_openinference_llm_span() -> None:
     assert response.json()["source"] == "llm"
 
     spans = {span.name: span for span in exporter.get_finished_spans()}
-    assert set(spans) == {"POST /suggest", "test-model"}
+    assert set(spans) == {"POST /suggest", "suggest", "test-model"}
+
+    root = spans["POST /suggest"]
+    suggest = spans["suggest"]
     llm_span = spans["test-model"]
+
+    assert root.attributes[OPENINFERENCE_SPAN_KIND] == SPAN_KIND_CHAIN
+    assert suggest.attributes[OPENINFERENCE_SPAN_KIND] == SPAN_KIND_CHAIN
+    assert llm_span.attributes[OPENINFERENCE_SPAN_KIND] == SPAN_KIND_LLM
+
+    assert suggest.parent is not None
     assert llm_span.parent is not None
-    assert llm_span.parent.span_id == spans["POST /suggest"].context.span_id
+    assert suggest.parent.span_id == root.context.span_id
+    assert llm_span.parent.span_id == suggest.context.span_id
 
     attrs = llm_span.attributes
-    assert attrs[OPENINFERENCE_SPAN_KIND] == SPAN_KIND_LLM
     assert attrs[LLM_PROVIDER] == "ollama"
     assert attrs[LLM_SYSTEM] == "ollama"
     assert attrs[LLM_MODEL_NAME] == "test-model"
@@ -183,6 +199,50 @@ def test_ollama_call_records_an_openinference_llm_span() -> None:
     assert done.attributes["time_per_output_token"] == pytest.approx(0.025)
 
 
+def test_retries_add_sibling_llm_spans_under_suggest() -> None:
+    replies = [
+        httpx.Response(500, text="boom"),
+        httpx.Response(
+            200,
+            json={
+                "message": {"content": '{"move": "right", "reason": "Opens the row."}'},
+                "done_reason": "stop",
+                "prompt_eval_count": 10,
+                "eval_count": 4,
+                "total_duration": 100_000_000,
+            },
+        ),
+    ]
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return replies.pop(0)
+
+    exporter = InMemorySpanExporter()
+    settings = isolated_settings(export_traces=True, ollama_model="test-model", llm_max_attempts=2)
+    transport = httpx.MockTransport(handler)
+    with httpx.Client(transport=transport, base_url="http://ollama.test") as http:
+        app = create_app(
+            settings,
+            OllamaClient(settings, client=http),
+            SimpleSpanProcessor(exporter),
+        )
+        response = TestClient(app).post(
+            "/suggest",
+            json={"board": OPEN_BOARD, "mode": "llm"},
+        )
+
+    assert response.status_code == 200
+    assert response.json()["source"] == "llm"
+    finished = exporter.get_finished_spans()
+    assert {span.name for span in finished} == {"POST /suggest", "suggest", "test-model"}
+    llm_spans = [span for span in finished if span.name == "test-model"]
+    assert len(llm_spans) == 2
+    suggest = next(span for span in finished if span.name == "suggest")
+    assert all(span.parent and span.parent.span_id == suggest.context.span_id for span in llm_spans)
+    assert sum(1 for span in llm_spans if span.status.status_code == StatusCode.ERROR) == 1
+    assert sum(1 for span in llm_spans if span.status.status_code != StatusCode.ERROR) == 1
+
+
 def test_failed_ollama_call_marks_llm_error() -> None:
     def handler(request: httpx.Request) -> httpx.Response:
         return httpx.Response(500, text="boom")
@@ -203,10 +263,6 @@ def test_failed_ollama_call_marks_llm_error() -> None:
 
     assert response.status_code == 200
     assert response.json()["source"] == "fallback"
-    llm_spans = [
-        span
-        for span in exporter.get_finished_spans()
-        if span.attributes and span.attributes.get(OPENINFERENCE_SPAN_KIND) == SPAN_KIND_LLM
-    ]
-    assert len(llm_spans) == 1
-    assert llm_spans[0].status.status_code == StatusCode.ERROR
+    spans = {span.name: span for span in exporter.get_finished_spans()}
+    assert spans["test-model"].status.status_code == StatusCode.ERROR
+    assert '"source": "fallback"' in spans["suggest"].attributes[OUTPUT_VALUE]
