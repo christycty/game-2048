@@ -20,8 +20,8 @@ class MoveSuggester:
         self,
         llm: LlmClient,
         max_attempts: int = 3,
-        budget_seconds: float = 20,
-        attempt_timeout_seconds: float = 10,
+        budget_seconds: float = 40,
+        attempt_timeout_seconds: float = 20,
         clock: _Clock | None = None,
     ) -> None:
         self._llm = llm

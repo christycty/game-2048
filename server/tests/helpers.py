@@ -9,8 +9,8 @@ def isolated_settings(**overrides: object) -> Settings:
         "ollama_model": "test-model",
         "ollama_structured_output": True,
         "llm_max_attempts": 3,
-        "llm_attempt_timeout_seconds": 10,
-        "llm_suggest_budget_seconds": 20,
+        "llm_attempt_timeout_seconds": 20,
+        "llm_suggest_budget_seconds": 40,
     }
     values.update(overrides)
     return Settings(**values)

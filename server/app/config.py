@@ -14,8 +14,9 @@ class Settings(BaseSettings):
     ollama_structured_output: bool = True
     # One hung call must not consume the whole suggestion, and the env cannot raise these.
     llm_max_attempts: int = Field(default=3, ge=1, le=5)
-    llm_attempt_timeout_seconds: float = Field(default=10, gt=0, le=10)
-    llm_suggest_budget_seconds: float = Field(default=20, gt=0, le=20)
+    llm_attempt_timeout_seconds: float = Field(default=20, gt=0, le=20)
+    # Budget covers at least two attempt timeouts so a slow first call can still retry.
+    llm_suggest_budget_seconds: float = Field(default=40, gt=0, le=40)
 
     @model_validator(mode="after")
     def prod_uses_plain_json(self) -> "Settings":

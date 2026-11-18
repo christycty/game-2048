@@ -407,7 +407,7 @@ def test_attempt_count_stays_between_one_and_five() -> None:
     with pytest.raises(ValidationError):
         isolated_settings(llm_attempt_timeout_seconds=30)
     with pytest.raises(ValidationError):
-        isolated_settings(llm_suggest_budget_seconds=90)
+        isolated_settings(llm_suggest_budget_seconds=60)
 
 
 def test_fallback_logs_the_failed_attempts(caplog: pytest.LogCaptureFixture) -> None:
@@ -473,12 +473,13 @@ def test_health_rejects_a_different_tag() -> None:
 
 def test_time_budget_stops_further_attempts() -> None:
     llm = FakeLLM([LlmError("slow")] * 3)
-    ticks = iter([0.0, 0.0, 11.0])
+    # After the first attempt, only 15s remain — below the 20s attempt timeout.
+    ticks = iter([0.0, 0.0, 25.0])
     suggester = MoveSuggester(
         llm,
         max_attempts=3,
-        budget_seconds=20,
-        attempt_timeout_seconds=10,
+        budget_seconds=40,
+        attempt_timeout_seconds=20,
         clock=lambda: next(ticks),
     )
     response = suggester.suggest(OPEN_BOARD, "llm")
