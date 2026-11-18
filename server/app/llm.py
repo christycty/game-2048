@@ -1,9 +1,11 @@
 import json
 import logging
+import time
 from typing import NamedTuple, Protocol
 
 import httpx
 
+from app import telemetry as tel
 from app.config import Settings
 
 logger = logging.getLogger(__name__)
@@ -55,40 +57,81 @@ class OllamaClient:
         rejected: list[str],
         invalid_reply: bool,
     ) -> ModelSuggestion:
-        payload = {
+        prompt = _prompt(
+            board,
+            legal=legal,
+            rejected=rejected,
+            invalid_reply=invalid_reply,
+        )
+        payload: dict[str, object] = {
             "model": self._model,
-            "messages": [
-                {
-                    "role": "user",
-                    "content": _prompt(
-                        board,
-                        legal=legal,
-                        rejected=rejected,
-                        invalid_reply=invalid_reply,
-                    ),
-                }
-            ],
+            "messages": [{"role": "user", "content": prompt}],
             "stream": False,
         }
         if self._structured_output:
             payload["format"] = _move_schema(legal)
-        try:
-            response = self._client.post(
-                "/api/chat",
-                json=payload,
-                timeout=self._attempt_timeout,
-            )
-            response.raise_for_status()
-            body = response.json()
-        except (httpx.HTTPError, ValueError) as exc:
-            raise LlmError(f"ollama request failed: {exc}") from exc
 
-        if not isinstance(body, dict):
-            raise LlmError("ollama response is not an object")
-        message = body.get("message")
-        if not isinstance(message, dict):
-            raise LlmError("ollama response has no message")
-        return parse_move(message.get("content", ""))
+        started_ns = time.time_ns()
+        wall_start = time.perf_counter()
+        with tel.tracer().start_as_current_span(self._model) as span:
+            tel.annotate_llm_span(span, self._model)
+            tel.set_llm_messages(
+                span,
+                prompt=prompt,
+                invocation={
+                    "structured_output": self._structured_output,
+                    "timeout_seconds": self._attempt_timeout,
+                    "stream": False,
+                },
+            )
+            try:
+                response = self._client.post(
+                    "/api/chat",
+                    json=payload,
+                    timeout=self._attempt_timeout,
+                )
+                response.raise_for_status()
+                body = response.json()
+            except (httpx.HTTPError, ValueError) as exc:
+                error = LlmError(f"ollama request failed: {exc}")
+                tel.mark_span_error(span, error)
+                raise error from exc
+
+            wall_seconds = time.perf_counter() - wall_start
+            if not isinstance(body, dict):
+                error = LlmError("ollama response is not an object")
+                tel.mark_span_error(span, error)
+                raise error
+            message = body.get("message")
+            if not isinstance(message, dict):
+                error = LlmError("ollama response has no message")
+                tel.mark_span_error(span, error)
+                raise error
+
+            raw_content = message.get("content", "")
+            output_text = (
+                json.dumps(raw_content) if isinstance(raw_content, dict) else str(raw_content)
+            )
+            finish_reason = body.get("done_reason")
+            tel.set_llm_messages(
+                span,
+                prompt=prompt,
+                output=output_text,
+                finish_reason=finish_reason if isinstance(finish_reason, str) else None,
+            )
+            tel.record_llm_success(
+                span,
+                model=self._model,
+                body=body,
+                wall_seconds=wall_seconds,
+                started_ns=started_ns,
+            )
+
+            try:
+                return parse_move(raw_content)
+            except LlmError as exc:
+                tel.mark_span_error(span, exc)
+                raise
 
     def healthy(self) -> bool:
         try:
