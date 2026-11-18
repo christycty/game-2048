@@ -5,7 +5,7 @@ FALLBACK_ORDER = ("left", "up", "right", "down")
 
 
 def legal_moves(board: list[list[int]]) -> list[str]:
-    return [direction for direction in DIRECTIONS if _apply(board, direction) != board]
+    return [direction for direction in DIRECTIONS if apply_move(board, direction) != board]
 
 
 def first_legal_move(board: list[list[int]]) -> str | None:
@@ -16,7 +16,7 @@ def first_legal_move(board: list[list[int]]) -> str | None:
     return None
 
 
-def _apply(board: list[list[int]], direction: str) -> list[list[int]]:
+def apply_move(board: list[list[int]], direction: str) -> list[list[int]]:
     if direction == "left":
         return [_slide_line(row) for row in board]
     if direction == "right":
@@ -27,6 +27,10 @@ def _apply(board: list[list[int]], direction: str) -> list[list[int]]:
     else:
         slid = [_slide_line(list(column)[::-1])[::-1] for column in columns]
     return [list(row) for row in zip(*slid, strict=True)]
+
+
+# Kept for older tests that import the private name.
+_apply = apply_move
 
 
 def _slide_line(line: list[int]) -> list[int]:
