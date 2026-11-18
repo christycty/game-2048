@@ -1,6 +1,10 @@
+import logging
+
 from app.llm import LlmClient, LlmError
-from app.moves import first_legal_move, legal_moves
+from app.moves import FALLBACK_ORDER, legal_moves
 from app.schemas import Mode, SuggestResponse
+
+logger = logging.getLogger(__name__)
 
 
 class NoLegalMove(Exception):
@@ -13,18 +17,49 @@ class MoveSuggester:
         self._max_attempts = max_attempts
 
     def suggest(self, board: list[list[int]], mode: Mode) -> SuggestResponse:
-        fallback = first_legal_move(board)
+        legal = legal_moves(board)
+        fallback = next((direction for direction in FALLBACK_ORDER if direction in legal), None)
         if fallback is None:
             raise NoLegalMove()
         if mode == "expectimax":
             return SuggestResponse(move=fallback, mode=mode, source="expectimax-stub")
 
-        legal = set(legal_moves(board))
-        for _ in range(self._max_attempts):
+        rejected: list[str] = []
+        invalid_reply = False
+        failures: list[str] = []
+        for attempt in range(1, self._max_attempts + 1):
             try:
-                move = self._llm.suggest_move(board)
-            except LlmError:
+                suggestion = self._llm.suggest_move(
+                    board,
+                    legal=legal,
+                    rejected=list(rejected),
+                    invalid_reply=invalid_reply,
+                )
+            except LlmError as exc:
+                invalid_reply = True
+                failures.append(str(exc))
+                logger.warning("llm attempt %s failed: %s", attempt, exc)
                 continue
-            if move in legal:
-                return SuggestResponse(move=move, mode=mode, source="llm")
+
+            reason = suggestion.reason
+            if suggestion.move in legal and isinstance(reason, str) and reason.strip():
+                return SuggestResponse(
+                    move=suggestion.move,
+                    mode=mode,
+                    source="llm",
+                    reason=reason.strip(),
+                )
+
+            if suggestion.move not in legal:
+                detail = f"illegal move {suggestion.move}"
+                if suggestion.move not in rejected:
+                    rejected.append(suggestion.move)
+                invalid_reply = False
+            else:
+                detail = "blank reason"
+                invalid_reply = True
+            failures.append(detail)
+            logger.warning("llm attempt %s rejected: %s", attempt, detail)
+
+        logger.warning("llm suggestion fell back to %s: %s", fallback, "; ".join(failures))
         return SuggestResponse(move=fallback, mode=mode, source="fallback")

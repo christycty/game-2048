@@ -24,6 +24,7 @@ class SuggestResponse(BaseModel):
     move: Move
     mode: Mode
     source: Source
+    reason: str | None = None
 
 
 class HealthResponse(BaseModel):

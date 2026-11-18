@@ -1,3 +1,5 @@
+from contextlib import asynccontextmanager
+
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 
@@ -12,6 +14,16 @@ def create_app(
     llm_client: LlmClient | None = None,
 ) -> FastAPI:
     settings = settings or Settings()
+    owns_llm = llm_client is None
+    llm = llm_client or OllamaClient(settings)
+    suggester = MoveSuggester(llm, max_attempts=settings.llm_max_attempts)
+
+    @asynccontextmanager
+    async def lifespan(_app: FastAPI):
+        yield
+        if owns_llm:
+            llm.close()
+
     docs_url = "/docs" if settings.app_env == "dev" else None
     openapi_url = "/openapi.json" if settings.app_env == "dev" else None
     app = FastAPI(
@@ -19,6 +31,7 @@ def create_app(
         docs_url=docs_url,
         openapi_url=openapi_url,
         redoc_url=None,
+        lifespan=lifespan,
     )
     app.add_middleware(
         CORSMiddleware,
@@ -26,13 +39,12 @@ def create_app(
         allow_methods=["GET", "POST"],
         allow_headers=["*"],
     )
-    suggester = MoveSuggester(
-        llm_client or OllamaClient(settings),
-        max_attempts=settings.llm_max_attempts,
-    )
 
     @app.get("/health", response_model=HealthResponse)
     def health() -> HealthResponse:
+        check = getattr(llm, "healthy", None)
+        if check is not None and not check():
+            raise HTTPException(status_code=503, detail="ollama unavailable")
         return HealthResponse(status="ok")
 
     @app.post("/suggest", response_model=SuggestResponse)

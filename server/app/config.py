@@ -1,5 +1,6 @@
 from typing import Literal
 
+from pydantic import Field, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -9,4 +10,13 @@ class Settings(BaseSettings):
     app_env: Literal["dev", "prod"] = "dev"
     ollama_base_url: str = "http://localhost:11434"
     ollama_model: str = "llama3.2"
-    llm_max_attempts: int = 3
+    # Dev can opt into a JSON schema. Prod always parses plain JSON from the prompt.
+    ollama_structured_output: bool = True
+    # One attempt can block for the HTTP timeout, so the cap stays small.
+    llm_max_attempts: int = Field(default=3, ge=1, le=5)
+
+    @model_validator(mode="after")
+    def prod_uses_plain_json(self) -> "Settings":
+        if self.app_env == "prod":
+            self.ollama_structured_output = False
+        return self
