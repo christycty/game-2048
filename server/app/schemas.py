@@ -5,6 +5,8 @@ from pydantic import BaseModel, Field, model_validator
 Move = Literal["up", "down", "left", "right"]
 Mode = Literal["llm", "expectimax"]
 Source = Literal["llm", "fallback", "expectimax-stub"]
+# 4 through 131072 fills all 16 cells, so a 4x4 board cannot hold a higher tile.
+MAX_TILE = 1 << 17
 
 
 class SuggestRequest(BaseModel):
@@ -15,8 +17,8 @@ class SuggestRequest(BaseModel):
     def board_is_grid(self) -> "SuggestRequest":
         if len(self.board) != 4 or any(len(row) != 4 for row in self.board):
             raise ValueError("board must be 4x4")
-        if any(cell < 0 for row in self.board for cell in row):
-            raise ValueError("tile values must be non-negative")
+        if any(cell < 0 or cell > MAX_TILE for row in self.board for cell in row):
+            raise ValueError(f"tile values must be between 0 and {MAX_TILE}")
         return self
 
 

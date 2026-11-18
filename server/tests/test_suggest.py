@@ -8,6 +8,7 @@ from pydantic import ValidationError
 
 from app.llm import LlmError, ModelSuggestion, OllamaClient, _prompt, parse_move
 from app.main import create_app
+from app.schemas import MAX_TILE
 from helpers import isolated_settings
 
 OPEN_BOARD = [
@@ -132,9 +133,17 @@ def test_bad_payload_is_unprocessable() -> None:
         "/suggest",
         json={"board": [[-2, 0, 0, 0], [0, 0, 0, 0], [0, 0, 0, 0], [0, 0, 0, 0]], "mode": "llm"},
     )
+    huge = client.post(
+        "/suggest",
+        json={
+            "board": [[MAX_TILE + 1, 0, 0, 0], [0, 0, 0, 0], [0, 0, 0, 0], [0, 0, 0, 1]],
+            "mode": "llm",
+        },
+    )
     assert short.status_code == 422
     assert unknown.status_code == 422
     assert negative.status_code == 422
+    assert huge.status_code == 422
 
 
 def test_prompt_names_legal_moves_and_a_rejected_one() -> None:
