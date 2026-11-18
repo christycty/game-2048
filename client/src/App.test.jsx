@@ -1,13 +1,16 @@
 import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
 import App from "./App.jsx";
-import { applyMove, createInitialTiles, SLIDE_MS } from "./game";
+import { applyMove, createInitialTiles, SETTLE_MS } from "./game";
 
-vi.mock("./game", () => ({
-    SLIDE_MS: 140,
-    createInitialTiles: vi.fn(),
-    applyMove: vi.fn(),
-}));
+vi.mock("./game", async () => {
+    const actual = await vi.importActual("./game");
+    return {
+        ...actual,
+        createInitialTiles: vi.fn(),
+        applyMove: vi.fn(),
+    };
+});
 
 const opening = [{ id: 1, row: 0, col: 0, value: 2 }];
 const restarted = [{ id: 9, row: 2, col: 2, value: 8 }];
@@ -53,7 +56,7 @@ test("a move scores after the slide and ignores input until then", () => {
     expect(document.querySelector(".tile").className).not.toContain("tile-merged");
 
     act(() => {
-        vi.advanceTimersByTime(SLIDE_MS + 20);
+        vi.advanceTimersByTime(SETTLE_MS);
     });
 
     expect(scoreValue("SCORE")).toBe("8");
@@ -107,7 +110,7 @@ test("best score keeps the higher result after a new game", () => {
     render(<App />);
     press("ArrowRight");
     act(() => {
-        vi.advanceTimersByTime(SLIDE_MS + 20);
+        vi.advanceTimersByTime(SETTLE_MS);
     });
     expect(scoreValue("SCORE")).toBe("8");
     expect(scoreValue("BEST")).toBe("8");
@@ -119,7 +122,7 @@ test("best score keeps the higher result after a new game", () => {
 
     press("ArrowLeft");
     act(() => {
-        vi.advanceTimersByTime(SLIDE_MS + 20);
+        vi.advanceTimersByTime(SETTLE_MS);
     });
     expect(scoreValue("SCORE")).toBe("2");
     expect(scoreValue("BEST")).toBe("8");
@@ -140,7 +143,7 @@ test("a new game drops a slide that has not finished", () => {
     press("ArrowRight");
     fireEvent.click(screen.getByRole("button", { name: "New Game" }));
     act(() => {
-        vi.advanceTimersByTime(SLIDE_MS + 20);
+        vi.advanceTimersByTime(SETTLE_MS);
     });
 
     expect(scoreValue("SCORE")).toBe("0");
@@ -167,7 +170,7 @@ test("a lost game ignores later moves", () => {
     expect(screen.queryByText("Game over")).toBeNull();
 
     act(() => {
-        vi.advanceTimersByTime(SLIDE_MS + 20);
+        vi.advanceTimersByTime(SETTLE_MS);
     });
 
     expect(screen.getByText("Game over")).toBeTruthy();
@@ -192,4 +195,43 @@ test("a move that does not change the board can be followed immediately", () => 
 
     expect(applyMove).toHaveBeenCalledTimes(2);
     expect(scoreValue("SCORE")).toBe("0");
+});
+
+test("a new game clears a loss and accepts another move", () => {
+    createInitialTiles.mockReset();
+    createInitialTiles.mockReturnValueOnce(opening).mockReturnValueOnce(restarted);
+    const resolved = [{ id: 1, row: 0, col: 0, value: 2 }];
+    applyMove
+        .mockReturnValueOnce({
+            moved: true,
+            scoreGained: 4,
+            visualTiles: resolved,
+            resolvedTiles: resolved,
+            lost: true,
+        })
+        .mockReturnValueOnce({
+            moved: true,
+            scoreGained: 2,
+            visualTiles: [{ id: 9, row: 2, col: 2, value: 8, sliding: true }],
+            resolvedTiles: restarted,
+            lost: false,
+        });
+
+    render(<App />);
+    press("ArrowUp");
+    act(() => {
+        vi.advanceTimersByTime(SETTLE_MS);
+    });
+    expect(screen.getByText("Game over")).toBeTruthy();
+
+    fireEvent.click(screen.getByRole("button", { name: "New Game" }));
+    expect(screen.queryByText("Game over")).toBeNull();
+
+    press("ArrowLeft");
+    expect(applyMove).toHaveBeenLastCalledWith(restarted, "left");
+});
+
+test("the AI control stays inactive until it can suggest a move", () => {
+    render(<App />);
+    expect(screen.getByRole("button", { name: "AI" }).disabled).toBe(true);
 });

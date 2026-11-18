@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import "./ScoreCard.css"
+import "./ScoreCard.css";
 
 function ScoreCard({ score, bestScore }) {
     const [helpOpen, setHelpOpen] = useState(false);
@@ -51,7 +51,7 @@ function ScoreCard({ score, bestScore }) {
                 <div className="scorecard-value">{bestScore}</div>
             </div>
         </div>
-    )
+    );
 }
 
 export default ScoreCard;

@@ -22,12 +22,17 @@
     cursor: pointer;
 }
 
-.action-button:hover {
+.action-button:hover:not(:disabled) {
     background: #9f8a75;
 }
 
-.action-button:active {
+.action-button:active:not(:disabled) {
     background: #7c6a59;
+}
+
+.action-button:disabled {
+    opacity: 0.45;
+    cursor: default;
 }
 
 .action-button:focus-visible {

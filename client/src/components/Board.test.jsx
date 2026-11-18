@@ -2,6 +2,7 @@ import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
+import { SLIDE_MS } from "../game";
 import Board from "./Board.jsx";
 
 const boardCss = readFileSync(resolve(process.cwd(), "src/components/Board.css"), "utf8");
@@ -65,18 +66,20 @@ test("a tile starts on its old cell and slides to the new one", () => {
                 onSwipe={() => {}}
             />,
         );
-        const step = "(100% + (100% * 12 / 90))";
         const at = (col, row) => {
+            const step = "(var(--cell) + var(--gap))";
             const probe = document.createElement("div");
             probe.style.transform = `translate(calc(${col} * ${step}), calc(${row} * ${step}))`;
             return probe.style.transform;
         };
         const tile = document.querySelector(".tile");
+        expect(boardCss).toContain("grid-template-columns: repeat(var(--size), var(--cell))");
+        expect(boardCss).toContain("gap: var(--gap)");
         expect(tile.style.transition).toBe("none");
         expect(tile.style.transform).toBe(at(0, 0));
 
         frame();
-        expect(tile.style.transition).toBe("transform 140ms ease-in-out");
+        expect(tile.style.transition).toBe(`transform ${SLIDE_MS}ms ease-in-out`);
         expect(tile.style.transform).toBe(at(2, 0));
     } finally {
         raf.mockRestore();
@@ -118,6 +121,25 @@ test("a long drag on the board is a swipe", () => {
     fireEvent.pointerDown(board, { clientX: 20, clientY: 20, pointerId: 2, button: 0, pointerType: "touch" });
     fireEvent.pointerCancel(board, { pointerId: 2 });
     fireEvent.pointerUp(board, { clientX: 120, clientY: 20, pointerId: 2, pointerType: "touch" });
+
+    expect(swipes).toEqual(["down"]);
+});
+
+test("another pointer's release keeps the swipe that is still down", () => {
+    const swipes = [];
+    const { container } = render(
+        <Board
+            tiles={[{ id: 1, row: 0, col: 0, value: 2 }]}
+            lost={false}
+            onSwipe={(direction) => swipes.push(direction)}
+        />,
+    );
+    const board = container.querySelector(".board");
+
+    fireEvent.pointerDown(board, { clientX: 20, clientY: 20, pointerId: 1, button: 0, pointerType: "touch" });
+    fireEvent.pointerDown(board, { clientX: 40, clientY: 40, pointerId: 2, button: 0, pointerType: "touch" });
+    fireEvent.pointerUp(board, { clientX: 140, clientY: 20, pointerId: 1, pointerType: "touch" });
+    fireEvent.pointerUp(board, { clientX: 40, clientY: 140, pointerId: 2, pointerType: "touch" });
 
     expect(swipes).toEqual(["down"]);
 });

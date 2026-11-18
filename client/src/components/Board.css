@@ -12,7 +12,6 @@
 }
 
 .board {
-    --slide: 140ms;
     --gap: calc(100cqw * 12 / 420);
     --cell: calc(100cqw * 90 / 420);
 
@@ -29,7 +28,7 @@
 
 .board-cells {
     display: grid;
-    grid-template-columns: repeat(4, var(--cell));
+    grid-template-columns: repeat(var(--size), var(--cell));
     gap: var(--gap);
 }
 

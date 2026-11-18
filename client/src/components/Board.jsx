@@ -1,11 +1,10 @@
 import { useLayoutEffect, useRef } from "react";
-import { SLIDE_MS } from "../game";
+import { GRID_COUNT, GRID_SIZE, SLIDE_MS } from "../game";
 import { swipeDirection } from "../swipe";
 import "./Board.css";
 
-// One step is a cell plus the gap. Percentages are of the tile, so the same
-// ratio stays aligned when the board shrinks.
-const STEP = "(100% + (100% * 12 / 90))";
+// One step is the board's own cell plus gap, so a resize cannot leave the slide behind.
+const STEP = "(var(--cell) + var(--gap))";
 
 function tileTransform(row, col) {
     return `translate(calc(${col} * ${STEP}), calc(${row} * ${STEP}))`;
@@ -79,8 +78,8 @@ function Board({ tiles, lost, onSwipe }) {
 
     function finishSwipe(event) {
         const start = swipeRef.current;
-        swipeRef.current = null;
         if (!start || start.pointerId !== event.pointerId) return;
+        swipeRef.current = null;
 
         const direction = swipeDirection(event.clientX - start.x, event.clientY - start.y);
         if (direction) onSwipe(direction);
@@ -91,7 +90,7 @@ function Board({ tiles, lost, onSwipe }) {
             <div className="board-sizer">
                 <div
                     className="board"
-                    style={{ "--slide": `${SLIDE_MS}ms` }}
+                    style={{ "--slide": `${SLIDE_MS}ms`, "--size": GRID_SIZE }}
                     onPointerDown={onPointerDown}
                     onPointerUp={finishSwipe}
                     onPointerCancel={() => {
@@ -99,11 +98,12 @@ function Board({ tiles, lost, onSwipe }) {
                     }}
                 >
                     <div className="board-cells">
-                        {Array.from({ length: 16 }, (_, index) => (
+                        {Array.from({ length: GRID_COUNT }, (_, index) => (
                             <div className="cell" key={index} />
                         ))}
                     </div>
                     <div className="tile-layer">
+                        {/* Stable id order so a merge does not reorder DOM nodes mid-slide. */}
                         {[...tiles]
                             .sort((a, b) => a.id - b.id)
                             .map((tile) => (
