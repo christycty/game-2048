@@ -448,6 +448,18 @@ def test_health_reports_a_missing_model() -> None:
     assert response.status_code == 503
 
 
+def test_health_rejects_a_different_tag() -> None:
+    def handler(_request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json={"models": [{"name": "test-model:instruct"}]})
+
+    transport = httpx.MockTransport(handler)
+    settings = isolated_settings(ollama_model="test-model")
+    with httpx.Client(transport=transport, base_url="http://ollama.test") as http:
+        app = create_app(settings, OllamaClient(settings, client=http))
+        response = TestClient(app).get("/health")
+    assert response.status_code == 503
+
+
 def test_lifespan_closes_the_owned_client(monkeypatch: pytest.MonkeyPatch) -> None:
     closed: list[int] = []
 

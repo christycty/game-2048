@@ -150,7 +150,10 @@ def _model_is_installed(body: object, model: str) -> bool:
         name = item.get("name")
         if isinstance(name, str):
             names.append(name)
-    return any(name == model or name.startswith(f"{model}:") for name in names)
+    # An untagged name resolves to :latest. A different tag is a different model.
+    if ":" in model:
+        return model in names
+    return model in names or f"{model}:latest" in names
 
 
 def _move_schema(legal: list[str]) -> dict:
