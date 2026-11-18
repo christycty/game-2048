@@ -106,17 +106,23 @@ def test_exhausted_retries_fall_back() -> None:
     assert llm.calls == 3
 
 
-def test_expectimax_stub_skips_the_model() -> None:
+def test_expectimax_skips_the_model() -> None:
     llm = FakeLLM(["up"])
     response = _client(llm).post("/suggest", json={"board": OPEN_BOARD, "mode": "expectimax"})
     assert response.status_code == 200
-    assert response.json() == {
-        "move": "right",
-        "mode": "expectimax",
-        "source": "expectimax-stub",
-        "reason": None,
-    }
+    body = response.json()
+    assert body["mode"] == "expectimax"
+    assert body["source"] == "expectimax"
+    assert body["reason"] is None
+    assert body["move"] in {"right", "down"}
     assert llm.calls == 0
+
+
+def test_expectimax_stuck_board_is_conflict() -> None:
+    response = _client(FakeLLM([])).post(
+        "/suggest", json={"board": STUCK_BOARD, "mode": "expectimax"}
+    )
+    assert response.status_code == 409
 
 
 def test_stuck_board_is_conflict() -> None:

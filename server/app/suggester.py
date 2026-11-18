@@ -2,6 +2,7 @@ import logging
 import time
 from collections.abc import Callable
 
+from app.expectimax import choose_move
 from app.llm import LlmClient, LlmError
 from app.moves import FALLBACK_ORDER, legal_moves
 from app.schemas import Mode, SuggestResponse
@@ -35,7 +36,8 @@ class MoveSuggester:
         if fallback is None:
             raise NoLegalMove()
         if mode == "expectimax":
-            return SuggestResponse(move=fallback, mode=mode, source="expectimax-stub")
+            move = choose_move(board) or fallback
+            return SuggestResponse(move=move, mode=mode, source="expectimax")
 
         rejected: list[str] = []
         invalid_reply = False
