@@ -56,26 +56,44 @@ jobs:
         run: |
           docker run -d --name game-2048-client -p 127.0.0.1:5173:80 game-2048-client
           for _ in $(seq 1 30); do
-            if curl -fsS http://127.0.0.1:5173/ | grep -q 'id="root"'; then
+            if curl -fsS -o /tmp/client.html http://127.0.0.1:5173/ \
+              && grep -q 'id="root"' /tmp/client.html; then
               exit 0
             fi
             sleep 1
           done
           docker logs game-2048-client
           exit 1
-      - name: Example env keeps Compose service DNS
+      - name: API image serves health without Ollama
+        run: |
+          docker run -d --name game-2048-server -p 127.0.0.1:8000:8000 game-2048-server
+          for _ in $(seq 1 30); do
+            if curl -fsS -o /tmp/health.json http://127.0.0.1:8000/health \
+              && python3 -c 'import json; assert json.load(open("/tmp/health.json"))["status"] == "ok"'; then
+              exit 0
+            fi
+            sleep 1
+          done
+          docker logs game-2048-server
+          exit 1
+      - name: Compose keeps the container URL and loopback ports
         run: |
           cp .env.example .env
-          env -u OLLAMA_BASE_URL \
+          printf '\nOLLAMA_BASE_URL=http://localhost:11434\n' >> .env
+          OLLAMA_BASE_URL=http://localhost:11434 \
             docker compose --profile dev --profile prod config --format json > /tmp/compose.json
+          COMPOSE_OLLAMA_BASE_URL=http://ollama.example:11434 \
+            docker compose --profile dev config --format json > /tmp/compose-override.json
           python3 - <<'PY'
           import json
           from pathlib import Path
 
           data = json.loads(Path("/tmp/compose.json").read_text())
+          override = json.loads(Path("/tmp/compose-override.json").read_text())
+          loopback = {"127.0.0.1", "::1"}
 
-          def env_value(service, key):
-              env = data["services"][service]["environment"]
+          def env_value(config, service, key):
+              env = config["services"][service]["environment"]
               if isinstance(env, dict):
                   return env[key]
               prefix = key + "="
@@ -84,13 +102,32 @@ jobs:
                       return item.split("=", 1)[1]
               raise SystemExit(f"{service} missing {key}")
 
+          def bindings(service):
+              found = []
+              for port in data["services"][service].get("ports") or []:
+                  ip = port.get("host_ip") or ""
+                  if ip not in loopback:
+                      raise SystemExit(f"{service} publishes {ip!r}, want loopback")
+                  found.append((ip, int(port["published"]), int(port["target"])))
+              return found
+
+          def expect(service, published, target):
+              found = bindings(service)
+              for ip in loopback:
+                  if (ip, published, target) not in found:
+                      raise SystemExit(f"{service} missing {ip}:{published}->{target}, have {found}")
+
+          want = "http://host.docker.internal:11434"
           for service in ("dev", "prod"):
-              got = env_value(service, "OLLAMA_BASE_URL")
-              want = "http://host.docker.internal:11434"
+              got = env_value(data, service, "OLLAMA_BASE_URL")
               if got != want or "localhost" in got:
                   raise SystemExit(f"{service} OLLAMA_BASE_URL={got!r}, want {want!r}")
-          for name in ("client-dev", "client"):
-              if name not in data["services"]:
-                  raise SystemExit(f"missing {name}")
+          overridden = env_value(override, "dev", "OLLAMA_BASE_URL")
+          if overridden != "http://ollama.example:11434":
+              raise SystemExit(f"COMPOSE_OLLAMA_BASE_URL did not apply: {overridden!r}")
+          expect("dev", 8000, 8000)
+          expect("prod", 8000, 8000)
+          expect("client-dev", 5173, 5173)
+          expect("client", 5173, 80)
           print("compose service DNS ok")
           PY
