@@ -38,9 +38,11 @@ def create_app(
         redoc_url=None,
         lifespan=lifespan,
     )
+    # localhost and 127.0.0.1 are different browser origins. The prod client
+    # is published on 5173 so either way of opening the page can call the API.
     app.add_middleware(
         CORSMiddleware,
-        allow_origins=["http://localhost:5173"],
+        allow_origins=["http://localhost:5173", "http://127.0.0.1:5173"],
         allow_methods=["GET", "POST"],
         allow_headers=["*"],
     )

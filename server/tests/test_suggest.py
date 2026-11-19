@@ -83,6 +83,31 @@ def test_health_stays_ok_when_ollama_is_down() -> None:
     assert response.json() == {"status": "ok"}
 
 
+@pytest.mark.parametrize("origin", ["http://localhost:5173", "http://127.0.0.1:5173"])
+def test_browser_origins_can_call_suggest(origin: str) -> None:
+    response = _client(FakeLLM([])).options(
+        "/suggest",
+        headers={
+            "Origin": origin,
+            "Access-Control-Request-Method": "POST",
+            "Access-Control-Request-Headers": "content-type",
+        },
+    )
+    assert response.status_code == 200
+    assert response.headers["access-control-allow-origin"] == origin
+
+
+def test_other_origins_cannot_call_suggest() -> None:
+    response = _client(FakeLLM([])).options(
+        "/suggest",
+        headers={
+            "Origin": "http://192.168.1.5:5173",
+            "Access-Control-Request-Method": "POST",
+        },
+    )
+    assert response.headers.get("access-control-allow-origin") is None
+
+
 def test_docs_follow_environment() -> None:
     assert _client(FakeLLM([])).get("/docs").status_code == 200
     assert _client(FakeLLM([]), env="prod").get("/docs").status_code == 404
