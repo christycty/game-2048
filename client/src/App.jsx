@@ -21,6 +21,7 @@ function App() {
     // Tracks a slide or an in-flight suggestion so the AI control can look inactive.
     const [busy, setBusy] = useState(false);
     const [suggesting, setSuggesting] = useState(false);
+    const [aiMode, setAiMode] = useState("llm");
     const [hint, setHint] = useState(null);
 
     // The key listener is bound once, so moves read the latest board from refs.
@@ -31,6 +32,7 @@ function App() {
     const suggestingRef = useRef(false);
     const moveTokenRef = useRef(0);
     const suggestTokenRef = useRef(0);
+    const aiModeRef = useRef(aiMode);
 
     function startGame() {
         const nextTiles = createInitialTiles();
@@ -101,7 +103,7 @@ function App() {
         setHint(null);
 
         try {
-            const suggestion = await suggestMove(tilesToBoard(tilesRef.current), "llm");
+            const suggestion = await suggestMove(tilesToBoard(tilesRef.current), aiModeRef.current);
             if (suggestTokenRef.current !== token) return;
             const reason =
                 typeof suggestion.reason === "string" ? suggestion.reason.trim() : "";
@@ -120,6 +122,11 @@ function App() {
                 if (!animatingRef.current) setBusy(false);
             }
         }
+    }
+
+    function handleModeChange(mode) {
+        aiModeRef.current = mode;
+        setAiMode(mode);
     }
 
     useEffect(() => {
@@ -145,6 +152,8 @@ function App() {
                 onSuggest={handleSuggest}
                 canSuggest={canSuggest}
                 suggesting={suggesting}
+                mode={aiMode}
+                onModeChange={handleModeChange}
             ></ActionPanel>
             {hint && <p className="ai-hint" role="status">{hint}</p>}
         </div>

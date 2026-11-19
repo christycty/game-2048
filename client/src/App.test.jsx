@@ -312,6 +312,42 @@ test("an AI suggestion applies the returned move and shows the reason", async ()
     expect(screen.getByRole("status").textContent).toBe("Opens space on the left.");
 });
 
+test("expectimax mode is sent to the suggestion API", async () => {
+    suggestMove.mockResolvedValue({
+        move: "up",
+        mode: "expectimax",
+        source: "expectimax-stub",
+        reason: "Corners stay open.",
+    });
+    applyMove.mockReturnValue({
+        moved: true,
+        scoreGained: 0,
+        visualTiles: [{ id: 1, row: 0, col: 0, value: 2, fromRow: 0, fromCol: 0, sliding: true }],
+        resolvedTiles: [{ id: 1, row: 0, col: 0, value: 2 }],
+        lost: false,
+    });
+
+    render(<App />);
+    fireEvent.click(screen.getByRole("radio", { name: "Expectimax" }));
+    fireEvent.click(screen.getByRole("button", { name: "AI" }));
+
+    await act(async () => {
+        await Promise.resolve();
+    });
+
+    expect(suggestMove).toHaveBeenCalledWith(
+        [
+            [2, 0, 0, 0],
+            [0, 0, 0, 0],
+            [0, 0, 0, 0],
+            [0, 0, 0, 0],
+        ],
+        "expectimax",
+    );
+    expect(applyMove).toHaveBeenCalledWith(opening, "up");
+    expect(screen.getByRole("status").textContent).toBe("Corners stay open.");
+});
+
 test("a failed AI suggestion leaves the board alone and reports the miss", async () => {
     suggestMove.mockRejectedValue(new Error("offline"));
 
