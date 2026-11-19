@@ -70,6 +70,19 @@ def test_health() -> None:
     assert response.json() == {"status": "ok"}
 
 
+def test_health_stays_ok_when_ollama_is_down() -> None:
+    def handler(_request: httpx.Request) -> httpx.Response:
+        raise AssertionError("health must not call ollama")
+
+    client, http = _ollama_client(handler)
+    try:
+        response = client.get("/health")
+    finally:
+        http.close()
+    assert response.status_code == 200
+    assert response.json() == {"status": "ok"}
+
+
 def test_docs_follow_environment() -> None:
     assert _client(FakeLLM([])).get("/docs").status_code == 200
     assert _client(FakeLLM([]), env="prod").get("/docs").status_code == 404
@@ -411,58 +424,6 @@ def test_fallback_logs_the_failed_attempts(caplog: pytest.LogCaptureFixture) -> 
     assert response.json()["source"] == "fallback"
     assert "fell back to right" in caplog.text
     assert "ollama request failed" in caplog.text
-
-
-def test_health_reports_ollama_down() -> None:
-    def handler(request: httpx.Request) -> httpx.Response:
-        assert request.url.path == "/api/tags"
-        return httpx.Response(500, json={"error": "down"})
-
-    client, http = _ollama_client(handler)
-    try:
-        response = client.get("/health")
-    finally:
-        http.close()
-    assert response.status_code == 503
-    assert response.json()["detail"] == "ollama unavailable"
-
-
-def test_health_is_ok_when_the_model_is_installed() -> None:
-    def handler(request: httpx.Request) -> httpx.Response:
-        assert request.url.path == "/api/tags"
-        return httpx.Response(200, json={"models": [{"name": "test-model:latest"}]})
-
-    client, http = _ollama_client(handler)
-    try:
-        response = client.get("/health")
-    finally:
-        http.close()
-    assert response.status_code == 200
-    assert response.json() == {"status": "ok"}
-
-
-def test_health_reports_a_missing_model() -> None:
-    def handler(_request: httpx.Request) -> httpx.Response:
-        return httpx.Response(200, json={"models": [{"name": "other:latest"}]})
-
-    client, http = _ollama_client(handler)
-    try:
-        response = client.get("/health")
-    finally:
-        http.close()
-    assert response.status_code == 503
-
-
-def test_health_rejects_a_different_tag() -> None:
-    def handler(_request: httpx.Request) -> httpx.Response:
-        return httpx.Response(200, json={"models": [{"name": "test-model:instruct"}]})
-
-    transport = httpx.MockTransport(handler)
-    settings = isolated_settings(ollama_model="test-model")
-    with httpx.Client(transport=transport, base_url="http://ollama.test") as http:
-        app = create_app(settings, OllamaClient(settings, client=http))
-        response = TestClient(app).get("/health")
-    assert response.status_code == 503
 
 
 def test_time_budget_stops_further_attempts() -> None:

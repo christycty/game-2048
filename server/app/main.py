@@ -45,11 +45,10 @@ def create_app(
         allow_headers=["*"],
     )
 
+    # The process is up even when Ollama is not. Expectimax never calls the
+    # model, and an llm failure still returns a legal move.
     @app.get("/health", response_model=HealthResponse)
     def health() -> HealthResponse:
-        check = getattr(llm, "healthy", None)
-        if check is not None and not check():
-            raise HTTPException(status_code=503, detail="ollama unavailable")
         return HealthResponse(status="ok")
 
     @app.post("/suggest", response_model=SuggestResponse)
