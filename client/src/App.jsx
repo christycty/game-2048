@@ -25,7 +25,7 @@ function App() {
     const [pendingMove, setPendingMove] = useState(null);
     const [hint, setHint] = useState(null);
 
-    // The key listener is bound once, so moves read the latest board from refs.
+    // The key listener is bound once, so it reads the latest board and any in-flight suggestion from refs.
     const tilesRef = useRef(tiles);
     const scoreRef = useRef(0);
     const lostRef = useRef(false);
@@ -60,17 +60,18 @@ function App() {
     function handleMove(direction) {
         if (animatingRef.current || lostRef.current) return false;
 
-        // A key or swipe drops an in-flight suggestion so it cannot land on a stale board.
+        const result = applyMove(tilesRef.current, direction);
+        if (!result.moved) {
+            // The board is unchanged, so an in-flight suggestion still applies.
+            if (!suggestingRef.current) setBusy(false);
+            return false;
+        }
+
+        // A move that changes the board drops an in-flight suggestion so it cannot land on a stale board.
         if (suggestingRef.current) {
             suggestTokenRef.current += 1;
             suggestingRef.current = false;
             setSuggesting(false);
-        }
-
-        const result = applyMove(tilesRef.current, direction);
-        if (!result.moved) {
-            if (!animatingRef.current) setBusy(false);
-            return false;
         }
 
         const token = moveTokenRef.current + 1;
@@ -90,8 +91,7 @@ function App() {
             setCurrentScore(nextScore);
             setBestScore((best) => Math.max(best, nextScore));
             animatingRef.current = false;
-            // A suggestion may still be waiting; keep the AI locked until it finishes.
-            if (!suggestingRef.current) setBusy(false);
+            setBusy(false);
             if (result.lost) setLost(true);
         }, SETTLE_MS);
         return true;
@@ -111,6 +111,13 @@ function App() {
         try {
             const suggestion = await suggestMove(tilesToBoard(tilesRef.current), aiModeRef.current);
             if (suggestTokenRef.current !== token) return;
+            // "fallback" is a fixed move order, not a move the model chose.
+            // TODO: when the expectimax branch is merged, an illegal search is still
+            // source "expectimax" with a substituted move. Decide if that should use this message.
+            if (suggestion.source === "fallback") {
+                setHint("AI could not suggest a move");
+                return;
+            }
             const reason =
                 typeof suggestion.reason === "string" ? suggestion.reason.trim() : "";
             setPendingMove(suggestion.move);
@@ -138,8 +145,11 @@ function App() {
     }
 
     function handleModeChange(mode) {
+        if (mode === aiModeRef.current) return;
         aiModeRef.current = mode;
         setAiMode(mode);
+        // The pending move belongs to the previous mode.
+        clearSuggestion();
     }
 
     useEffect(() => {
