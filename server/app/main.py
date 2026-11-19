@@ -42,19 +42,20 @@ def create_app(
         redoc_url=None,
         lifespan=lifespan,
     )
+    # localhost and 127.0.0.1 are different browser origins. The prod client
+    # is published on 5173 so either way of opening the page can call the API.
     app.add_middleware(
         CORSMiddleware,
-        allow_origins=["http://localhost:5173"],
+        allow_origins=["http://localhost:5173", "http://127.0.0.1:5173"],
         allow_methods=["GET", "POST"],
         allow_headers=["*"],
     )
     setup_telemetry(app, settings, span_processor)
 
+    # The process is up even when Ollama is not. Expectimax never calls the
+    # model, and an llm failure still returns a legal move.
     @app.get("/health", response_model=HealthResponse)
     def health() -> HealthResponse:
-        check = getattr(llm, "healthy", None)
-        if check is not None and not check():
-            raise HTTPException(status_code=503, detail="ollama unavailable")
         return HealthResponse(status="ok")
 
     @app.post("/suggest", response_model=SuggestResponse)
