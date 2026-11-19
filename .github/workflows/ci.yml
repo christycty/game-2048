@@ -23,12 +23,46 @@ jobs:
       - name: Test
         run: pytest
 
+  client:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: client
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: client/package-lock.json
+      - name: Install
+        run: npm ci
+      - name: Lint
+        run: npm run lint
+      - name: Test
+        run: npm test
+      - name: Build
+        run: npm run build
+
   docker:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - name: Build image
-        run: docker build -t game-2048-server ./server
+      - name: Build images
+        run: |
+          docker build -t game-2048-server ./server
+          docker build -t game-2048-client ./client
+      - name: Client image serves the app
+        run: |
+          docker run -d --name game-2048-client -p 127.0.0.1:5173:80 game-2048-client
+          for _ in $(seq 1 30); do
+            if curl -fsS http://127.0.0.1:5173/ | grep -q 'id="root"'; then
+              exit 0
+            fi
+            sleep 1
+          done
+          docker logs game-2048-client
+          exit 1
       - name: Example env keeps Compose service DNS
         run: |
           cp .env.example .env
@@ -55,5 +89,8 @@ jobs:
               want = "http://host.docker.internal:11434"
               if got != want or "localhost" in got:
                   raise SystemExit(f"{service} OLLAMA_BASE_URL={got!r}, want {want!r}")
+          for name in ("client-dev", "client"):
+              if name not in data["services"]:
+                  raise SystemExit(f"missing {name}")
           print("compose service DNS ok")
           PY
