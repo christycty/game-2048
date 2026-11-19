@@ -36,7 +36,9 @@ class MoveSuggester:
         if fallback is None:
             raise NoLegalMove()
         if mode == "expectimax":
-            move = choose_move(board) or fallback
+            move = choose_move(board)
+            if move not in legal:
+                move = fallback
             return SuggestResponse(move=move, mode=mode, source="expectimax")
 
         rejected: list[str] = []

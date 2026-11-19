@@ -12,6 +12,13 @@ from app.schemas import MAX_TILE
 from app.suggester import MoveSuggester
 from helpers import isolated_settings
 
+COLUMN_PAIR = [
+    [0, 0, 0, 4],
+    [0, 0, 0, 4],
+    [0, 0, 0, 8],
+    [0, 0, 0, 0],
+]
+
 OPEN_BOARD = [
     [2, 0, 0, 0],
     [0, 0, 0, 0],
@@ -154,6 +161,31 @@ def test_expectimax_skips_the_model() -> None:
     assert body["reason"] is None
     assert body["move"] in {"right", "down"}
     assert llm.calls == 0
+
+
+def test_expectimax_merges_instead_of_sliding() -> None:
+    response = _client(FakeLLM([])).post(
+        "/suggest", json={"board": COLUMN_PAIR, "mode": "expectimax"}
+    )
+    assert response.status_code == 200
+    body = response.json()
+    assert body["source"] == "expectimax"
+    assert body["reason"] is None
+    assert body["move"] in {"up", "down"}
+
+
+def test_expectimax_drops_an_illegal_search_move(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr("app.suggester.choose_move", lambda _board: "up")
+    response = _client(FakeLLM([])).post(
+        "/suggest", json={"board": OPEN_BOARD, "mode": "expectimax"}
+    )
+    assert response.status_code == 200
+    assert response.json() == {
+        "move": "right",
+        "mode": "expectimax",
+        "source": "expectimax",
+        "reason": None,
+    }
 
 
 def test_expectimax_stuck_board_is_conflict() -> None:

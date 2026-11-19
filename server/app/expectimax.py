@@ -7,48 +7,105 @@ is equally likely, and the new tile is a 2 (90%) or a 4 (10%), matching the clie
 from __future__ import annotations
 
 import math
+import time
+from collections.abc import Callable
 
-from app.moves import DIRECTIONS, FALLBACK_ORDER
+from app.moves import DIRECTIONS, FALLBACK_ORDER, apply_move
 
 Board = tuple[tuple[int, ...], ...]
+# Tests pass a fake clock so the budget can expire on the next read, without
+# sleeping through a real timeout. Production omits it and uses monotonic time.
+_Clock = Callable[[], float]
 _SIZE = 4
 _TWO_PROB = 0.9
 _FOUR_PROB = 0.1
 # Game-over leaves need a hard penalty so the search avoids trapping itself.
 _GAME_OVER = -1_000_000.0
 _FALLBACK_RANK = {direction: index for index, direction in enumerate(FALLBACK_ORDER)}
+# Depth is extra plies after the root move, and each ply spawns on every empty cell.
+# Depth 3+ held the suggestion request for seconds, so the request path stays at 1 or 2
+# and still gives up once the budget is spent.
+_BUDGET_SECONDS = 0.5
 
 
-def choose_move(board: list[list[int]], *, depth: int | None = None) -> str | None:
+class _TimeUp(Exception):
+    """The suggestion budget ran out before this depth finished."""
+
+
+def choose_move(
+    board: list[list[int]],
+    *,
+    depth: int | None = None,
+    budget_seconds: float | None = None,
+    clock: _Clock | None = None,
+) -> str | None:
     """Return the best legal direction, or None when the board is stuck."""
     root = _freeze(board)
     legal = _legal_directions(root)
     if not legal:
         return None
 
-    search_depth = depth if depth is not None else _depth_for(root)
+    now = clock or time.monotonic
+    # An explicit depth with no budget is one complete search. Tests use that
+    # path so the result does not depend on how fast the machine is.
+    if depth is not None and budget_seconds is None:
+        return _best_at_depth(root, legal, depth, deadline=None, clock=now)
+
+    limit = _depth_for(root) if depth is None else depth
+    seconds = _BUDGET_SECONDS if budget_seconds is None else budget_seconds
+    deadline = now() + seconds
+    # Keep the last depth that finished. A cutoff mid-depth must not compare a
+    # half-scored move with a fully scored one.
+    best = legal[0]
+    try:
+        for current in range(limit + 1):
+            best = _best_at_depth(root, legal, current, deadline, now)
+    except _TimeUp:
+        return best
+    return best
+
+
+def _depth_for(board: Board) -> int:
+    # Open boards branch on every empty cell, so they get one ply. Tighter
+    # boards can afford a second. Neither is deep enough to stall the request.
+    if _empty_count(board) >= 8:
+        return 1
+    return 2
+
+
+def _best_at_depth(
+    root: Board,
+    legal: list[str],
+    depth: int,
+    deadline: float | None,
+    clock: _Clock,
+) -> str:
     cache: dict[tuple[Board, int, bool], float] = {}
     best_move = legal[0]
     best_score = -math.inf
     for direction in legal:
-        score = _chance_value(_apply(root, direction), search_depth, cache)
+        _check(deadline, clock)
+        score = _chance_value(_apply(root, direction), depth, cache, deadline, clock)
         if score > best_score:
             best_score = score
             best_move = direction
     return best_move
 
 
-def _depth_for(board: Board) -> int:
-    empty = _empty_count(board)
-    # More empty cells explode the chance branching factor; search shallower then.
-    if empty >= 5:
-        return 2
-    if empty >= 3:
-        return 3
-    return 4
+def _check(deadline: float | None, clock: _Clock) -> None:
+    # No deadline means the caller asked for a full search, so the clock stays unread.
+    if deadline is not None and clock() >= deadline:
+        raise _TimeUp
 
 
-def _chance_value(board: Board, depth: int, cache: dict[tuple[Board, int, bool], float]) -> float:
+def _chance_value(
+    board: Board,
+    depth: int,
+    cache: dict[tuple[Board, int, bool], float],
+    deadline: float | None = None,
+    clock: _Clock = time.monotonic,
+) -> float:
+    _check(deadline, clock)
     key = (board, depth, False)
     cached = cache.get(key)
     if cached is not None:
@@ -57,7 +114,7 @@ def _chance_value(board: Board, depth: int, cache: dict[tuple[Board, int, bool],
     empties = _empty_cells(board)
     if not empties:
         # A move always frees or keeps an empty cell before spawn; still be defensive.
-        value = _max_value(board, depth, cache)
+        value = _max_value(board, depth, cache, deadline, clock)
         cache[key] = value
         return value
 
@@ -66,12 +123,19 @@ def _chance_value(board: Board, depth: int, cache: dict[tuple[Board, int, bool],
     for row, col in empties:
         for tile, prob in ((2, _TWO_PROB), (4, _FOUR_PROB)):
             spawned = _place(board, row, col, tile)
-            total += weight * prob * _max_value(spawned, depth, cache)
+            total += weight * prob * _max_value(spawned, depth, cache, deadline, clock)
     cache[key] = total
     return total
 
 
-def _max_value(board: Board, depth: int, cache: dict[tuple[Board, int, bool], float]) -> float:
+def _max_value(
+    board: Board,
+    depth: int,
+    cache: dict[tuple[Board, int, bool], float],
+    deadline: float | None = None,
+    clock: _Clock = time.monotonic,
+) -> float:
+    _check(deadline, clock)
     key = (board, depth, True)
     cached = cache.get(key)
     if cached is not None:
@@ -89,7 +153,10 @@ def _max_value(board: Board, depth: int, cache: dict[tuple[Board, int, bool], fl
         cache[key] = value
         return value
 
-    value = max(_chance_value(_apply(board, direction), depth - 1, cache) for direction in legal)
+    value = max(
+        _chance_value(_apply(board, direction), depth - 1, cache, deadline, clock)
+        for direction in legal
+    )
     cache[key] = value
     return value
 
@@ -160,32 +227,10 @@ def _legal_directions(board: Board) -> list[str]:
 
 
 def _apply(board: Board, direction: str) -> Board:
-    if direction == "left":
-        return tuple(_slide_line(row) for row in board)
-    if direction == "right":
-        return tuple(_slide_line(row[::-1])[::-1] for row in board)
-    columns = tuple(zip(*board, strict=True))
-    if direction == "up":
-        slid = tuple(_slide_line(column) for column in columns)
-    else:
-        slid = tuple(_slide_line(column[::-1])[::-1] for column in columns)
-    return tuple(tuple(row) for row in zip(*slid, strict=True))
-
-
-def _slide_line(line: tuple[int, ...]) -> tuple[int, ...]:
-    tiles = [value for value in line if value]
-    merged: list[int] = []
-    index = 0
-    while index < len(tiles):
-        if index + 1 < len(tiles) and tiles[index] == tiles[index + 1]:
-            merged.append(tiles[index] * 2)
-            index += 2
-        else:
-            merged.append(tiles[index])
-            index += 1
-    if len(merged) < len(line):
-        merged.extend([0] * (len(line) - len(merged)))
-    return tuple(merged)
+    # One slider for search and for legal_moves. A second copy can suggest a move
+    # the rest of the API treats as illegal.
+    moved = apply_move([list(row) for row in board], direction)
+    return _freeze(moved)
 
 
 def _empty_cells(board: Board) -> list[tuple[int, int]]:
