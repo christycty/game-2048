@@ -1,0 +1,76 @@
+# Every service is behind a profile. `docker compose up` starts nothing
+# unless you pass --profile dev or --profile prod.
+# Published ports are loopback-only. localhost is ::1 on some machines,
+# so each port is published on 127.0.0.1 and ::1.
+# host-gateway makes host.docker.internal resolve on Linux Docker Engine.
+# Docker Desktop can reach an Ollama bound to 127.0.0.1 at that name.
+# Linux Docker Engine cannot: start Ollama with OLLAMA_HOST=0.0.0.0.
+
+services:
+  dev:
+    profiles: ["dev"]
+    build:
+      context: ./server
+    ports:
+      - "127.0.0.1:8000:8000"
+      - "[::1]:8000:8000"
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    environment:
+      APP_ENV: dev
+      # COMPOSE_OLLAMA_BASE_URL, not OLLAMA_BASE_URL. A host shell or
+      # server/.env that points at localhost must not replace this.
+      OLLAMA_BASE_URL: ${COMPOSE_OLLAMA_BASE_URL:-http://host.docker.internal:11434}
+      OLLAMA_MODEL: ${OLLAMA_MODEL:-gemma4:latest}
+      LLM_MAX_ATTEMPTS: ${LLM_MAX_ATTEMPTS:-3}
+      LLM_ATTEMPT_TIMEOUT_SECONDS: ${LLM_ATTEMPT_TIMEOUT_SECONDS:-10}
+      LLM_SUGGEST_BUDGET_SECONDS: ${LLM_SUGGEST_BUDGET_SECONDS:-20}
+    volumes:
+      - ./server:/app
+    command: ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000", "--reload"]
+
+  client-dev:
+    profiles: ["dev"]
+    build:
+      context: ./client
+      target: dev
+    ports:
+      - "127.0.0.1:5173:5173"
+      - "[::1]:5173:5173"
+    environment:
+      CHOKIDAR_USEPOLLING: "true"
+    volumes:
+      - ./client:/app
+      # Named volume keeps the image's Linux modules. The dev entrypoint
+      # reruns npm ci when package-lock.json changes.
+      - client-node-modules:/app/node_modules
+
+  prod:
+    profiles: ["prod"]
+    build:
+      context: ./server
+    ports:
+      - "127.0.0.1:8000:8000"
+      - "[::1]:8000:8000"
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    environment:
+      APP_ENV: prod
+      OLLAMA_BASE_URL: ${COMPOSE_OLLAMA_BASE_URL:-http://host.docker.internal:11434}
+      OLLAMA_MODEL: ${OLLAMA_MODEL:-gemma4:latest}
+      LLM_MAX_ATTEMPTS: ${LLM_MAX_ATTEMPTS:-3}
+      LLM_ATTEMPT_TIMEOUT_SECONDS: ${LLM_ATTEMPT_TIMEOUT_SECONDS:-10}
+      LLM_SUGGEST_BUDGET_SECONDS: ${LLM_SUGGEST_BUDGET_SECONDS:-20}
+
+  # Published on 5173 so the page origin matches the API allowlist.
+  client:
+    profiles: ["prod"]
+    build:
+      context: ./client
+      target: prod
+    ports:
+      - "127.0.0.1:5173:80"
+      - "[::1]:5173:80"
+
+volumes:
+  client-node-modules:
