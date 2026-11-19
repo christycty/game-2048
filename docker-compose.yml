@@ -4,31 +4,6 @@
 # Ollama that listens only on 127.0.0.1 is still unreachable from the container.
 
 services:
-  phoenix:
-    image: arizephoenix/phoenix:latest
-    profiles: ["dev", "prod"]
-    # Localhost only. PHOENIX_API_KEY on the API is an outbound header and
-    # does not lock this UI or the OTLP port.
-    ports:
-      - "127.0.0.1:6006:6006"
-      - "127.0.0.1:4317:4317"
-    environment:
-      PHOENIX_WORKING_DIR: /phoenix
-    volumes:
-      - phoenix-data:/phoenix
-    healthcheck:
-      test:
-        [
-          "CMD",
-          "python3",
-          "-c",
-          "import urllib.request; urllib.request.urlopen('http://localhost:6006/healthz')",
-        ]
-      interval: 5s
-      timeout: 5s
-      retries: 12
-      start_period: 15s
-
   dev:
     profiles: ["dev"]
     build:
@@ -37,16 +12,13 @@ services:
       - "8000:8000"
     extra_hosts:
       - "host.docker.internal:host-gateway"
-    depends_on:
-      phoenix:
-        condition: service_healthy
     environment:
       APP_ENV: dev
       OLLAMA_BASE_URL: ${OLLAMA_BASE_URL:-http://host.docker.internal:11434}
-      OLLAMA_MODEL: ${OLLAMA_MODEL:-llama3.2}
+      OLLAMA_MODEL: ${OLLAMA_MODEL:-gemma4:latest}
       LLM_MAX_ATTEMPTS: ${LLM_MAX_ATTEMPTS:-3}
-      PHOENIX_COLLECTOR_ENDPOINT: ${PHOENIX_COLLECTOR_ENDPOINT:-http://phoenix:6006}
-      PHOENIX_API_KEY: ${PHOENIX_API_KEY:-}
+      LLM_ATTEMPT_TIMEOUT_SECONDS: ${LLM_ATTEMPT_TIMEOUT_SECONDS:-10}
+      LLM_SUGGEST_BUDGET_SECONDS: ${LLM_SUGGEST_BUDGET_SECONDS:-20}
     volumes:
       - ./server:/app
     command: ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000", "--reload"]
@@ -59,16 +31,10 @@ services:
       - "8000:8000"
     extra_hosts:
       - "host.docker.internal:host-gateway"
-    depends_on:
-      phoenix:
-        condition: service_healthy
     environment:
       APP_ENV: prod
       OLLAMA_BASE_URL: ${OLLAMA_BASE_URL:-http://host.docker.internal:11434}
-      OLLAMA_MODEL: ${OLLAMA_MODEL:-llama3.2}
+      OLLAMA_MODEL: ${OLLAMA_MODEL:-gemma4:latest}
       LLM_MAX_ATTEMPTS: ${LLM_MAX_ATTEMPTS:-3}
-      PHOENIX_COLLECTOR_ENDPOINT: ${PHOENIX_COLLECTOR_ENDPOINT:-http://phoenix:6006}
-      PHOENIX_API_KEY: ${PHOENIX_API_KEY:-}
-
-volumes:
-  phoenix-data:
+      LLM_ATTEMPT_TIMEOUT_SECONDS: ${LLM_ATTEMPT_TIMEOUT_SECONDS:-10}
+      LLM_SUGGEST_BUDGET_SECONDS: ${LLM_SUGGEST_BUDGET_SECONDS:-20}
