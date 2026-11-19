@@ -41,6 +41,8 @@ services:
       CHOKIDAR_USEPOLLING: "true"
     volumes:
       - ./client:/app
+      # Named volume keeps the image's Linux modules. The dev entrypoint
+      # reruns npm ci when package-lock.json changes.
       - client-node-modules:/app/node_modules
 
   prod:
