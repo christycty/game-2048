@@ -18,6 +18,7 @@ class Settings(BaseSettings):
     llm_suggest_budget_seconds: float = Field(default=20, gt=0, le=20)
     phoenix_collector_endpoint: str = "http://localhost:6006"
     phoenix_api_key: str | None = None
+    # Dev and prod export. CI sets EXPORT_TRACES=false.
     export_traces: bool = True
 
     @model_validator(mode="after")

@@ -9,7 +9,13 @@ from app.config import Settings
 from app.llm import LlmClient, OllamaClient
 from app.schemas import HealthResponse, SuggestRequest, SuggestResponse
 from app.suggester import MoveSuggester, NoLegalMove
-from app.telemetry import mark_chain_io, setup_telemetry
+from app.telemetry import (
+    mark_chain_io,
+    mark_span_error,
+    set_json_io,
+    setup_telemetry,
+    shutdown_telemetry,
+)
 
 
 def create_app(
@@ -32,6 +38,7 @@ def create_app(
         yield
         if owns_llm:
             llm.close()
+        shutdown_telemetry(_app)
 
     docs_url = "/docs" if settings.app_env == "dev" else None
     openapi_url = "/openapi.json" if settings.app_env == "dev" else None
@@ -61,9 +68,12 @@ def create_app(
     @app.post("/suggest", response_model=SuggestResponse)
     def suggest(body: SuggestRequest) -> SuggestResponse:
         span = trace.get_current_span()
+        set_json_io(span, input_payload={"board": body.board, "mode": body.mode})
         try:
             result = suggester.suggest(body.board, body.mode)
-        except NoLegalMove:
+        except NoLegalMove as exc:
+            mark_span_error(span, exc)
+            set_json_io(span, output_payload={"detail": "no legal move"})
             raise HTTPException(status_code=409, detail="no legal move") from None
         mark_chain_io(
             span,

@@ -1,8 +1,11 @@
 from __future__ import annotations
 
 import json
+import logging
+import time
 from collections.abc import Iterator
 from contextlib import contextmanager
+from contextvars import ContextVar
 from dataclasses import dataclass
 from urllib.parse import urlparse
 
@@ -21,13 +24,19 @@ from opentelemetry.sdk.resources import Resource
 from opentelemetry.sdk.trace import TracerProvider
 from opentelemetry.sdk.trace.export import BatchSpanProcessor, SpanProcessor
 from opentelemetry.trace import Span, Status, StatusCode
+from starlette.types import ASGIApp, Receive, Scope, Send
 
 from app.config import Settings
 
+logger = logging.getLogger(__name__)
 SERVICE_NAME = "game-2048-server"
 _LOOPBACK = {"localhost", "127.0.0.1", "::1"}
+# Compose reaches Phoenix on the host at this name.
+_DOCKER_HOST_ALIAS = "host.docker.internal"
 # ASGI send/receive child spans and health checks are noise for LLM traces.
 _EXCLUDED_URLS = "/health,/docs,/openapi.json,/redoc"
+# Phoenix keys off this OpenInference name to place time-to-first-token.
+# This call is not a stream; the timestamp is the prefill stand-in.
 _FIRST_TOKEN_EVENT = "First Token Stream Event"
 _GENERATION_DONE_EVENT = "Generation Done"
 _DURATION_BUCKETS = (0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5, 10, 20)
@@ -68,29 +77,53 @@ class LlmMetrics:
     token_usage: metrics.Histogram
 
 
-_llm_metrics: LlmMetrics | None = None
+@dataclass(frozen=True)
+class _RequestTelemetry:
+    tracer: trace.Tracer
+    metrics: LlmMetrics
+
+
+# Request spans must use the app that is serving them. A process-global provider
+# would send later apps' traces to whichever app was created last.
+_request_telemetry: ContextVar[_RequestTelemetry | None] = ContextVar(
+    "request_telemetry",
+    default=None,
+)
 
 
 def tracer() -> trace.Tracer:
+    bound = _request_telemetry.get()
+    if bound is not None:
+        return bound.tracer
     return trace.get_tracer(SERVICE_NAME)
 
 
 def llm_metrics() -> LlmMetrics | None:
-    return _llm_metrics
+    bound = _request_telemetry.get()
+    if bound is not None:
+        return bound.metrics
+    return None
 
 
-def install_tracer_provider(provider: TracerProvider) -> None:
-    """Point ``get_tracer`` at this provider, replacing any previous one.
+class _RequestTelemetryMiddleware:
+    """Bind this app's tracer for the request, including the threadpool endpoint."""
 
-    OpenTelemetry's public ``set_tracer_provider`` only works once. Tests (and
-    ``create_app``) build multiple apps, each with its own exporter, so LLM
-    spans must follow the latest provider.
-    """
-    trace._TRACER_PROVIDER = provider
+    def __init__(self, app: ASGIApp, tracer: trace.Tracer, metrics: LlmMetrics) -> None:
+        self.app = app
+        self._tracer = tracer
+        self._metrics = metrics
 
-
-def install_meter_provider(provider: MeterProvider) -> None:
-    metrics._METER_PROVIDER = provider
+    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+        if scope["type"] != "http":
+            await self.app(scope, receive, send)
+            return
+        token = _request_telemetry.set(
+            _RequestTelemetry(tracer=self._tracer, metrics=self._metrics)
+        )
+        try:
+            await self.app(scope, receive, send)
+        finally:
+            _request_telemetry.reset(token)
 
 
 def traces_url(collector_endpoint: str) -> str:
@@ -105,16 +138,20 @@ def exporter_headers(collector_endpoint: str, api_key: str | None) -> dict[str, 
         return None
     parsed = urlparse(traces_url(collector_endpoint))
     host = (parsed.hostname or "").lower()
-    loopback = host in _LOOPBACK
-    if parsed.scheme == "https" or (parsed.scheme == "http" and loopback):
+    http_ok = host in _LOOPBACK or host == _DOCKER_HOST_ALIAS
+    if parsed.scheme == "https" or (parsed.scheme == "http" and http_ok):
         return {"authorization": f"Bearer {api_key}"}
+    logger.warning(
+        "Phoenix API key was not sent to %s because the collector URL is not HTTPS or local",
+        collector_endpoint,
+    )
     return None
 
 
 def _tag_http_span(span: Span, scope: dict) -> None:
-    """Mark API request spans as OpenInference CHAIN; skip noise paths."""
+    """Phoenix groups this request with its LLM children only when the server span is a CHAIN."""
     path = scope.get("path") or ""
-    if path in {"/health", "/docs", "/openapi.json", "/redoc"}:
+    if path in _EXCLUDED_URLS.split(","):
         return
     span.set_attribute(OPENINFERENCE_SPAN_KIND, SPAN_KIND_CHAIN)
 
@@ -124,8 +161,6 @@ def setup_telemetry(
     settings: Settings,
     span_processor: SpanProcessor | None = None,
 ) -> TracerProvider:
-    global _llm_metrics
-
     endpoint = traces_url(settings.phoenix_collector_endpoint)
     resource = Resource.create({"service.name": SERVICE_NAME})
     provider = TracerProvider(resource=resource)
@@ -139,11 +174,10 @@ def setup_telemetry(
         provider.add_span_processor(span_processor)
 
     # Phoenix ingests traces, not OTLP metrics. Keep instruments in-process so
-    # TTFT/TTD/token histograms are available to a future metrics backend.
+    # time-to-first-token, time-to-done, and token histograms are available later.
     meter_provider = MeterProvider(resource=resource)
-    install_meter_provider(meter_provider)
     meter = meter_provider.get_meter(SERVICE_NAME)
-    _llm_metrics = LlmMetrics(
+    app_metrics = LlmMetrics(
         operation_duration=meter.create_histogram(
             name="gen_ai.client.operation.duration",
             unit="s",
@@ -170,10 +204,18 @@ def setup_telemetry(
         ),
     )
 
-    install_tracer_provider(provider)
+    app_tracer = provider.get_tracer(SERVICE_NAME)
+    # Inside the OTEL middleware, so the endpoint (and its threadpool copy of
+    # the context) records CHAIN and LLM spans on this app's exporter.
+    app.add_middleware(
+        _RequestTelemetryMiddleware,
+        tracer=app_tracer,
+        metrics=app_metrics,
+    )
     FastAPIInstrumentor.instrument_app(
         app,
         tracer_provider=provider,
+        meter_provider=meter_provider,
         excluded_urls=_EXCLUDED_URLS,
         exclude_spans=["send", "receive"],
         server_request_hook=_tag_http_span,
@@ -181,7 +223,21 @@ def setup_telemetry(
     app.state.tracer_provider = provider
     app.state.meter_provider = meter_provider
     app.state.trace_endpoint = endpoint
+    app.state.telemetry_shutdown = False
     return provider
+
+
+def shutdown_telemetry(app) -> None:
+    """Flush this app's spans. Safe to call from lifespan and process exit."""
+    if getattr(app.state, "telemetry_shutdown", False):
+        return
+    app.state.telemetry_shutdown = True
+    provider = getattr(app.state, "tracer_provider", None)
+    if provider is not None:
+        provider.shutdown()
+    meter_provider = getattr(app.state, "meter_provider", None)
+    if meter_provider is not None:
+        meter_provider.shutdown()
 
 
 @contextmanager
@@ -244,7 +300,7 @@ def set_llm_messages(
         span.set_attribute(LLM_FINISH_REASON, finish_reason)
 
 
-def record_llm_success(
+def record_llm_usage(
     span: Span,
     *,
     model: str,
@@ -259,8 +315,11 @@ def record_llm_success(
     prompt_eval = _ns_to_s(body.get("prompt_eval_duration"))
     eval_time = _ns_to_s(body.get("eval_duration"))
     total = _ns_to_s(body.get("total_duration"))
-    ttd = total if total is not None else wall_seconds
-    ttft = _ttft_seconds(load, prompt_eval, ttd, eval_time)
+    total_seconds = total if total is not None else wall_seconds
+    ttft = _ttft_seconds(load, prompt_eval, total_seconds, eval_time)
+    seconds_per_token = None
+    if completion_tokens and eval_time is not None and completion_tokens > 0:
+        seconds_per_token = eval_time / completion_tokens
 
     if prompt_tokens is not None:
         span.set_attribute(LLM_TOKEN_COUNT_PROMPT, prompt_tokens)
@@ -275,9 +334,10 @@ def record_llm_success(
     if isinstance(response_model, str) and response_model and response_model != model:
         span.set_attribute(SpanAttributes.LLM_RESPONSE_MODEL_NAME, response_model)
 
-    # Latency belongs on events: span duration is TTD; first-token event marks TTFT.
+    # Span duration is the client end-to-end time. Provider timings stay on the
+    # event, and the first-token stamp is clamped so it cannot fall outside the span.
     if ttft is not None:
-        prefill = {
+        first_token = {
             key: value
             for key, value in {
                 "ttft": ttft,
@@ -288,14 +348,16 @@ def record_llm_success(
         }
         span.add_event(
             _FIRST_TOKEN_EVENT,
-            attributes=prefill,
-            timestamp=started_ns + int(ttft * 1e9),
+            attributes=first_token,
+            timestamp=_timestamp_inside_span(span, started_ns, ttft),
         )
-    done_attrs: dict[str, float] = {"ttd": ttd, "wall": wall_seconds}
+    done_attrs: dict[str, float] = {"time_to_done": wall_seconds}
+    if total is not None:
+        done_attrs["provider_total"] = total
     if eval_time is not None:
         done_attrs["eval"] = eval_time
-    if completion_tokens and eval_time is not None and completion_tokens > 0:
-        done_attrs["time_per_output_token"] = eval_time / completion_tokens
+    if seconds_per_token is not None:
+        done_attrs["time_per_output_token"] = seconds_per_token
     span.add_event(_GENERATION_DONE_EVENT, attributes=done_attrs)
 
     metric_attrs = {
@@ -306,11 +368,11 @@ def record_llm_success(
     instruments = llm_metrics()
     if instruments is None:
         return
-    instruments.operation_duration.record(ttd, metric_attrs)
+    instruments.operation_duration.record(wall_seconds, metric_attrs)
     if ttft is not None:
         instruments.time_to_first_token.record(ttft, metric_attrs)
-    if completion_tokens and eval_time is not None and completion_tokens > 0:
-        instruments.time_per_output_token.record(eval_time / completion_tokens, metric_attrs)
+    if seconds_per_token is not None:
+        instruments.time_per_output_token.record(seconds_per_token, metric_attrs)
     if prompt_tokens is not None:
         instruments.token_usage.record(
             prompt_tokens, {**metric_attrs, "gen_ai.token.type": "input"}
@@ -324,6 +386,27 @@ def record_llm_success(
 def mark_span_error(span: Span, error: Exception) -> None:
     span.record_exception(error)
     span.set_status(Status(StatusCode.ERROR, str(error)))
+
+
+def _timestamp_inside_span(span: Span, started_ns: int, offset_seconds: float) -> int:
+    """Place an event inside the still-open span.
+
+    Provider timings can be longer than the client span (a fast test double, or
+    a clock that does not match the process). Phoenix drops or mis-draws events
+    that fall outside the span.
+    """
+    start = getattr(span, "start_time", None)
+    if not isinstance(start, int):
+        start = started_ns
+    now = time.time_ns()
+    stamp = started_ns + int(offset_seconds * 1e9)
+    if stamp < start:
+        stamp = start
+    if stamp > now:
+        stamp = now
+    if stamp < start:
+        stamp = start
+    return stamp
 
 
 def _ttft_seconds(

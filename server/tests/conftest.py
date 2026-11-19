@@ -2,8 +2,8 @@ import os
 
 import pytest
 
-# The imported app is built at import time. Keep that process from exporting
-# to a live collector. Tests that need spans pass export_traces=True.
+# The imported app is built at import time. Dev and prod export traces; tests
+# and CI keep the collector off. The API image in CI sets this same variable.
 os.environ["EXPORT_TRACES"] = "false"
 
 

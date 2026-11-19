@@ -11,6 +11,14 @@ logger = logging.getLogger(__name__)
 _Clock = Callable[[], float]
 
 
+def _record_result(span, result: SuggestResponse, failures: list[str]) -> SuggestResponse:
+    payload = result.model_dump()
+    if failures:
+        payload = {**payload, "failures": failures}
+    tel.set_json_io(span, output_payload=payload)
+    return result
+
+
 class NoLegalMove(Exception):
     """The board has no slide or merge available."""
 
@@ -42,8 +50,7 @@ class MoveSuggester:
         ) as suggest_span:
             if mode == "expectimax":
                 result = SuggestResponse(move=fallback, mode=mode, source="expectimax-stub")
-                tel.set_json_io(suggest_span, output_payload=result.model_dump())
-                return result
+                return _record_result(suggest_span, result, [])
 
             rejected: list[str] = []
             invalid_reply = False
@@ -79,9 +86,9 @@ class MoveSuggester:
                         source="llm",
                         reason=reason.strip(),
                     )
-                    tel.set_json_io(suggest_span, output_payload=result.model_dump())
-                    return result
+                    return _record_result(suggest_span, result, failures)
 
+                # The client span is already closed; this only builds the retry text.
                 if suggestion.move not in legal:
                     detail = f"illegal move {suggestion.move}"
                     if suggestion.move not in rejected:
@@ -95,8 +102,4 @@ class MoveSuggester:
 
             logger.warning("llm suggestion fell back to %s: %s", fallback, "; ".join(failures))
             result = SuggestResponse(move=fallback, mode=mode, source="fallback")
-            tel.set_json_io(
-                suggest_span,
-                output_payload={**result.model_dump(), "failures": failures},
-            )
-            return result
+            return _record_result(suggest_span, result, failures)

@@ -67,10 +67,12 @@ class OllamaClient:
         if self._structured_output:
             payload["format"] = _move_schema(legal)
 
+        # Event stamps need a unix time; the duration stays on a monotonic clock.
         started_ns = time.time_ns()
         wall_start = time.perf_counter()
-        with tel.tracer().start_as_current_span(self._model) as span:
+        with tel.tracer().start_as_current_span("ollama chat") as span:
             tel.annotate_llm_span(span, self._model)
+            # Attach the prompt now so a failed request still has it.
             tel.set_llm_messages(
                 span,
                 prompt=prompt,
@@ -115,7 +117,7 @@ class OllamaClient:
                 output=output_text,
                 finish_reason=finish_reason if isinstance(finish_reason, str) else None,
             )
-            tel.record_llm_success(
+            tel.record_llm_usage(
                 span,
                 model=self._model,
                 body=body,
@@ -123,11 +125,15 @@ class OllamaClient:
                 started_ns=started_ns,
             )
 
+            # The span closes when suggest_move returns, so the status has to be set here.
             try:
-                return parse_move(raw_content)
+                parsed = parse_move(raw_content)
             except LlmError as exc:
                 tel.mark_span_error(span, exc)
                 raise
+            if parsed.move not in legal:
+                tel.mark_span_error(span, LlmError(f"illegal move {parsed.move}"))
+            return parsed
 
     def close(self) -> None:
         if self._owns_client and not self._closed:
