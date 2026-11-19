@@ -22,6 +22,7 @@ function App() {
     const [busy, setBusy] = useState(false);
     const [suggesting, setSuggesting] = useState(false);
     const [aiMode, setAiMode] = useState("llm");
+    const [pendingMove, setPendingMove] = useState(null);
     const [hint, setHint] = useState(null);
 
     // The key listener is bound once, so moves read the latest board from refs.
@@ -33,6 +34,11 @@ function App() {
     const moveTokenRef = useRef(0);
     const suggestTokenRef = useRef(0);
     const aiModeRef = useRef(aiMode);
+
+    function clearSuggestion() {
+        setPendingMove(null);
+        setHint(null);
+    }
 
     function startGame() {
         const nextTiles = createInitialTiles();
@@ -48,13 +54,13 @@ function App() {
         setLost(false);
         setBusy(false);
         setSuggesting(false);
-        setHint(null);
+        clearSuggestion();
     }
 
     function handleMove(direction) {
         if (animatingRef.current || lostRef.current) return false;
 
-        // A key or swipe drops an in-flight suggestion so it cannot move a stale board.
+        // A key or swipe drops an in-flight suggestion so it cannot land on a stale board.
         if (suggestingRef.current) {
             suggestTokenRef.current += 1;
             suggestingRef.current = false;
@@ -71,7 +77,7 @@ function App() {
         moveTokenRef.current = token;
         animatingRef.current = true;
         setBusy(true);
-        setHint(null);
+        clearSuggestion();
         setTiles(result.visualTiles);
 
         window.setTimeout(() => {
@@ -100,20 +106,22 @@ function App() {
         suggestingRef.current = true;
         setSuggesting(true);
         setBusy(true);
-        setHint(null);
+        clearSuggestion();
 
         try {
             const suggestion = await suggestMove(tilesToBoard(tilesRef.current), aiModeRef.current);
             if (suggestTokenRef.current !== token) return;
             const reason =
                 typeof suggestion.reason === "string" ? suggestion.reason.trim() : "";
-            // Clear before handleMove so the applied suggestion is not treated as stale.
-            suggestingRef.current = false;
-            setSuggesting(false);
-            const applied = handleMove(suggestion.move);
-            if (applied && reason) setHint(reason);
+            setPendingMove(suggestion.move);
+            setHint(
+                reason
+                    ? `Suggested: ${capitalize(suggestion.move)}. ${reason}`
+                    : `Suggested: ${capitalize(suggestion.move)}.`,
+            );
         } catch {
             if (suggestTokenRef.current !== token) return;
+            setPendingMove(null);
             setHint("AI could not suggest a move");
         } finally {
             if (suggestTokenRef.current === token) {
@@ -122,6 +130,11 @@ function App() {
                 if (!animatingRef.current) setBusy(false);
             }
         }
+    }
+
+    function handleApplySuggestion() {
+        if (!pendingMove || animatingRef.current || lostRef.current) return;
+        handleMove(pendingMove);
     }
 
     function handleModeChange(mode) {
@@ -142,6 +155,7 @@ function App() {
     }, []);
 
     const canSuggest = !lost && !busy && hasMoves(tiles);
+    const canApplySuggestion = Boolean(pendingMove) && !lost && !busy;
 
     return (
         <div className="app">
@@ -154,10 +168,17 @@ function App() {
                 suggesting={suggesting}
                 mode={aiMode}
                 onModeChange={handleModeChange}
+                pendingMove={pendingMove}
+                onApplySuggestion={handleApplySuggestion}
+                canApplySuggestion={canApplySuggestion}
+                hint={hint}
             ></ActionPanel>
-            {hint && <p className="ai-hint" role="status">{hint}</p>}
         </div>
     );
+}
+
+function capitalize(value) {
+    return value.charAt(0).toUpperCase() + value.slice(1);
 }
 
 export default App;

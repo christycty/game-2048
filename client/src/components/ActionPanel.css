@@ -30,6 +30,10 @@
     cursor: pointer;
 }
 
+.action-button-apply {
+    width: min(200px, 80%);
+}
+
 .action-button:hover:not(:disabled) {
     background: #9f8a75;
 }
@@ -93,4 +97,18 @@
 .ai-mode-option input {
     accent-color: #8f7a66;
     margin: 0;
+}
+
+.ai-hint {
+    margin: 0;
+    text-align: center;
+    font-size: 14px;
+    line-height: 1.4;
+    color: #776e65;
+}
+
+.ai-suggestion {
+    width: 100%;
+    display: flex;
+    justify-content: center;
 }

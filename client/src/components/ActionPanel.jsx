@@ -5,7 +5,18 @@ const MODES = [
     { value: "expectimax", label: "Expectimax" },
 ];
 
-function ActionPanel({ onNewGame, onSuggest, canSuggest, suggesting, mode, onModeChange }) {
+function ActionPanel({
+    onNewGame,
+    onSuggest,
+    canSuggest,
+    suggesting,
+    mode,
+    onModeChange,
+    pendingMove,
+    onApplySuggestion,
+    canApplySuggestion,
+    hint,
+}) {
     return (
         <div className="action-panel">
             <div className="action-background">
@@ -39,8 +50,25 @@ function ActionPanel({ onNewGame, onSuggest, canSuggest, suggesting, mode, onMod
                     ))}
                 </div>
             </fieldset>
+            {hint && <p className="ai-hint" role="status">{hint}</p>}
+            {pendingMove && (
+                <div className="ai-suggestion">
+                    <button
+                        type="button"
+                        className="action-button action-button-apply"
+                        onClick={onApplySuggestion}
+                        disabled={!canApplySuggestion}
+                    >
+                        Play {capitalize(pendingMove)}
+                    </button>
+                </div>
+            )}
         </div>
     );
+}
+
+function capitalize(value) {
+    return value.charAt(0).toUpperCase() + value.slice(1);
 }
 
 export default ActionPanel;

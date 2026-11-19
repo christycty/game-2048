@@ -274,19 +274,12 @@ test("the AI control stays inactive after the game is lost", () => {
     expect(screen.getByRole("button", { name: "AI" }).disabled).toBe(true);
 });
 
-test("an AI suggestion applies the returned move and shows the reason", async () => {
+test("an AI suggestion shows the move without applying it", async () => {
     suggestMove.mockResolvedValue({
         move: "right",
         mode: "llm",
         source: "llm",
         reason: "Opens space on the left.",
-    });
-    applyMove.mockReturnValue({
-        moved: true,
-        scoreGained: 0,
-        visualTiles: [{ id: 1, row: 0, col: 3, value: 2, fromRow: 0, fromCol: 0, sliding: true }],
-        resolvedTiles: [{ id: 1, row: 0, col: 3, value: 2 }],
-        lost: false,
     });
 
     render(<App />);
@@ -308,8 +301,41 @@ test("an AI suggestion applies the returned move and shows the reason", async ()
         ],
         "llm",
     );
+    expect(applyMove).not.toHaveBeenCalled();
+    expect(screen.getByRole("status").textContent).toBe(
+        "Suggested: Right. Opens space on the left.",
+    );
+    expect(screen.getByRole("button", { name: "Play Right" }).disabled).toBe(false);
+});
+
+test("applying an AI suggestion plays the pending move", async () => {
+    suggestMove.mockResolvedValue({
+        move: "right",
+        mode: "llm",
+        source: "llm",
+        reason: "Opens space on the left.",
+    });
+    applyMove.mockReturnValue({
+        moved: true,
+        scoreGained: 0,
+        visualTiles: [{ id: 1, row: 0, col: 3, value: 2, fromRow: 0, fromCol: 0, sliding: true }],
+        resolvedTiles: [{ id: 1, row: 0, col: 3, value: 2 }],
+        lost: false,
+    });
+
+    render(<App />);
+    fireEvent.click(screen.getByRole("button", { name: "AI" }));
+
+    await act(async () => {
+        await Promise.resolve();
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: "Play Right" }));
+
+    expect(applyMove).toHaveBeenCalledTimes(1);
     expect(applyMove).toHaveBeenCalledWith(opening, "right");
-    expect(screen.getByRole("status").textContent).toBe("Opens space on the left.");
+    expect(screen.queryByRole("button", { name: "Play Right" })).toBeNull();
+    expect(screen.queryByRole("status")).toBeNull();
 });
 
 test("expectimax mode is sent to the suggestion API", async () => {
@@ -317,14 +343,7 @@ test("expectimax mode is sent to the suggestion API", async () => {
         move: "up",
         mode: "expectimax",
         source: "expectimax-stub",
-        reason: "Corners stay open.",
-    });
-    applyMove.mockReturnValue({
-        moved: true,
-        scoreGained: 0,
-        visualTiles: [{ id: 1, row: 0, col: 0, value: 2, fromRow: 0, fromCol: 0, sliding: true }],
-        resolvedTiles: [{ id: 1, row: 0, col: 0, value: 2 }],
-        lost: false,
+        reason: null,
     });
 
     render(<App />);
@@ -344,8 +363,8 @@ test("expectimax mode is sent to the suggestion API", async () => {
         ],
         "expectimax",
     );
-    expect(applyMove).toHaveBeenCalledWith(opening, "up");
-    expect(screen.getByRole("status").textContent).toBe("Corners stay open.");
+    expect(screen.getByRole("status").textContent).toBe("Suggested: Up.");
+    expect(screen.getByRole("button", { name: "Play Up" })).toBeTruthy();
 });
 
 test("a failed AI suggestion leaves the board alone and reports the miss", async () => {
@@ -360,6 +379,7 @@ test("a failed AI suggestion leaves the board alone and reports the miss", async
 
     expect(applyMove).not.toHaveBeenCalled();
     expect(screen.getByRole("status").textContent).toBe("AI could not suggest a move");
+    expect(screen.queryByRole("button", { name: /Play / })).toBeNull();
     expect(screen.getByRole("button", { name: "AI" }).disabled).toBe(false);
 });
 
@@ -399,4 +419,5 @@ test("a player move during an AI request drops the late suggestion", async () =>
     // The late suggestion must not add a second move or leave its reason on screen.
     expect(applyMove).toHaveBeenCalledTimes(1);
     expect(screen.queryByRole("status")).toBeNull();
+    expect(screen.queryByRole("button", { name: /Play / })).toBeNull();
 });
