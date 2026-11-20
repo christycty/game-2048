@@ -304,6 +304,7 @@ test("an AI suggestion shows the move without applying it", async () => {
             [0, 0, 0, 0],
         ],
         "llm",
+        expect.objectContaining({ signal: expect.any(AbortSignal) }),
     );
     expect(applyMove).not.toHaveBeenCalled();
     expect(screen.getByRole("status").textContent).toBe(
@@ -366,6 +367,7 @@ test("expectimax mode is sent to the suggestion API", async () => {
             [0, 0, 0, 0],
         ],
         "expectimax",
+        expect.objectContaining({ signal: expect.any(AbortSignal) }),
     );
     expect(screen.getByRole("status").textContent).toBe(
         "Suggested: Up. Score of each direction: Left = N/A, Right = 1053.4, Up = 1200.0, Down = 771.2",
@@ -561,6 +563,7 @@ test("auto play applies a suggestion without waiting for Play", async () => {
             [0, 0, 0, 0],
         ],
         "expectimax",
+        expect.objectContaining({ signal: expect.any(AbortSignal) }),
     );
     expect(applyMove).toHaveBeenCalledWith(opening, "right");
     expect(screen.queryByRole("button", { name: /Play / })).toBeNull();
@@ -612,6 +615,7 @@ test("auto play switches from LLM to Expectimax before the first request", async
             [0, 0, 0, 0],
         ],
         "expectimax",
+        expect.objectContaining({ signal: expect.any(AbortSignal) }),
     );
     expect(screen.getByRole("status").textContent).toBe("Suggested: Right.");
 });
@@ -795,6 +799,49 @@ test("a fallback during auto play stops the loop", async () => {
     );
 });
 
+test("stopping auto play during Thinking aborts the suggest request", async () => {
+    let rejectSuggest;
+    let seenSignal;
+    suggestMove.mockImplementation(
+        (_board, _mode, options = {}) =>
+            new Promise((_resolve, reject) => {
+                seenSignal = options.signal;
+                rejectSuggest = reject;
+                options.signal?.addEventListener("abort", () => {
+                    reject(new DOMException("Aborted", "AbortError"));
+                });
+            }),
+    );
+
+    render(<App />);
+    fireEvent.click(screen.getByRole("button", { name: "Auto Play" }));
+
+    expect(screen.getByRole("button", { name: "Stop" }).getAttribute("aria-pressed")).toBe("true");
+    expect(seenSignal).toBeInstanceOf(AbortSignal);
+    expect(seenSignal.aborted).toBe(false);
+
+    fireEvent.click(screen.getByRole("button", { name: "Stop" }));
+
+    expect(seenSignal.aborted).toBe(true);
+    expect(screen.getByRole("button", { name: "Auto Play" }).getAttribute("aria-pressed")).toBe(
+        "false",
+    );
+    expect(screen.getByRole("button", { name: "AI" }).disabled).toBe(false);
+    // Abort is silent: keep the Auto Play mode-switch line, no failure hint / Play.
+    expect(screen.getByRole("status").textContent).toBe("Switched to Expectimax for Auto Play.");
+    expect(applyMove).not.toHaveBeenCalled();
+
+    await act(async () => {
+        // The abort listener may already have rejected; settle any leftover promise.
+        rejectSuggest?.(new DOMException("Aborted", "AbortError"));
+        await Promise.resolve();
+    });
+
+    expect(applyMove).not.toHaveBeenCalled();
+    expect(screen.queryByRole("button", { name: /Play / })).toBeNull();
+    expect(screen.getByRole("status").textContent).toBe("Switched to Expectimax for Auto Play.");
+});
+
 test("a manual move during auto play stops the loop", async () => {
     let finishSuggest;
     suggestMove.mockImplementation(
@@ -899,6 +946,7 @@ test("auto play applies a pending suggestion then continues", async () => {
             [0, 0, 0, 0],
         ],
         "expectimax",
+        expect.objectContaining({ signal: expect.any(AbortSignal) }),
     );
     expect(applyMove).toHaveBeenLastCalledWith(afterPending, "down");
 });

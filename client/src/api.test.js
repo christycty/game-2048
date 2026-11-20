@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { suggestMove, SuggestError } from "./api.js";
+import { suggestMove, SuggestError, isAbortError } from "./api.js";
 
 const BOARD = [
     [2, 0, 0, 0],
@@ -31,6 +31,23 @@ test("suggestMove posts the board and mode, then returns the body", async () => 
     assert.deepEqual(body, { move: "left", mode: "llm", source: "llm", reason: "Merges." });
 });
 
+test("suggestMove passes an AbortSignal through to fetch", async () => {
+    const controller = new AbortController();
+    let seen;
+    const fetchImpl = async (_url, options) => {
+        seen = options.signal;
+        return {
+            ok: true,
+            async json() {
+                return { move: "left", mode: "llm", source: "llm", reason: "ok" };
+            },
+        };
+    };
+
+    await suggestMove(BOARD, "llm", { fetch: fetchImpl, signal: controller.signal });
+    assert.equal(seen, controller.signal);
+});
+
 test("suggestMove rejects a failed HTTP response", async () => {
     const fetchImpl = async () => ({ ok: false, status: 409, async json() { return {}; } });
 
@@ -57,5 +74,16 @@ test("suggestMove rejects a network failure", async () => {
     await assert.rejects(
         () => suggestMove(BOARD, "llm", { fetch: fetchImpl }),
         (error) => error instanceof SuggestError && error.status === 0,
+    );
+});
+
+test("suggestMove preserves AbortError instead of wrapping it", async () => {
+    const fetchImpl = async () => {
+        throw new DOMException("The operation was aborted.", "AbortError");
+    };
+
+    await assert.rejects(
+        () => suggestMove(BOARD, "llm", { fetch: fetchImpl }),
+        (error) => isAbortError(error) && !(error instanceof SuggestError),
     );
 });

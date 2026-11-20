@@ -1,8 +1,10 @@
 import logging
+import threading
 import time
 from collections.abc import Callable
 
 from app import telemetry as tel
+from app.cancel import SuggestCancelled
 from app.expectimax import choose_move
 from app.llm import LlmClient, LlmError
 from app.moves import FALLBACK_ORDER, legal_moves
@@ -39,7 +41,17 @@ class MoveSuggester:
         self._attempt_timeout_seconds = attempt_timeout_seconds
         self._clock = clock or time.monotonic
 
-    def suggest(self, board: list[list[int]], mode: Mode) -> SuggestResponse:
+    def suggest(
+        self,
+        board: list[list[int]],
+        mode: Mode,
+        cancel: threading.Event | None = None,
+    ) -> SuggestResponse:
+        def raise_if_cancelled() -> None:
+            if cancel is not None and cancel.is_set():
+                raise SuggestCancelled()
+
+        raise_if_cancelled()
         legal = legal_moves(board)
         fallback = next((direction for direction in FALLBACK_ORDER if direction in legal), None)
         if fallback is None:
@@ -50,7 +62,7 @@ class MoveSuggester:
             input_payload={"mode": mode, "board": board, "legal": legal},
         ) as suggest_span:
             if mode == "expectimax":
-                choice = choose_move(board)
+                choice = choose_move(board, cancel=cancel)
                 if choice is not None and choice.move in legal:
                     result = SuggestResponse(
                         move=choice.move,
@@ -71,6 +83,7 @@ class MoveSuggester:
             # Start a call only when the remaining budget covers its timeout.
             deadline = self._clock() + self._budget_seconds
             for attempt in range(1, self._max_attempts + 1):
+                raise_if_cancelled()
                 remaining = deadline - self._clock()
                 if remaining < self._attempt_timeout_seconds:
                     failures.append("time budget")
@@ -84,7 +97,10 @@ class MoveSuggester:
                         legal=legal,
                         rejected=list(rejected),
                         invalid_reply=invalid_reply,
+                        cancel=cancel,
                     )
+                except SuggestCancelled:
+                    raise
                 except LlmError as exc:
                     invalid_reply = True
                     failures.append(str(exc))

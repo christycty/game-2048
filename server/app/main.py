@@ -1,10 +1,14 @@
+import asyncio
+import contextlib
+import threading
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from opentelemetry import trace
 from opentelemetry.sdk.trace.export import SpanProcessor
 
+from app.cancel import SuggestCancelled
 from app.config import Settings
 from app.llm import LlmClient, OllamaClient
 from app.rate_limit import SuggestRateLimiter
@@ -17,6 +21,18 @@ from app.telemetry import (
     setup_telemetry,
     shutdown_telemetry,
 )
+
+# Poll interval for ASGI disconnect while a suggest runs in a worker thread.
+_DISCONNECT_POLL_SECONDS = 0.05
+
+
+async def watch_disconnect(request: Request, cancel: threading.Event) -> None:
+    """Set cancel when the client drops; exit when cancel is set elsewhere."""
+    while not cancel.is_set():
+        if await request.is_disconnected():
+            cancel.set()
+            return
+        await asyncio.sleep(_DISCONNECT_POLL_SECONDS)
 
 
 def create_app(
@@ -77,7 +93,7 @@ def create_app(
         return HealthResponse(status="ok")
 
     @app.post("/suggest", response_model=SuggestResponse)
-    def suggest(body: SuggestRequest) -> SuggestResponse:
+    async def suggest(request: Request, body: SuggestRequest) -> SuggestResponse:
         retry_after = limiters[body.mode].allow()
         if retry_after is not None:
             raise HTTPException(
@@ -87,12 +103,24 @@ def create_app(
             )
         span = trace.get_current_span()
         set_json_io(span, input_payload={"board": body.board, "mode": body.mode})
+        # Per-request cancel: concurrent suggests share the process but not this Event.
+        cancel = threading.Event()
+        watcher = asyncio.create_task(watch_disconnect(request, cancel))
         try:
-            result = suggester.suggest(body.board, body.mode)
+            result = await asyncio.to_thread(suggester.suggest, body.board, body.mode, cancel)
+        except SuggestCancelled as exc:
+            mark_span_error(span, exc)
+            set_json_io(span, output_payload={"detail": "cancelled"})
+            # 499 = client closed request (nginx convention). Best-effort if already gone.
+            raise HTTPException(status_code=499, detail="client cancelled") from None
         except NoLegalMove as exc:
             mark_span_error(span, exc)
             set_json_io(span, output_payload={"detail": "no legal move"})
             raise HTTPException(status_code=409, detail="no legal move") from None
+        finally:
+            watcher.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await watcher
         mark_chain_io(
             span,
             input_payload={"board": body.board, "mode": body.mode},

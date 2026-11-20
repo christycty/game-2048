@@ -7,10 +7,12 @@ is equally likely, and the new tile is a 2 (90%) or a 4 (10%), matching the clie
 from __future__ import annotations
 
 import math
+import threading
 import time
 from collections.abc import Callable
 from typing import NamedTuple
 
+from app.cancel import SuggestCancelled
 from app.moves import DIRECTIONS, FALLBACK_ORDER, apply_move
 
 Board = tuple[tuple[int, ...], ...]
@@ -52,8 +54,12 @@ def choose_move(
     depth: int | None = None,
     budget_seconds: float | None = None,
     clock: _Clock | None = None,
+    cancel: threading.Event | None = None,
 ) -> Choice | None:
     """Best legal move and score line, or None if stuck / unscored / broken."""
+    if cancel is not None and cancel.is_set():
+        raise SuggestCancelled()
+
     root = _freeze(board)
     legal = _legal_directions(root)
     if not legal:
@@ -76,6 +82,8 @@ def choose_move(
     scores: dict[str, float | None] | None = None
     try:
         for current in range(limit + 1):
+            if cancel is not None and cancel.is_set():
+                raise SuggestCancelled()
             best, scores = _best_at_depth(root, legal, current, deadline, now)
     except (_TimeUp, _SearchBroken):
         # Budget or an unreachable state mid-depth: keep the last finished depth.

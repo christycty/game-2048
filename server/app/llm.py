@@ -1,10 +1,12 @@
 import json
+import threading
 import time
 from typing import NamedTuple, Protocol
 
 import httpx
 
 from app import telemetry as tel
+from app.cancel import SuggestCancelled
 from app.config import Settings
 
 DIRECTIONS = ("up", "down", "left", "right")
@@ -30,6 +32,7 @@ class LlmClient(Protocol):
         legal: list[str],
         rejected: list[str],
         invalid_reply: bool,
+        cancel: threading.Event | None = None,
     ) -> ModelSuggestion: ...
 
 
@@ -52,7 +55,11 @@ class OllamaClient:
         legal: list[str],
         rejected: list[str],
         invalid_reply: bool,
+        cancel: threading.Event | None = None,
     ) -> ModelSuggestion:
+        if cancel is not None and cancel.is_set():
+            raise SuggestCancelled()
+
         prompt = _prompt(
             board,
             legal=legal,
@@ -83,13 +90,10 @@ class OllamaClient:
                 },
             )
             try:
-                response = self._client.post(
-                    "/api/chat",
-                    json=payload,
-                    timeout=self._attempt_timeout,
-                )
-                response.raise_for_status()
-                body = response.json()
+                body = self._post_chat(payload, cancel)
+            except SuggestCancelled:
+                tel.mark_span_error(span, SuggestCancelled())
+                raise
             except (httpx.HTTPError, ValueError) as exc:
                 error = LlmError(f"ollama request failed: {exc}")
                 tel.mark_span_error(span, error)
@@ -134,6 +138,55 @@ class OllamaClient:
             if parsed.move not in legal:
                 tel.mark_span_error(span, LlmError(f"illegal move {parsed.move}"))
             return parsed
+
+    def _post_chat(
+        self,
+        payload: dict[str, object],
+        cancel: threading.Event | None,
+    ) -> dict:
+        """POST /api/chat; close only this response if cancel fires (shared client stays up)."""
+        request = self._client.build_request(
+            "POST",
+            "/api/chat",
+            json=payload,
+            timeout=self._attempt_timeout,
+        )
+        response = self._client.send(request, stream=True)
+        stop_watch = threading.Event()
+        watcher: threading.Thread | None = None
+        if cancel is not None:
+
+            def _watch_cancel() -> None:
+                while not stop_watch.is_set():
+                    if cancel.is_set():
+                        response.close()
+                        return
+                    stop_watch.wait(0.05)
+
+            watcher = threading.Thread(target=_watch_cancel, daemon=True)
+            watcher.start()
+        try:
+            raw = response.read()
+            if cancel is not None and cancel.is_set():
+                raise SuggestCancelled()
+            response.raise_for_status()
+            body = json.loads(raw)
+        except SuggestCancelled:
+            raise
+        except (httpx.HTTPError, ValueError, json.JSONDecodeError) as exc:
+            if cancel is not None and cancel.is_set():
+                raise SuggestCancelled() from exc
+            if isinstance(exc, json.JSONDecodeError):
+                raise ValueError("ollama response is not json") from exc
+            raise
+        finally:
+            stop_watch.set()
+            response.close()
+            if watcher is not None:
+                watcher.join(timeout=1)
+        if not isinstance(body, dict):
+            raise ValueError("ollama response is not an object")
+        return body
 
     def close(self) -> None:
         if self._owns_client and not self._closed:

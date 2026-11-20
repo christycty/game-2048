@@ -14,15 +14,29 @@ export class SuggestError extends Error {
     }
 }
 
-export async function suggestMove(board, mode = "llm", { fetch: fetchImpl = fetch } = {}) {
+export function isAbortError(error) {
+    return Boolean(error) && error.name === "AbortError";
+}
+
+export async function suggestMove(
+    board,
+    mode = "llm",
+    { fetch: fetchImpl = fetch, signal } = {},
+) {
     let response;
     try {
         response = await fetchImpl(`${apiBaseUrl()}/suggest`, {
             method: "POST",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({ board, mode }),
+            signal,
         });
-    } catch {
+    } catch (error) {
+        // Abort must stay AbortError so the UI can stay silent (Stop, New Game, move).
+        if (isAbortError(error) || signal?.aborted) {
+            const abortError = isAbortError(error) ? error : new DOMException("Aborted", "AbortError");
+            throw abortError;
+        }
         throw new SuggestError("suggestion request failed", { status: 0 });
     }
 
