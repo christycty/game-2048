@@ -169,7 +169,10 @@ function App() {
         }
 
         try {
-            const suggestion = await suggestMove(tilesToBoard(tilesRef.current), aiModeRef.current);
+            const suggestion = await suggestMove(tilesToBoard(tilesRef.current), aiModeRef.current, {
+                // Stale-token ignores must not beacon fail/rate_limit (cancel awaits AbortSignal).
+                shouldReportOutcome: () => suggestTokenRef.current === token,
+            });
             if (suggestTokenRef.current !== token) return;
             // "fallback" is a fixed move order, not a model choice.
             if (suggestion.source === "fallback") {

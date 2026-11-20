@@ -44,7 +44,9 @@ The browser does **not** run an OpenTelemetry SDK. Each `POST /suggest` from [`c
 
 Coarse client fail / rate-limit counts go to scrape metrics via `POST /client-events` (same-origin; Vite and nginx proxy it). Prompt forensics stay in Phoenix — do not duplicate them in the browser.
 
-**Follow-on:** a `cancel` beacon outcome waits on client `AbortSignal` + server disconnect cancel. Do not emit cancel from stale-token ignores.
+App passes `shouldReportOutcome` so abandoned in-flight suggests (stale token after a board-changing move / New Game) do **not** beacon `fail` / `rate_limit`. **Follow-on:** a `cancel` beacon outcome waits on client `AbortSignal` + server disconnect cancel. Do not emit cancel from stale-token ignores either.
+
+`/client-events` is unauthenticated like the rest of the API (no player auth yet). Prod keeps the API unpublished; published ports are loopback-only.
 
 ## Where each concern belongs
 

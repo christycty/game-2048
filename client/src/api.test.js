@@ -163,3 +163,61 @@ test("suggestMove beacons fail when response body lacks a move", async () => {
     assert.ok(beacon);
     assert.deepEqual(JSON.parse(beacon.options.body), { outcome: "fail" });
 });
+
+test("suggestMove skips beacons when shouldReportOutcome is false", async () => {
+    const calls = [];
+    const fetchImpl = async (url, options) => {
+        calls.push({ url, options });
+        if (url.endsWith("/client-events")) {
+            return { ok: true, status: 204, async json() { return {}; } };
+        }
+        return { ok: false, status: 429, async json() { return {}; } };
+    };
+
+    await assert.rejects(
+        () =>
+            suggestMove(BOARD, "llm", {
+                fetch: fetchImpl,
+                shouldReportOutcome: () => false,
+            }),
+        (error) => error instanceof SuggestError && error.status === 429,
+    );
+
+    assert.equal(
+        calls.some((c) => c.url === "/client-events"),
+        false,
+    );
+});
+
+test("suggestMove re-checks shouldReportOutcome after the suggest await", async () => {
+    // Must not capture a boolean at call start — abandon can flip mid-flight.
+    let abandoned = false;
+    let releaseSuggest;
+    const calls = [];
+    const fetchImpl = async (url, options) => {
+        calls.push({ url, options });
+        if (url.endsWith("/client-events")) {
+            return { ok: true, status: 204, async json() { return {}; } };
+        }
+        await new Promise((resolve) => {
+            releaseSuggest = resolve;
+        });
+        return { ok: false, status: 429, async json() { return {}; } };
+    };
+
+    const pending = suggestMove(BOARD, "llm", {
+        fetch: fetchImpl,
+        shouldReportOutcome: () => !abandoned,
+    });
+    abandoned = true;
+    releaseSuggest();
+
+    await assert.rejects(
+        () => pending,
+        (error) => error instanceof SuggestError && error.status === 429,
+    );
+    assert.equal(
+        calls.some((c) => c.url === "/client-events"),
+        false,
+    );
+});

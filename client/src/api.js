@@ -3,6 +3,8 @@
 // VITE_API_BASE_URL replaces that with an absolute origin.
 // Each suggest sends W3C `traceparent` so Phoenix can tie UI → API → LLM.
 // Fail / 429 outcomes beacon to /client-events for scrapeable client counts.
+// Pass shouldReportOutcome when the UI can abandon the request (stale token);
+// abandoned fails must not inflate client Grafana rates.
 
 import { createTraceparent } from "./trace.js";
 
@@ -31,7 +33,20 @@ function reportClientOutcome(outcome, { fetch: fetchImpl = fetch } = {}) {
     }
 }
 
-export async function suggestMove(board, mode = "llm", { fetch: fetchImpl = fetch } = {}) {
+function maybeReportOutcome(
+    outcome,
+    { fetch: fetchImpl = fetch, shouldReportOutcome = () => true } = {},
+) {
+    if (!shouldReportOutcome()) return;
+    reportClientOutcome(outcome, { fetch: fetchImpl });
+}
+
+export async function suggestMove(
+    board,
+    mode = "llm",
+    { fetch: fetchImpl = fetch, shouldReportOutcome = () => true } = {},
+) {
+    const reportOpts = { fetch: fetchImpl, shouldReportOutcome };
     const traceparent = createTraceparent();
     let response;
     try {
@@ -44,14 +59,12 @@ export async function suggestMove(board, mode = "llm", { fetch: fetchImpl = fetc
             body: JSON.stringify({ board, mode }),
         });
     } catch {
-        reportClientOutcome("fail", { fetch: fetchImpl });
+        maybeReportOutcome("fail", reportOpts);
         throw new SuggestError("suggestion request failed", { status: 0 });
     }
 
     if (!response.ok) {
-        reportClientOutcome(response.status === 429 ? "rate_limit" : "fail", {
-            fetch: fetchImpl,
-        });
+        maybeReportOutcome(response.status === 429 ? "rate_limit" : "fail", reportOpts);
         throw new SuggestError("suggestion request failed", { status: response.status });
     }
 
@@ -59,11 +72,11 @@ export async function suggestMove(board, mode = "llm", { fetch: fetchImpl = fetc
     try {
         body = await response.json();
     } catch {
-        reportClientOutcome("fail", { fetch: fetchImpl });
+        maybeReportOutcome("fail", reportOpts);
         throw new SuggestError("suggestion response was unusable");
     }
     if (!body || typeof body.move !== "string") {
-        reportClientOutcome("fail", { fetch: fetchImpl });
+        maybeReportOutcome("fail", reportOpts);
         throw new SuggestError("suggestion response was unusable");
     }
     return body;

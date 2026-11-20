@@ -27,7 +27,7 @@ Stack: React 19, Vite, plain JavaScript. The page title is 2048. The app mounts 
 | `src/App.jsx` | Score, best score, tiles, loss, AI suggestion and Auto Play state. Owns input and the slide timer. |
 | `src/game.js` | Board rules. Pure functions. No DOM. Includes `tilesToBoard` for the API. |
 | `src/swipe.js` | Turns a pointer delta into a direction. |
-| `src/api.js` | `POST /suggest` with W3C `traceparent`; beacons fail/429 to `/client-events`. Throws `SuggestError` on network, HTTP, or unusable body. |
+| `src/api.js` | `POST /suggest` with W3C `traceparent`; beacons fail/429 to `/client-events` unless `shouldReportOutcome` is false (stale token). Throws `SuggestError` on network, HTTP, or unusable body. |
 | `src/trace.js` | Hand-rolled W3C `traceparent` (no browser OTel SDK). |
 | `src/utils.js` | Unused `getRandomInt`. Moves pass `Math.random` in instead. |
 | `src/components/Board.jsx` | Cells, sliding tiles, game-over overlay, pointer gestures. |
@@ -77,7 +77,7 @@ A manual board-changing move while Auto Play is running stops Auto Play.
 `handleSuggest`:
 
 1. Clears any previous pending move. Clears the hint only when Auto Play is off (Auto Play keeps the last hint through Thinking).
-2. Calls `suggestMove(tilesToBoard(tiles), aiMode)`.
+2. Calls `suggestMove(tilesToBoard(tiles), aiMode, { shouldReportOutcome })` so a stale token after abandon does not beacon fail/rate_limit.
 3. If `source` is `"fallback"`, shows **AI could not suggest a move**, does not offer **Play**, and stops Auto Play. The fixed fallback order is not treated as a model choice.
 4. On a usable body, shows `Suggested: {Move}.` plus the reason when present. If Auto Play is off, sets `pendingMove`. If Auto Play is on, applies the move immediately via `handleMove` (marked as an auto-apply so the loop is not treated as a manual takeover).
 5. On HTTP `429`, shows **Too many suggestions. Wait a moment and try again.**, does not offer **Play**, and stops Auto Play.
@@ -126,8 +126,8 @@ A swipe starts on pointer down (left button only for a mouse), captures the poin
 
 - `src/game.test.js` covers the deal, ids, slides, single merges, blocked moves, spawn timing, loss, and `tilesToBoard`.
 - `src/swipe.test.js` covers the threshold and axis choice.
-- `src/api.test.js` covers same-origin `/suggest` + `traceparent`, success body, `SuggestError` statuses including 429, and fail/rate_limit beacons (unusable JSON body path is implemented but not covered).
-- `src/App.test.jsx` covers score timing, shared swipe and key paths, best score across a new game, a cancelled slide, a lost game ignoring input, suggest-then-confirm, Auto Play apply/gap/loop/stop (including Stop during the gap re-enabling AI), LLM→Expectimax switch, hint kept through the next Thinking step, pending-start and in-loop blocked apply, loss / rate limit / New Game exits, fallback/manual takeover, mode selection, fallback / rate-limit / failed requests, and dropping a stale suggestion after a board-changing move.
+- `src/api.test.js` covers same-origin `/suggest` + `traceparent`, success body, `SuggestError` statuses including 429, fail/rate_limit beacons (HTTP, network, unusable JSON / missing `move`), skipping beacons when `shouldReportOutcome` is false, and re-checking that gate after the suggest await (mid-flight abandon).
+- `src/App.test.jsx` covers score timing, shared swipe and key paths, best score across a new game, a cancelled slide, a lost game ignoring input, suggest-then-confirm, Auto Play apply/gap/loop/stop (including Stop during the gap re-enabling AI), LLM→Expectimax switch, hint kept through the next Thinking step, pending-start and in-loop blocked apply, loss / rate limit / New Game exits, fallback/manual takeover, mode selection, fallback / rate-limit / failed requests, and dropping a stale suggestion after a board-changing move (including `shouldReportOutcome` flipping false so abandoned fails do not beacon).
 - `src/components/Board.test.jsx` covers the slide, overlay stacking, and pointer capture.
 - `src/components/ScoreCard.test.jsx` covers opening and closing help.
 

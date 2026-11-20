@@ -304,6 +304,7 @@ test("an AI suggestion shows the move without applying it", async () => {
             [0, 0, 0, 0],
         ],
         "llm",
+        expect.objectContaining({ shouldReportOutcome: expect.any(Function) }),
     );
     expect(applyMove).not.toHaveBeenCalled();
     expect(screen.getByRole("status").textContent).toBe(
@@ -366,6 +367,7 @@ test("expectimax mode is sent to the suggestion API", async () => {
             [0, 0, 0, 0],
         ],
         "expectimax",
+        expect.objectContaining({ shouldReportOutcome: expect.any(Function) }),
     );
     expect(screen.getByRole("status").textContent).toBe(
         "Suggested: Up. Score of each direction: Left = N/A, Right = 1053.4, Up = 1200.0, Down = 771.2",
@@ -431,12 +433,13 @@ test("a failed AI suggestion leaves the board alone and reports the miss", async
 
 test("a player move during an AI request drops the late suggestion", async () => {
     let finishSuggest;
-    suggestMove.mockImplementation(
-        () =>
-            new Promise((resolve) => {
-                finishSuggest = resolve;
-            }),
-    );
+    let shouldReportOutcome;
+    suggestMove.mockImplementation((_board, _mode, options = {}) => {
+        shouldReportOutcome = options.shouldReportOutcome;
+        return new Promise((resolve) => {
+            finishSuggest = resolve;
+        });
+    });
     applyMove.mockReturnValue({
         moved: true,
         scoreGained: 0,
@@ -447,10 +450,15 @@ test("a player move during an AI request drops the late suggestion", async () =>
 
     render(<App />);
     fireEvent.click(screen.getByRole("button", { name: "AI" }));
+    expect(typeof shouldReportOutcome).toBe("function");
+    expect(shouldReportOutcome()).toBe(true);
+
     press("ArrowRight");
 
     expect(applyMove).toHaveBeenCalledTimes(1);
     expect(applyMove).toHaveBeenCalledWith(opening, "right");
+    // Board-changing move bumps the suggest token; fail/rate_limit must not beacon.
+    expect(shouldReportOutcome()).toBe(false);
 
     await act(async () => {
         finishSuggest({
@@ -561,6 +569,7 @@ test("auto play applies a suggestion without waiting for Play", async () => {
             [0, 0, 0, 0],
         ],
         "expectimax",
+        expect.objectContaining({ shouldReportOutcome: expect.any(Function) }),
     );
     expect(applyMove).toHaveBeenCalledWith(opening, "right");
     expect(screen.queryByRole("button", { name: /Play / })).toBeNull();
@@ -612,6 +621,7 @@ test("auto play switches from LLM to Expectimax before the first request", async
             [0, 0, 0, 0],
         ],
         "expectimax",
+        expect.objectContaining({ shouldReportOutcome: expect.any(Function) }),
     );
     expect(screen.getByRole("status").textContent).toBe("Suggested: Right.");
 });
@@ -899,6 +909,7 @@ test("auto play applies a pending suggestion then continues", async () => {
             [0, 0, 0, 0],
         ],
         "expectimax",
+        expect.objectContaining({ shouldReportOutcome: expect.any(Function) }),
     );
     expect(applyMove).toHaveBeenLastCalledWith(afterPending, "down");
 });
