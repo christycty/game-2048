@@ -668,13 +668,13 @@ def test_time_budget_stops_further_attempts() -> None:
 
 def test_lifespan_closes_the_owned_client(monkeypatch: pytest.MonkeyPatch) -> None:
     closed: list[int] = []
+    real_close = OllamaClient.close
 
-    class Spy(httpx.Client):
-        def close(self) -> None:
-            closed.append(1)
-            super().close()
+    def spy_close(self: OllamaClient) -> None:
+        closed.append(1)
+        real_close(self)
 
-    monkeypatch.setattr("app.llm.httpx.Client", Spy)
+    monkeypatch.setattr(OllamaClient, "close", spy_close)
     app = create_app(isolated_settings())
     with TestClient(app):
         assert closed == []
