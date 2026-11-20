@@ -1,6 +1,6 @@
 # 2048 with AI suggestions
 
-A single-player 2048 game in the browser, with an optional AI coach that suggests the next move—and waits for you to confirm before anything is played.
+A single-player 2048 game in the browser, with an optional AI coach that suggests the next move. Confirm each suggestion with **Play**, or turn on **Auto Play** to apply them in a loop.
 
 ```mermaid
 flowchart LR
@@ -13,7 +13,7 @@ flowchart LR
 
 - Play classic 2048 (keys or swipe); track score and session best.
 - Ask for a suggestion (LLM by default, or Expectimax search with per-direction scores).
-- Confirm with **Play**, or ignore it and move yourself.
+- Confirm with **Play**, ignore it and move yourself, or start **Auto Play** to keep applying suggestions until you stop.
 
 ## Quick start
 

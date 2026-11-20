@@ -283,7 +283,10 @@ def test_metrics_records_suggest_http_status_codes() -> None:
     limited = create_app(
         isolated_settings(export_traces=False),
         _QuietLLM(),
-        rate_limiter=SuggestRateLimiter(1, 60),
+        rate_limiters={
+            "llm": SuggestRateLimiter(1, 60),
+            "expectimax": SuggestRateLimiter(30, 60),
+        },
     )
     limited_client = TestClient(limited)
     assert limited_client.post("/suggest", json={"board": OPEN_BOARD, "mode": "llm"}).status_code == 200

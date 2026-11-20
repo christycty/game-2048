@@ -34,6 +34,18 @@
     width: min(200px, 80%);
 }
 
+.action-button-auto {
+    width: min(200px, 80%);
+}
+
+.action-button-auto-active {
+    background: #776e65;
+}
+
+.action-button-auto-active:hover:not(:disabled) {
+    background: #8f7a66;
+}
+
 .action-button:hover:not(:disabled) {
     background: #9f8a75;
 }

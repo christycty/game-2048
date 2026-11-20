@@ -1,6 +1,6 @@
 # Agent entrypoint
 
-2048 in the browser with optional AI move suggestions (confirm before play).
+2048 in the browser with optional AI move suggestions (confirm before play, or Auto Play to apply them in a loop).
 
 ## Doc map (read this first)
 

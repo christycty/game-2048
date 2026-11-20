@@ -17,8 +17,10 @@ class Settings(BaseSettings):
     llm_attempt_timeout_seconds: float = Field(default=20, gt=0, le=20)
     # Budget covers at least two attempt timeouts so a slow first call can still retry.
     llm_suggest_budget_seconds: float = Field(default=40, gt=0, le=40)
-    # The whole process, not each caller. Nginx is the only prod caller.
+    # Process-wide caps, split by mode. Nginx is the only prod caller.
+    # SUGGEST_RATE_LIMIT_REQUESTS remains the LLM bucket (Ollama spend).
     suggest_rate_limit_requests: int = Field(default=5, ge=1, le=30)
+    suggest_rate_limit_expectimax_requests: int = Field(default=30, ge=1, le=120)
     suggest_rate_limit_window_seconds: float = Field(default=60, ge=1, le=3600)
     # Host port the page is published on (Compose / local Vite). CORS allowlist
     # follows this so a worktree can move off 5173 without editing code.
