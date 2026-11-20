@@ -9,6 +9,7 @@ from __future__ import annotations
 import math
 import time
 from collections.abc import Callable
+from typing import NamedTuple
 
 from app.moves import DIRECTIONS, FALLBACK_ORDER, apply_move
 
@@ -26,6 +27,13 @@ _FALLBACK_RANK = {direction: index for index, direction in enumerate(FALLBACK_OR
 # Depth 3+ held the suggestion request for seconds, so the request path stays at 1 or 2
 # and still gives up once the budget is spent.
 _BUDGET_SECONDS = 0.5
+_REASON_ORDER = ("left", "right", "up", "down")
+_REASON_LABEL = {"left": "Left", "right": "Right", "up": "Up", "down": "Down"}
+
+
+class Choice(NamedTuple):
+    move: str
+    reason: str
 
 
 class _TimeUp(Exception):
@@ -38,8 +46,8 @@ def choose_move(
     depth: int | None = None,
     budget_seconds: float | None = None,
     clock: _Clock | None = None,
-) -> str | None:
-    """Return the best legal direction, or None when the board is stuck."""
+) -> Choice | None:
+    """Return the best legal direction and score line, or None when stuck."""
     root = _freeze(board)
     legal = _legal_directions(root)
     if not legal:
@@ -49,7 +57,8 @@ def choose_move(
     # An explicit depth with no budget is one complete search. Tests use that
     # path so the result does not depend on how fast the machine is.
     if depth is not None and budget_seconds is None:
-        return _best_at_depth(root, legal, depth, deadline=None, clock=now)
+        move, scores = _best_at_depth(root, legal, depth, deadline=None, clock=now)
+        return Choice(move, _format_reason(scores))
 
     limit = _depth_for(root) if depth is None else depth
     seconds = _BUDGET_SECONDS if budget_seconds is None else budget_seconds
@@ -57,12 +66,25 @@ def choose_move(
     # Keep the last depth that finished. A cutoff mid-depth must not compare a
     # half-scored move with a fully scored one.
     best = legal[0]
+    scores: dict[str, float | None] | None = None
     try:
         for current in range(limit + 1):
-            best = _best_at_depth(root, legal, current, deadline, now)
+            best, scores = _best_at_depth(root, legal, current, deadline, now)
     except _TimeUp:
-        return best
-    return best
+        pass
+    if scores is None:
+        # Cut off before any depth finished; still label illegal moves as N/A.
+        scores = {direction: None for direction in DIRECTIONS}
+    return Choice(best, _format_reason(scores))
+
+
+def _format_reason(scores: dict[str, float | None]) -> str:
+    parts: list[str] = []
+    for direction in _REASON_ORDER:
+        value = scores[direction]
+        shown = "N/A" if value is None else f"{value:.1f}"
+        parts.append(f"{_REASON_LABEL[direction]} = {shown}")
+    return "Score of each direction: " + ", ".join(parts)
 
 
 def _depth_for(board: Board) -> int:
@@ -79,17 +101,19 @@ def _best_at_depth(
     depth: int,
     deadline: float | None,
     clock: _Clock,
-) -> str:
+) -> tuple[str, dict[str, float | None]]:
     cache: dict[tuple[Board, int, bool], float] = {}
+    scores: dict[str, float | None] = {direction: None for direction in DIRECTIONS}
     best_move = legal[0]
     best_score = -math.inf
     for direction in legal:
         _check(deadline, clock)
         score = _chance_value(_apply(root, direction), depth, cache, deadline, clock)
+        scores[direction] = score
         if score > best_score:
             best_score = score
             best_move = direction
-    return best_move
+    return best_move, scores
 
 
 def _check(deadline: float | None, clock: _Clock) -> None:

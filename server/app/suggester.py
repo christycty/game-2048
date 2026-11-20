@@ -50,14 +50,20 @@ class MoveSuggester:
             input_payload={"mode": mode, "board": board, "legal": legal},
         ) as suggest_span:
             if mode == "expectimax":
-                move = choose_move(board)
-                if move in legal:
-                    result = SuggestResponse(move=move, mode=mode, source="expectimax")
+                choice = choose_move(board)
+                if choice is not None and choice.move in legal:
+                    result = SuggestResponse(
+                        move=choice.move,
+                        mode=mode,
+                        source="expectimax",
+                        reason=choice.reason,
+                    )
                     return _record_result(suggest_span, result, [])
                 # Search failed or drifted from legal_moves; same signal as an LLM miss.
-                logger.warning("expectimax returned %s; falling back to %s", move, fallback)
+                bad = None if choice is None else choice.move
+                logger.warning("expectimax returned %s; falling back to %s", bad, fallback)
                 result = SuggestResponse(move=fallback, mode=mode, source="fallback")
-                return _record_result(suggest_span, result, [f"illegal move {move}"])
+                return _record_result(suggest_span, result, [f"illegal move {bad}"])
 
             rejected: list[str] = []
             invalid_reply = False

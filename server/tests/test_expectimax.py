@@ -15,20 +15,20 @@ def test_only_legal_move_is_chosen() -> None:
         [0, 0, 0, 0],
     ]
     assert legal_moves(board) == ["down"]
-    assert choose_move(board) == "down"
+    assert choose_move(board).move == "down"
 
 
 def test_keeps_a_monotonic_row_intact() -> None:
     assert first_legal_move(SORTED_ROW) == "up"
-    assert choose_move(SORTED_ROW, depth=0) == "right"
-    assert choose_move(SORTED_ROW) == "right"
+    assert choose_move(SORTED_ROW, depth=0).move == "right"
+    assert choose_move(SORTED_ROW).move == "right"
 
 
 def test_merges_a_column_instead_of_the_fallback_slide() -> None:
     assert first_legal_move(COLUMN_PAIR) == "left"
-    assert choose_move(COLUMN_PAIR, depth=0) in {"up", "down"}
-    assert choose_move(COLUMN_PAIR, depth=2) in {"up", "down"}
-    assert choose_move(COLUMN_PAIR) in {"up", "down"}
+    assert choose_move(COLUMN_PAIR, depth=0).move in {"up", "down"}
+    assert choose_move(COLUMN_PAIR, depth=2).move in {"up", "down"}
+    assert choose_move(COLUMN_PAIR).move in {"up", "down"}
 
 
 def test_spawn_chance_counts_a_four() -> None:
@@ -41,7 +41,7 @@ def test_spawn_chance_counts_a_four() -> None:
         [0, 0, 0, 0],
     ]
     assert first_legal_move(board) == "left"
-    assert choose_move(board, depth=0) == "down"
+    assert choose_move(board, depth=0).move == "down"
 
 
 def test_equal_scores_keep_the_earlier_fallback_direction() -> None:
@@ -54,7 +54,7 @@ def test_equal_scores_keep_the_earlier_fallback_direction() -> None:
         [0, 0, 0, 0],
     ]
     assert legal_moves(board) == ["left", "right", "down"]
-    assert choose_move(board, depth=0) == "left"
+    assert choose_move(board, depth=0).move == "left"
 
 
 def test_request_depth_follows_how_open_the_board_is() -> None:
@@ -67,10 +67,10 @@ def test_request_depth_follows_how_open_the_board_is() -> None:
         [0, 0, 0, 0],
         [0, 0, 0, 0],
     ]
-    open_move = choose_move(open_board, budget_seconds=2)
-    assert open_move == choose_move(open_board, depth=1) == "down"
-    assert choose_move(open_board, depth=0) != open_move
-    assert choose_move(open_board, depth=2) != open_move
+    open_move = choose_move(open_board, budget_seconds=2).move
+    assert open_move == choose_move(open_board, depth=1).move == "down"
+    assert choose_move(open_board, depth=0).move != open_move
+    assert choose_move(open_board, depth=2).move != open_move
 
     tight = [
         [0, 0, 0, 0],
@@ -78,9 +78,9 @@ def test_request_depth_follows_how_open_the_board_is() -> None:
         [2, 4, 8, 16],
         [32, 64, 128, 256],
     ]
-    tight_move = choose_move(tight, budget_seconds=2)
-    assert tight_move == choose_move(tight, depth=2) == "right"
-    assert choose_move(tight, depth=1) != tight_move
+    tight_move = choose_move(tight, budget_seconds=2).move
+    assert tight_move == choose_move(tight, depth=2).move == "right"
+    assert choose_move(tight, depth=1).move != tight_move
 
 
 def test_a_cutoff_keeps_the_last_finished_depth() -> None:
@@ -93,9 +93,9 @@ def test_a_cutoff_keeps_the_last_finished_depth() -> None:
         [0, 0, 0, 0],
     ]
     assert first_legal_move(board) == "left"
-    shallow = choose_move(board, depth=0)
+    shallow = choose_move(board, depth=0).move
     assert shallow == "up"
-    assert choose_move(board, depth=1) == "down"
+    assert choose_move(board, depth=1).move == "down"
 
     reads = 0
 
@@ -104,7 +104,7 @@ def test_a_cutoff_keeps_the_last_finished_depth() -> None:
         reads += 1
         return 0.0
 
-    assert choose_move(board, depth=0, budget_seconds=1, clock=running) == shallow
+    assert choose_move(board, depth=0, budget_seconds=1, clock=running).move == shallow
 
     seen = 0
 
@@ -115,7 +115,7 @@ def test_a_cutoff_keeps_the_last_finished_depth() -> None:
             return 0.0
         return 1.0
 
-    kept = choose_move(board, depth=1, budget_seconds=0.5, clock=expire_on_the_next_depth)
+    kept = choose_move(board, depth=1, budget_seconds=0.5, clock=expire_on_the_next_depth).move
     assert kept == shallow
 
 
@@ -138,7 +138,7 @@ def test_a_full_board_that_can_merge_is_not_lost() -> None:
         [8192, 16384, 32768, 65536],
     ]
     assert first_legal_move(board) == "left"
-    assert choose_move(board) == "right"
+    assert choose_move(board).move == "right"
 
 
 def test_a_max_tile_pair_merges_instead_of_sliding() -> None:
@@ -149,7 +149,7 @@ def test_a_max_tile_pair_merges_instead_of_sliding() -> None:
         [0, 0, 0, 0],
     ]
     assert first_legal_move(board) == "left"
-    assert choose_move(board, depth=0) in {"up", "down"}
+    assert choose_move(board, depth=0).move in {"up", "down"}
 
 
 def test_choice_is_always_legal() -> None:
@@ -159,7 +159,7 @@ def test_choice_is_always_legal() -> None:
         [8, 0, 8, 0],
         [0, 16, 0, 16],
     ]
-    move = choose_move(board, depth=2)
+    move = choose_move(board, depth=2).move
     assert move in legal_moves(board)
 
 
@@ -174,7 +174,7 @@ def test_production_path_stays_near_the_budget() -> None:
     ]
     assert sum(cell == 0 for row in board for cell in row) == 7
     started = time.perf_counter()
-    move = choose_move(board)
+    move = choose_move(board).move
     elapsed = time.perf_counter() - started
     assert move in legal_moves(board)
     assert elapsed < _BUDGET_SECONDS + 0.5
@@ -191,3 +191,27 @@ def test_chance_node_rejects_a_full_board() -> None:
     )
     with pytest.raises(AssertionError, match="full board"):
         _chance_value(full, 0, {})
+
+
+def test_reason_lists_a_score_or_na_for_each_direction() -> None:
+    # Only right and down change this board. Left and up stay N/A.
+    board = [
+        [2, 0, 0, 0],
+        [0, 0, 0, 0],
+        [0, 0, 0, 0],
+        [0, 0, 0, 0],
+    ]
+    choice = choose_move(board, depth=0)
+    assert choice is not None
+    assert choice.move == "right"
+    assert choice.reason.startswith("Score of each direction: ")
+    assert "Left = N/A" in choice.reason
+    assert "Up = N/A" in choice.reason
+    assert "Right = N/A" not in choice.reason
+    assert "Down = N/A" not in choice.reason
+    # Left, Right, Up, Down — same order the UI can echo.
+    left_at = choice.reason.index("Left =")
+    right_at = choice.reason.index("Right =")
+    up_at = choice.reason.index("Up =")
+    down_at = choice.reason.index("Down =")
+    assert left_at < right_at < up_at < down_at

@@ -151,9 +151,11 @@ def test_expectimax_skips_the_model() -> None:
     body = response.json()
     assert body["mode"] == "expectimax"
     assert body["source"] == "expectimax"
-    assert body["reason"] is None
     # Up is the fallback and would smash the sorted row. Right only slides the 2.
     assert body["move"] == "right"
+    assert body["reason"].startswith("Score of each direction: ")
+    assert "Up = N/A" not in body["reason"]  # up is legal but worse
+    assert "Left = N/A" in body["reason"]
     assert llm.calls == 0
 
 
@@ -164,12 +166,19 @@ def test_expectimax_merges_instead_of_sliding() -> None:
     assert response.status_code == 200
     body = response.json()
     assert body["source"] == "expectimax"
-    assert body["reason"] is None
     assert body["move"] in {"up", "down"}
+    assert body["reason"].startswith("Score of each direction: ")
+    assert "Left =" in body["reason"]
+    assert "N/A" in body["reason"]
 
 
 def test_expectimax_drops_an_illegal_search_move(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr("app.suggester.choose_move", lambda _board: "up")
+    from app.expectimax import Choice
+
+    monkeypatch.setattr(
+        "app.suggester.choose_move",
+        lambda _board: Choice("up", "Score of each direction: Left = N/A, Right = 1.0, Up = 2.0, Down = 1.0"),
+    )
     response = _client(FakeLLM([])).post(
         "/suggest", json={"board": OPEN_BOARD, "mode": "expectimax"}
     )

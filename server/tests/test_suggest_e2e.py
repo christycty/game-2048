@@ -85,6 +85,7 @@ def test_expectimax_returns_a_legal_search_move() -> None:
     body = response.json()
     assert body["mode"] == "expectimax"
     assert body["source"] == "expectimax"
-    assert body["reason"] is None
     assert body["move"] == "right"
     assert body["move"] in legal_moves(SORTED_ROW)
+    assert body["reason"].startswith("Score of each direction: ")
+    assert "Left = N/A" in body["reason"]
