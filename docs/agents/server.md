@@ -110,9 +110,9 @@ Loaded from the environment and optional `server/.env` (Compose does not use tha
 
 ## Tests
 
-- `tests/test_suggest.py` covers health, CORS, rate limit before the model, LLM success and reason, illegal-move retry, exhausted fallback, expectimax stub, stuck-board 409, bad payload 422, Ollama HTTP failures, prod schema omission, attempt bounds, and the time budget stop.
+- `tests/test_suggest.py` covers health, CORS, rate limit before the model (including the **default** 5-call cap on a shared app), LLM success and reason, illegal-move retry, exhausted fallback, expectimax stub, stuck-board 409, bad payload 422, Ollama HTTP failures, prod schema omission, attempt bounds, and the time budget stop.
 - `tests/test_moves.py` covers the slide and merge rules used for legality.
-- `tests/test_suggest_e2e.py` is marked `e2e`. It talks to a real Ollama under `APP_ENV=prod` and asserts `source == "llm"` with a short reason.
+- `tests/test_suggest_e2e.py` is marked `e2e`. It talks to a real Ollama under `APP_ENV=prod`, sizes `SUGGEST_RATE_LIMIT_REQUESTS` from its parametrized call volume, and asserts `source == "llm"` with a short reason.
 
 ## Not built yet
 

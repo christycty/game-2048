@@ -11,7 +11,7 @@ from app.main import create_app
 from app.rate_limit import SuggestRateLimiter
 from app.schemas import MAX_TILE
 from app.suggester import MoveSuggester
-from helpers import isolated_settings
+from helpers import E2E_BOARD_COUNT, E2E_RUN_COUNT, E2E_SUGGEST_CALLS, isolated_settings
 
 OPEN_BOARD = [
     [2, 0, 0, 0],
@@ -113,6 +113,38 @@ def test_suggest_rate_limit_uses_settings() -> None:
     blocked = _suggest(client)
     assert blocked.status_code == 429
     assert llm.calls == 1
+
+
+def test_default_rate_limit_blocks_the_sixth_shared_call() -> None:
+    """Defaults are part of the contract: one app allows 5 suggests, then 429.
+
+    Opt-in e2e shares one module-scoped client across more posts than that.
+    Suites that need more room must raise SUGGEST_RATE_LIMIT_REQUESTS.
+    """
+    from app.config import Settings
+
+    assert Settings().suggest_rate_limit_requests == 5
+    assert E2E_SUGGEST_CALLS == E2E_BOARD_COUNT * E2E_RUN_COUNT
+    assert E2E_SUGGEST_CALLS > 5
+
+    llm = FakeLLM(["right"] * 6)
+    client = TestClient(create_app(isolated_settings(), llm))
+    for _ in range(5):
+        assert _suggest(client).status_code == 200
+    blocked = _suggest(client)
+    assert blocked.status_code == 429
+    assert blocked.headers["retry-after"]
+    assert llm.calls == 5
+
+
+def test_e2e_rate_limit_covers_parametrized_volume() -> None:
+    """A shared app sized like the e2e fixture survives the full parametrized volume."""
+    llm = FakeLLM(["right"] * E2E_SUGGEST_CALLS)
+    settings = isolated_settings(suggest_rate_limit_requests=E2E_SUGGEST_CALLS)
+    client = TestClient(create_app(settings, llm))
+    for _ in range(E2E_SUGGEST_CALLS):
+        assert _suggest(client).status_code == 200
+    assert llm.calls == E2E_SUGGEST_CALLS
 
 
 def test_health_stays_ok_when_ollama_is_down() -> None:

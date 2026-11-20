@@ -1,5 +1,11 @@
 from app.config import Settings
 
+# test_suggest_e2e shares one app across every parametrized /suggest.
+# Keep these equal to len(E2E_BOARDS) * len(E2E_RUN_IDS) in that file.
+E2E_BOARD_COUNT = 2
+E2E_RUN_COUNT = 3
+E2E_SUGGEST_CALLS = E2E_BOARD_COUNT * E2E_RUN_COUNT
+
 
 def isolated_settings(**overrides: object) -> Settings:
     """Settings from explicit values, so a developer .env cannot change the test."""
