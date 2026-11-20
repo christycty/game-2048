@@ -8,10 +8,11 @@ _Clock = Callable[[], float]
 
 
 class SuggestRateLimiter:
-    """Process-wide cap on suggestion calls.
+    """Process-wide sliding-window cap for one suggestion mode.
 
     Prod nginx is the API's only caller, so a per-IP limit would not bound
-    model spend. The lock covers overlapping requests in the FastAPI threadpool.
+    spend. The app keeps one limiter per mode (llm vs expectimax). The lock
+    covers overlapping requests in the FastAPI threadpool.
     """
 
     def __init__(

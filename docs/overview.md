@@ -1,12 +1,12 @@
 # Overview
 
-A local or self-hosted 2048 session with an optional AI coach. No accounts, leaderboards, or multiplayer—just the board, score, and a suggestion you can take or ignore.
+A local or self-hosted 2048 session with an optional AI coach. No accounts, leaderboards, or multiplayer—just the board, score, and a suggestion you can take, ignore, or auto-play.
 
 ## Goals
 
 1. Familiar 2048: two starting **2**s, slide and merge, spawn after each successful move.
 2. Small surface: current score, session best, new game.
-3. Optional AI: pick a mode, ask for a move, read the hint, confirm before it plays.
+3. Optional AI: pick a mode, ask for a move, read the hint, confirm with **Play**, or turn on **Auto Play**.
 
 ## Player journey
 
@@ -19,12 +19,16 @@ sequenceDiagram
 
   Player->>UI: slide / swipe
   UI->>UI: merge, score, spawn
-  Player->>UI: choose mode, press AI
+  Player->>UI: choose mode, press AI or Auto Play
   UI->>API: board + mode
   API->>Model: chat (LLM mode)
   Model-->>API: move + reason
   API-->>UI: suggestion
-  Player->>UI: Play direction — or move themselves
+  alt confirm
+    Player->>UI: Play direction — or move themselves
+  else Auto Play
+    UI->>UI: apply move, then suggest again until Stop
+  end
 ```
 
 ## Modes
@@ -36,13 +40,14 @@ sequenceDiagram
 
 ## Non-goals (for now)
 
-Undo, cloud best scores, auth, multiplayer, auto-play, deep tournament-strength search, native apps.
+Undo, cloud best scores, auth, multiplayer, deep tournament-strength search, native apps.
 
 ## Success looks like
 
 - A visitor can play, lose, and start over without confusion.
 - Best score survives **New Game** on the same page load; a full reload resets it.
 - LLM or Expectimax suggest → reason → **Play** applies the move like any other input.
+- **Auto Play** applies usable suggestions in a loop until Stop, loss, failure, or a manual move. Starting from LLM switches to Expectimax for the higher continuous-play rate limit.
 - A failed suggestion leaves the board unchanged with a clear message.
 
 Full product rules for implementers: [agents/prd.md](agents/prd.md).

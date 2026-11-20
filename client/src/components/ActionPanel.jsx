@@ -10,6 +10,9 @@ function ActionPanel({
     onSuggest,
     canSuggest,
     suggesting,
+    autoPlaying,
+    onAutoPlayToggle,
+    canToggleAutoPlay,
     mode,
     onModeChange,
     pendingMove,
@@ -33,7 +36,20 @@ function ActionPanel({
                     {suggesting ? "Thinking…" : "AI"}
                 </button>
             </div>
-            <fieldset className="ai-mode" disabled={suggesting}>
+            <button
+                type="button"
+                className={
+                    autoPlaying
+                        ? "action-button action-button-auto action-button-auto-active"
+                        : "action-button action-button-auto"
+                }
+                onClick={onAutoPlayToggle}
+                disabled={!canToggleAutoPlay}
+                aria-pressed={autoPlaying}
+            >
+                {autoPlaying ? "Stop" : "Auto Play"}
+            </button>
+            <fieldset className="ai-mode" disabled={suggesting || autoPlaying}>
                 <legend className="ai-mode-legend">AI mode</legend>
                 <div className="ai-mode-options" role="radiogroup" aria-label="AI mode">
                     {MODES.map((option) => (
@@ -51,7 +67,7 @@ function ActionPanel({
                 </div>
             </fieldset>
             {hint && <p className="ai-hint" role="status">{hint}</p>}
-            {pendingMove && (
+            {pendingMove && !autoPlaying && (
                 <div className="ai-suggestion">
                     <button
                         type="button"
