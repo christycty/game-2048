@@ -29,3 +29,7 @@ Send a credential only where it stays protected. Log the decision to withhold it
 ## A name says which thing it is
 
 The operation and its parameters have different names. A binding has fields, not positions. Comment a choice the names do not explain.
+
+## No bare magic numbers
+
+A tuned weight, depth cutoff, or similar coefficient is a named constant. The name (and a short comment when the name is not enough) carries the intent; a bare `270.0` in an expression does not.
