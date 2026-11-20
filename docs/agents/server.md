@@ -23,7 +23,7 @@ Package name: `game-2048-server`. Entry: `app.main:app`. Python ≥ 3.11 (images
 
 | Path | Role |
 |---|---|
-| `app/main.py` | App factory, CORS, rate limit gate, `/health`, `/suggest`, `/metrics`. |
+| `app/main.py` | App factory, CORS, rate limit gate, `/health`, `/suggest`, `/client-events`, `/metrics`. |
 | `app/schemas.py` | Request and response models. Tile and mode validation. |
 | `app/suggester.py` | Mode dispatch, LLM retries, fallback, expectimax search. |
 | `app/expectimax.py` | Depth-limited expectimax with spawn chance nodes. |
@@ -39,7 +39,8 @@ Package name: `game-2048-server`. Entry: `app.main:app`. Python ≥ 3.11 (images
 |---|---|---|---|
 | `GET` | `/health` | `{"status":"ok"}` | Never calls Ollama. |
 | `GET` | `/metrics` | Prometheus text | Always on. GenAI + FastAPI HTTP series; inventory in [telemetry.md](telemetry.md). Not traced. |
-| `POST` | `/suggest` | `SuggestResponse` | Handler order: Pydantic `422` (before the rate-limit gate; does not consume either mode’s cap) → that mode’s process rate limit `429` + `Retry-After` + `detail: "too many suggestions"` (before suggester / any mode) → `409` when no legal move → `200` with `SuggestResponse`. |
+| `POST` | `/suggest` | `SuggestResponse` | Handler order: Pydantic `422` (before the rate-limit gate; does not consume either mode’s cap) → that mode’s process rate limit `429` + `Retry-After` + `detail: "too many suggestions"` (before suggester / any mode) → `409` when no legal move → `200` with `SuggestResponse`. Accepts W3C `traceparent` (FastAPI OTel extract). |
+| `POST` | `/client-events` | empty `204` | Browser beacon `{ "outcome": "fail" \| "rate_limit" }` → `client_suggest_outcome_total`. Not traced. |
 
 CORS allows `http://localhost:${CLIENT_HOST_PORT}` and `http://127.0.0.1:${CLIENT_HOST_PORT}` (default 5173), methods `GET` and `POST`. Same-origin `/suggest` through Vite or nginx does not need CORS; the allowlist remains for builds that set `VITE_API_BASE_URL` to the API origin.
 
@@ -127,7 +128,7 @@ Loaded from the environment and optional `server/.env` (Compose does not use tha
 
 Phoenix = forensics (spans, prompts, retries, TTFT events). Grafana = ops aggregates from Prometheus scrapes of `GET /metrics`. Prometheus stores the time series; Grafana only queries them. Full inventory (every span, event, series, label, and Phoenix vs Grafana ownership): [telemetry.md](telemetry.md). Compose scrape UI: [runtime.md](runtime.md).
 
-Typical LLM tree: FastAPI `POST /suggest` → `suggest` chain → sibling `ollama chat` spans per attempt. Expectimax opens `suggest` without LLM children. Stuck board (`409`) is a single HTTP span (no nested `suggest`). Auto HTTP spans skip `/health`, `/metrics`, `/docs`, `/openapi.json`, `/redoc`. Retry/fallback detail may appear as span-only `failures` output (not in the API body).
+Typical LLM tree: FastAPI `POST /suggest` → `suggest` chain → sibling `ollama chat` spans per attempt. Expectimax opens `suggest` without LLM children. Stuck board (`409`) is a single HTTP span (no nested `suggest`). Auto HTTP spans skip `/health`, `/metrics`, `/client-events`, `/docs`, `/openapi.json`, `/redoc`. Retry/fallback detail may appear as span-only `failures` output (not in the API body).
 
 ## Tests
 
@@ -135,7 +136,7 @@ Typical LLM tree: FastAPI `POST /suggest` → `suggest` chain → sibling `ollam
 - `tests/test_suggest.py` covers health, CORS, per-mode rate limits before the suggester (including the **default** 5-call LLM cap and a separate Expectimax bucket), LLM success and reason, illegal-move retry, exhausted fallback, expectimax search + score reason, illegal-search fallback, stuck-board 409, bad payload 422, Ollama HTTP failures, prod schema omission, attempt bounds, and the time budget stop.
 - `tests/test_expectimax.py` covers legality, spawn odds, depth/budget cutoffs, and the reason format.
 - `tests/test_moves.py` covers the slide and merge rules used for legality.
-- `tests/test_telemetry.py` covers Phoenix URL/header rules, per-app exporters, excluded `/health` and `/metrics`, span nesting, retries, errors, stuck-board span shape, GenAI series on `/metrics` after a suggest (success / request / response / parse / illegal_move / timeout + suggest sources), and HTTP scrape status codes for `/suggest` (200 / 422 / 409 / 429).
+- `tests/test_telemetry.py` covers Phoenix URL/header rules, per-app exporters, excluded `/health` / `/metrics` / `/client-events`, client `traceparent` continuation, client beacon counters, span nesting, retries, errors, stuck-board span shape, GenAI series on `/metrics` after a suggest (success / request / response / parse / illegal_move / timeout + suggest sources), and HTTP scrape status codes for `/suggest` (200 / 422 / 409 / 429).
 - `tests/test_suggest_e2e.py` is marked `e2e` for real Ollama under `APP_ENV=prod`. It sizes `SUGGEST_RATE_LIMIT_REQUESTS` from its parametrized call volume, asserts `source == "llm"` with a short reason, and includes a non-e2e expectimax HTTP smoke that does not need Ollama.
 
 ## Not built yet

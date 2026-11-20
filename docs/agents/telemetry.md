@@ -31,20 +31,31 @@ We intentionally **do not** scrape TTFT / time-per-output-token / prompt text: t
 
 **Grafana charting:**
 - **API row:** `/suggest` by status (all codes), Suggest by source, Latency (p50/p95).
+- **Client row:** suggest outcomes (`fail` / `rate_limit` from `/client-events`).
 - **LLM row:** success rate, outcomes, error types, duration (p50/p95), tokens.
 - Multi-series **rate** panels use **unstacked** lines (each series Y is absolute). Stacked areas make a smaller series look “above” a larger one.
 - Legends use **Last \*** = last non-null sample. Rate queries drop `== 0` samples (`> 0`) so idle series do not show a fake `0`; latency / success-rate panels stay empty when there is no traffic.
 
-Excluded from tracing: `/health`, `/metrics`, `/docs`, `/openapi.json`, `/redoc`.
+Excluded from tracing: `/health`, `/metrics`, `/client-events`, `/docs`, `/openapi.json`, `/redoc`.
+
+## Client → server correlation
+
+The browser does **not** run an OpenTelemetry SDK. Each `POST /suggest` from [`client/src/api.js`](../../client/src/api.js) sends a hand-rolled W3C `traceparent` header (`client/src/trace.js`). FastAPI’s OTel instrumentor extracts it so the HTTP + `suggest` + `ollama chat` spans share the client’s `trace_id` in Phoenix.
+
+Coarse client fail / rate-limit counts go to scrape metrics via `POST /client-events` (same-origin; Vite and nginx proxy it). Prompt forensics stay in Phoenix — do not duplicate them in the browser.
+
+**Follow-on:** a `cancel` beacon outcome waits on client `AbortSignal` + server disconnect cancel. Do not emit cancel from stale-token ignores.
 
 ## Where each concern belongs
 
 | Concern | Home | Why |
 |---|---|---|
 | Prompt / completion text, illegal-move retries, span tree | **Phoenix** | High-cardinality forensics |
+| UI action → API → LLM as one trace | **Phoenix** | Client `traceparent` on `/suggest` |
 | TTFT, provider total/eval, time-per-output-token | **Phoenix** (span events) | Kept off scrape series on purpose |
 | HTTP status rates, API latency | **Grafana** | Aggregates from FastAPI HTTP scrape series |
 | Suggest `source` (`llm` / `fallback` / …) | **Grafana** | API-level scrape counter (HTTP 200 ≠ model win) |
+| Client fail / rate_limit rates | **Grafana** | `client_suggest_outcome_total` from `/client-events` |
 | LLM success / error / timeout rate | **Grafana** | Per-attempt `request_count` scrape series |
 | LLM duration p50/p95, token burn | **Grafana** | GenAI histogram scrape series |
 | Ad-hoc PromQL / “is scrape up?” | Prometheus Graph | Not a product dashboard |
@@ -103,6 +114,7 @@ Every panel on the provisioned dashboard and the **exact** Prom series suffix it
 | POST /suggest by status | `http_server_duration_milliseconds_count` | `sum by (http_status_code)` · `http_target="/suggest"` · rate `> 0` |
 | Suggest by source | `suggest_source_total` | `sum by (suggest_source)` · `llm` \| `fallback` \| `expectimax` · rate `> 0` |
 | POST /suggest latency | `http_server_duration_milliseconds_bucket` | `histogram_quantile` p50 + p95 · empty when no `/suggest` traffic |
+| Client suggest outcomes | `client_suggest_outcome_total` | `sum by (outcome)` · `fail` \| `rate_limit` · rate `> 0` |
 | LLM request success rate | `gen_ai_client_request_count_total` | `success` rate / total rate; empty when idle (`total rate == 0`) |
 | LLM requests by outcome | `gen_ai_client_request_count_total` | `sum by (gen_ai_request_outcome)` · `success` \| `error` \| `timeout` · rate `> 0` |
 | LLM errors by type | `gen_ai_client_request_count_total` | `sum by (error_type)` where outcome=`error` · `request` \| `response` \| `parse` \| `illegal_move` · rate `> 0` |
@@ -141,6 +153,15 @@ Not incremented on 429 (rate limit) or 409 (no legal move).
 
 Histograms for duration/tokens record only when usage mapping runs (successful Ollama body path), including attempts that later fail parse/illegal — those attempts still get `request_count` `error`.
 
+**`client_suggest_outcome` (one increment per browser `POST /client-events`):**
+
+| `outcome` | Meaning |
+|---|---|
+| `fail` | Network error, non-429 HTTP failure, or unusable suggest body |
+| `rate_limit` | Suggest returned HTTP 429 |
+
+Not emitted on success. `cancel` is reserved for a later AbortSignal slice.
+
 ### Tests (scrape contract)
 
 `tests/test_telemetry.py` asserts **`GET /metrics` text**, not Grafana UI. That is the durable contract Prometheus scrapes and Grafana charts.
@@ -151,6 +172,8 @@ Histograms for duration/tokens record only when usage mapping runs (successful O
 | LLM failures | `error` + `error_type` = `request` \| `response` \| `parse` \| `illegal_move`; `timeout`; `suggest_source=fallback` |
 | Suggest sources | `llm` / `fallback` / `expectimax` (expectimax does not open Ollama) |
 | HTTP `/suggest` | `http_server_duration_milliseconds_count` for status `200` / `422` / `409` / `429` (429 does not bump `suggest_source`) |
+| Client `traceparent` | Fixed header → `/suggest` spans share that `trace_id` and parent span id |
+| Client beacons | `client_suggest_outcome_total` for `fail` / `rate_limit`; `/client-events` not traced |
 
 ---
 

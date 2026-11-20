@@ -16,7 +16,7 @@ npm run lint      # oxlint
 npm run build     # production bundle
 ```
 
-The page calls same-origin `/suggest` by default. Vite proxies that path to the API (`API_PROXY_TARGET`, or `http://127.0.0.1:${API_HOST_PORT:-8000}`). Set `VITE_API_BASE_URL` to an absolute origin only to bypass the proxy. CORS follows `CLIENT_HOST_PORT` for that case. See [runtime.md](runtime.md) for Compose, Docker, and worktree ports.
+The page calls same-origin `/suggest` (and `/client-events` for fail/429 beacons) by default. Vite proxies those paths to the API (`API_PROXY_TARGET`, or `http://127.0.0.1:${API_HOST_PORT:-8000}`). Set `VITE_API_BASE_URL` to an absolute origin only to bypass the proxy. CORS follows `CLIENT_HOST_PORT` for that case. See [runtime.md](runtime.md) for Compose, Docker, and worktree ports. Correlation: [telemetry.md](telemetry.md).
 
 Stack: React 19, Vite, plain JavaScript. The page title is 2048. The app mounts from `index.html` into `#root` through `src/main.jsx`.
 
@@ -27,7 +27,8 @@ Stack: React 19, Vite, plain JavaScript. The page title is 2048. The app mounts 
 | `src/App.jsx` | Score, best score, tiles, loss, AI suggestion and Auto Play state. Owns input and the slide timer. |
 | `src/game.js` | Board rules. Pure functions. No DOM. Includes `tilesToBoard` for the API. |
 | `src/swipe.js` | Turns a pointer delta into a direction. |
-| `src/api.js` | `POST /suggest`. Throws `SuggestError` on network, HTTP, or unusable body. |
+| `src/api.js` | `POST /suggest` with W3C `traceparent`; beacons fail/429 to `/client-events`. Throws `SuggestError` on network, HTTP, or unusable body. |
+| `src/trace.js` | Hand-rolled W3C `traceparent` (no browser OTel SDK). |
 | `src/utils.js` | Unused `getRandomInt`. Moves pass `Math.random` in instead. |
 | `src/components/Board.jsx` | Cells, sliding tiles, game-over overlay, pointer gestures. |
 | `src/components/ScoreCard.jsx` | Title, help, SCORE, BEST. |
@@ -125,7 +126,7 @@ A swipe starts on pointer down (left button only for a mouse), captures the poin
 
 - `src/game.test.js` covers the deal, ids, slides, single merges, blocked moves, spawn timing, loss, and `tilesToBoard`.
 - `src/swipe.test.js` covers the threshold and axis choice.
-- `src/api.test.js` covers the default same-origin `/suggest` URL, success body, and `SuggestError` statuses including 429 (unusable JSON body path is implemented but not covered).
+- `src/api.test.js` covers same-origin `/suggest` + `traceparent`, success body, `SuggestError` statuses including 429, and fail/rate_limit beacons (unusable JSON body path is implemented but not covered).
 - `src/App.test.jsx` covers score timing, shared swipe and key paths, best score across a new game, a cancelled slide, a lost game ignoring input, suggest-then-confirm, Auto Play apply/gap/loop/stop (including Stop during the gap re-enabling AI), LLM→Expectimax switch, hint kept through the next Thinking step, pending-start and in-loop blocked apply, loss / rate limit / New Game exits, fallback/manual takeover, mode selection, fallback / rate-limit / failed requests, and dropping a stale suggestion after a board-changing move.
 - `src/components/Board.test.jsx` covers the slide, overlay stacking, and pointer capture.
 - `src/components/ScoreCard.test.jsx` covers opening and closing help.
