@@ -29,10 +29,6 @@ def apply_move(board: list[list[int]], direction: str) -> list[list[int]]:
     return [list(row) for row in zip(*slid, strict=True)]
 
 
-# Kept for older tests that import the private name.
-_apply = apply_move
-
-
 def _slide_line(line: list[int]) -> list[int]:
     tiles = [value for value in line if value]
     merged: list[int] = []
