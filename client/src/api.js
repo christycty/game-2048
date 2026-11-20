@@ -1,9 +1,9 @@
 // Calls the suggestion API. The board is a 4x4 of tile values; mode is llm or expectimax.
-
-const DEFAULT_BASE_URL = "http://localhost:8000";
+// The default URL is same-origin /suggest. Vite and the prod nginx both forward it.
+// VITE_API_BASE_URL replaces that with an absolute origin.
 
 function apiBaseUrl() {
-    return import.meta.env?.VITE_API_BASE_URL ?? DEFAULT_BASE_URL;
+    return import.meta.env?.VITE_API_BASE_URL ?? "";
 }
 
 export class SuggestError extends Error {
