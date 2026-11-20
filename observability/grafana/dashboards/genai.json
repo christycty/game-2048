@@ -31,7 +31,16 @@
         }
       ],
       "title": "LLM call duration p95",
-      "type": "timeseries"
+      "type": "timeseries",
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true,
+          "calcs": ["lastNotNull"]
+        },
+        "tooltip": { "mode": "single", "sort": "none" }
+      }
     },
     {
       "datasource": { "type": "prometheus", "uid": "prometheus" },
@@ -59,7 +68,16 @@
         }
       ],
       "title": "Token usage rate by type",
-      "type": "timeseries"
+      "type": "timeseries",
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true,
+          "calcs": ["lastNotNull"]
+        },
+        "tooltip": { "mode": "single", "sort": "none" }
+      }
     }
   ],
   "schemaVersion": 39,
