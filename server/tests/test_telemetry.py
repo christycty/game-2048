@@ -256,11 +256,13 @@ def test_metrics_counts_timed_out_llm_requests() -> None:
 def test_metrics_counts_expectimax_suggest_source() -> None:
     app = create_app(isolated_settings(export_traces=False), _QuietLLM())
     client = TestClient(app)
-    assert client.post("/suggest", json={"board": OPEN_BOARD, "mode": "expectimax"}).status_code == 200
+    assert (
+        client.post("/suggest", json={"board": OPEN_BOARD, "mode": "expectimax"}).status_code == 200
+    )
     body = client.get("/metrics").text
     assert PROM_SUGGEST_SOURCE in body
     assert 'suggest_source="expectimax"' in body
-    assert PROM_REQUEST_COUNT not in body or 'gen_ai_request_outcome=' not in body
+    assert PROM_REQUEST_COUNT not in body or "gen_ai_request_outcome=" not in body
 
 
 def test_metrics_records_suggest_http_status_codes() -> None:
@@ -289,8 +291,14 @@ def test_metrics_records_suggest_http_status_codes() -> None:
         },
     )
     limited_client = TestClient(limited)
-    assert limited_client.post("/suggest", json={"board": OPEN_BOARD, "mode": "llm"}).status_code == 200
-    assert limited_client.post("/suggest", json={"board": OPEN_BOARD, "mode": "llm"}).status_code == 429
+    assert (
+        limited_client.post("/suggest", json={"board": OPEN_BOARD, "mode": "llm"}).status_code
+        == 200
+    )
+    assert (
+        limited_client.post("/suggest", json={"board": OPEN_BOARD, "mode": "llm"}).status_code
+        == 429
+    )
     limited_body = limited_client.get("/metrics").text
     assert _suggest_status_count(limited_body, 429) >= 1.0
     # Rate-limit path must not invent an extra suggest_source beyond the 200.
