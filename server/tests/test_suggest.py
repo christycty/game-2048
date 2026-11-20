@@ -177,7 +177,9 @@ def test_expectimax_drops_an_illegal_search_move(monkeypatch: pytest.MonkeyPatch
 
     monkeypatch.setattr(
         "app.suggester.choose_move",
-        lambda _board: Choice("up", "Score of each direction: Left = N/A, Right = 1.0, Up = 2.0, Down = 1.0"),
+        lambda _board: Choice(
+            "up", "Score of each direction: Left = N/A, Right = 1.0, Up = 2.0, Down = 1.0"
+        ),
     )
     response = _client(FakeLLM([])).post(
         "/suggest", json={"board": OPEN_BOARD, "mode": "expectimax"}
