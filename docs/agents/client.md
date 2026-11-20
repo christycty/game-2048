@@ -125,7 +125,7 @@ A swipe starts on pointer down (left button only for a mouse), captures the poin
 
 - `src/game.test.js` covers the deal, ids, slides, single merges, blocked moves, spawn timing, loss, and `tilesToBoard`.
 - `src/swipe.test.js` covers the threshold and axis choice.
-- `src/api.test.js` covers the default same-origin `/suggest` URL, success body, and `SuggestError` statuses including 429.
+- `src/api.test.js` covers the default same-origin `/suggest` URL, success body, and `SuggestError` statuses including 429 (unusable JSON body path is implemented but not covered).
 - `src/App.test.jsx` covers score timing, shared swipe and key paths, best score across a new game, a cancelled slide, a lost game ignoring input, suggest-then-confirm, Auto Play apply/gap/loop/stop (including Stop during the gap re-enabling AI), LLM→Expectimax switch, hint kept through the next Thinking step, pending-start and in-loop blocked apply, loss / rate limit / New Game exits, fallback/manual takeover, mode selection, fallback / rate-limit / failed requests, and dropping a stale suggestion after a board-changing move.
 - `src/components/Board.test.jsx` covers the slide, overlay stacking, and pointer capture.
 - `src/components/ScoreCard.test.jsx` covers opening and closing help.

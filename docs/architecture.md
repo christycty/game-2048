@@ -20,13 +20,15 @@ flowchart TB
   API -->|"LLM mode"| Ollama
 ```
 
-Ports bind to loopback. Host publish ports come from `API_HOST_PORT` / `CLIENT_HOST_PORT` (defaults 8000 / 5173) so worktrees can diverge. The browser calls same-origin `/suggest`; Vite (dev) or nginx (prod Compose) forwards to the API. Prod Compose does not publish the API host port.
+**Host-published** ports bind to loopback (`127.0.0.1` and `::1`). `CLIENT_HOST_PORT` maps the page (Vite/nginx); `API_HOST_PORT` maps the **dev** API only (defaults 8000 / 5173 so worktrees can diverge). Prod Compose publishes the client, not the API. The browser calls same-origin `/suggest`; Vite (dev) or nginx (prod Compose) forwards to the API.
 
 ## Suggestion path
 
 ```mermaid
 flowchart TD
-  A[Receive board + mode] --> R{Rate limit?}
+  A[Receive board + mode] --> V{Valid payload?}
+  V -->|no| U[422]
+  V -->|yes| R{Rate limit?}
   R -->|over| T[429 Retry-After]
   R -->|ok| B{Legal moves?}
   B -->|none| C[409]
@@ -41,6 +43,8 @@ flowchart TD
   I --> J
   H --> J
 ```
+
+Validation (`422`) runs before the rate-limit gate; invalid bodies do not consume either mode’s cap.
 
 The API stays healthy when Ollama is down (`GET /health` never calls the model). Expectimax never calls Ollama. The client only offers **Play** (or auto-applies under **Auto Play**) when the suggestion is usable—not on fallback, rate limit, or transport errors. Auto Play is entirely client-side: it loops suggest → apply → settle without changing the API.
 
@@ -64,16 +68,21 @@ flowchart LR
     Moves[moves.py]
     Expectimax[expectimax.py]
     LLM[llm.py]
+    Telemetry[telemetry.py]
     Main --> Limit
     Main --> Suggester
+    Main --> Telemetry
     Suggester --> Moves
     Suggester --> Expectimax
     Suggester --> LLM
+    Suggester --> Telemetry
+    LLM --> Telemetry
   end
   Api --> Main
+  Telemetry -.->|OTLP when EXPORT_TRACES| Phoenix[Phoenix]
 ```
 
-Client owns the playable rules and UI. Server owns suggestion modes, the process-wide rate limit, legality checks for the coach, expectimax search, and the Ollama client. Both sides implement the same slide/merge rules so “legal” means the same thing.
+Client owns the playable rules and UI. Server owns suggestion modes, per-mode process-wide rate limits, legality checks for the coach, expectimax search, the Ollama client, Phoenix OTLP tracing when `EXPORT_TRACES` is on (default; collector optional), and always-on `GET /metrics` (optional Compose Prometheus/Grafana). Both sides implement the same slide/merge rules so “legal” means the same thing.
 
 ## Stack
 
@@ -84,14 +93,14 @@ Client owns the playable rules and UI. Server owns suggestion modes, the process
 | Model | Host Ollama (`OLLAMA_MODEL`, default `gemma4:latest`) |
 | Run | Local processes or Docker Compose profiles `dev` / `prod` (+ optional `metrics`) |
 | Observability | Phoenix (OTLP traces); `GET /metrics` + optional Prometheus/Grafana; inventory in [agents/telemetry.md](agents/telemetry.md) |
-| CI | Lint, test, image build, Compose config checks |
+| CI | Docs scripts + link check, lint/test, client build, image build, Compose config checks |
 
 ## Deploy profiles
 
 | Profile | What runs |
 |---|---|
 | `dev` | API with reload + Vite client (API published; Vite proxies `/suggest`) |
-| `prod` | API unpublished + nginx static client on `CLIENT_HOST_PORT` (nginx proxies `/suggest`) |
+| `prod` | API unpublished + nginx static client (`${CLIENT_HOST_PORT}`→80; nginx proxies `/suggest`) |
 | `metrics` | Prometheus + Grafana (pair with `dev` or `prod`) |
 
 Ollama and Phoenix stay on the host. Compose reaches them via `host.docker.internal` (override with `COMPOSE_OLLAMA_BASE_URL` / `COMPOSE_PHOENIX_COLLECTOR_ENDPOINT`).

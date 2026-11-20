@@ -62,7 +62,7 @@ If a human section has **no diagram and more than ~15 lines**, it probably belon
 **Avoid:**
 
 - Mixing *plan* with *truth* (put staged plans under `plan/` or mark clearly as non-canonical)
-- Conflicting copies of the same fact across packages or old `doc/` paths
+- Conflicting copies of the same fact across packages
 - Essay-length narrative that duplicates human overview
 
 ## Truth vs intent vs plan
@@ -129,7 +129,7 @@ Browser automation often pads to a large canvas. **Inspect the PNG before upload
 
 | Check | What it does |
 |---|---|
-| `scripts/check_doc_links.py` | Fails CI if relative Markdown links under docs entrypoints are broken |
+| `scripts/check_doc_links.py` | Fails CI if relative Markdown links are broken in root `README.md`, `AGENTS.md`, `client/README.md`, and all `docs/**/*.md` |
 | `scripts/check_docs_freshness.py` | **Warns** (does not fail) when `client/`, `server/`, Compose, env example, or workflows change without `docs/agents/` or `AGENTS.md` |
 | `scripts/test_*.py` | Pinned unit tests for the scripts above (stdlib `unittest`, no extra deps) |
 
@@ -147,7 +147,7 @@ python scripts/check_docs_freshness.py
 2. Canonical file under `docs/agents/` updated (or Docs N/A noted on the PR)
 3. Human page updated only if the story/diagram would lie
 4. No second copy of the same fact
-5. `python3 scripts/check_doc_links.py` passes
+5. Same commands as the CI `docs` job (script unit tests + `check_doc_links.py`; run freshness locally too)
 
 ### Agents maintaining docs
 
