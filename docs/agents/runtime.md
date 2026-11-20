@@ -28,6 +28,8 @@ Multiple checkouts on one machine collide on Compose project name and on host po
 
 Container-listen ports stay `8000` (API), `5173` / `80` (client), `9090` / `3000` (metrics). Only the **host** mapping moves.
 
+Default LLM attempt timeout is 20s and suggestion budget 40s (budget must cover two attempts). Optional Phoenix export uses `EXPORT_TRACES` and `PHOENIX_COLLECTOR_ENDPOINT` on the host process; Compose injects `COMPOSE_PHOENIX_COLLECTOR_ENDPOINT` into the API container the same way it does for Ollama.
+
 ## Compose
 
 From the repo root:
@@ -46,7 +48,7 @@ docker compose --profile dev --profile metrics up
 | `prod` | `prod` (API, **unpublished**), `client` (nginx) | client `${CLIENT_HOST_PORT}`→80 only |
 | `metrics` | `prometheus`, `grafana` (pair with `dev` or `prod`) | Prometheus `${PROMETHEUS_HOST_PORT}`→9090, Grafana `${GRAFANA_HOST_PORT}`→3000 |
 
-Published ports bind `127.0.0.1` and `::1` so a LAN peer cannot reach them. Prod does **not** publish the API. The page origin is the client host port; nginx in the client image forwards `/suggest` to `prod:8000` on the Compose network (Docker DNS `127.0.0.11`, 30s read timeout for the suggestion budget). Dev Compose still publishes the API so a host process can call it; `client-dev` sets `API_PROXY_TARGET=http://dev:8000`.
+Published ports bind `127.0.0.1` and `::1` so a LAN peer cannot reach them. Prod does **not** publish the API. The page origin is the client host port; nginx in the client image forwards `/suggest` to `prod:8000` on the Compose network (Docker DNS `127.0.0.11`, 50s read timeout over the 40s suggestion budget). Dev Compose still publishes the API so a host process can call it; `client-dev` sets `API_PROXY_TARGET=http://dev:8000`.
 
 Ollama stays on the host. Inside the API container the default URL is `http://host.docker.internal:11434`. Set `COMPOSE_OLLAMA_BASE_URL` in the root `.env` to override that. Do not set `OLLAMA_BASE_URL` in the root `.env`: that name is for a host uvicorn process (`server/.env.example` uses localhost), and Compose must not replace the container URL with it.
 

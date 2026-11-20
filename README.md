@@ -12,7 +12,7 @@ flowchart LR
 ```
 
 - Play classic 2048 (keys or swipe); track score and session best.
-- Ask for a suggestion (LLM by default; Expectimax is a placeholder).
+- Ask for a suggestion (LLM by default, or Expectimax search with per-direction scores).
 - Confirm with **Play**, or ignore it and move yourself.
 
 ## Quick start

@@ -93,15 +93,17 @@ Expectimax / rate-limit-before-model paths do not open `ollama chat`. Each HTTP 
 
 Always on. Names below are the **Prometheus text** forms (OTel dots → underscores; counters get `_total`; histograms expose `_bucket` / `_count` / `_sum`).
 
-### First-class (dashboarded)
+### Series charted in Grafana (GenAI ops)
 
-| Series | Kind | Source | Labels (useful) | Grafana (GenAI ops) |
-|---|---|---|---|---|
-| `http_server_duration_milliseconds_*` | Histogram | FastAPI instrumentor | `http_target`, `http_status_code` | `/suggest` by status; latency p50/p95 |
-| `suggest_source_total` | Counter | App (`suggest.source`) | `suggest_source` = `llm` \| `fallback` \| `expectimax-stub` | Suggest by source |
-| `gen_ai_client_request_count_total` | Counter | App (`gen_ai.client.request_count`) | `gen_ai_request_outcome` = `success` \| `error` \| `timeout`; optional `error_type` (`request` / `response` / `parse` / `illegal_move`); model / provider | LLM success rate (empty when idle); requests by outcome; errors by type |
-| `gen_ai_client_operation_duration_seconds_*` | Histogram | App (`gen_ai.client.operation.duration`) | model / provider / operation | LLM call duration p95 — recorded on Ollama **body** path (includes later parse/illegal failures; excludes timeout/request failures) |
-| `gen_ai_client_token_usage_*` | Histogram | App (`gen_ai.client.token.usage`) | `gen_ai_token_type` = `input` \| `output` | Token usage rate by type |
+These are the only scrape series the provisioned dashboard uses. Everything else on `/metrics` is noise or secondary.
+
+| Series | Kind | Labels (useful) | Grafana panel(s) |
+|---|---|---|---|
+| `http_server_duration_milliseconds_*` | Histogram | `http_target="/suggest"`, `http_status_code` | POST /suggest by status; POST /suggest latency (p50/p95) |
+| `suggest_source_total` | Counter | `suggest_source` = `llm` \| `fallback` \| `expectimax` | Suggest by source |
+| `gen_ai_client_request_count_total` | Counter | `gen_ai_request_outcome` = `success` \| `error` \| `timeout`; optional `error_type` (`request` / `response` / `parse` / `illegal_move`) | LLM request success rate; LLM requests by outcome; LLM errors by type |
+| `gen_ai_client_operation_duration_seconds_*` | Histogram | model / provider / operation | LLM call duration p95 (Ollama body path; includes later parse/illegal failures; excludes timeout/request failures) |
+| `gen_ai_client_token_usage_*` | Histogram | `gen_ai_token_type` = `input` \| `output` | Token usage rate by type |
 
 ### Present but not charted (noise / secondary)
 
@@ -121,7 +123,7 @@ HTTP series also carry high-cardinality host labels (`http_host`, `http_server_n
 |---|---|
 | `llm` | Accepted model move + reason |
 | `fallback` | Heuristic after LLM attempts exhausted / budget |
-| `expectimax-stub` | Expectimax mode stub |
+| `expectimax` | Expectimax search move |
 
 Not incremented on 429 (rate limit) or 409 (no legal move).
 
@@ -143,7 +145,7 @@ Histograms for duration/tokens record only when usage mapping runs (successful O
 |---|---|
 | LLM success path | `gen_ai_request_outcome=success`, duration + token histograms, `suggest_source=llm` |
 | LLM failures | `error` + `error_type` = `request` \| `response` \| `parse` \| `illegal_move`; `timeout`; `suggest_source=fallback` |
-| Suggest sources | `llm` / `fallback` / `expectimax-stub` (expectimax does not open Ollama) |
+| Suggest sources | `llm` / `fallback` / `expectimax` (expectimax does not open Ollama) |
 | HTTP `/suggest` | `http_server_duration_milliseconds_count` for status `200` / `422` / `409` / `429` (429 does not bump `suggest_source`) |
 
 ---

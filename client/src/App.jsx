@@ -111,9 +111,7 @@ function App() {
         try {
             const suggestion = await suggestMove(tilesToBoard(tilesRef.current), aiModeRef.current);
             if (suggestTokenRef.current !== token) return;
-            // "fallback" is a fixed move order, not a move the model chose.
-            // TODO: when the expectimax branch is merged, an illegal search is still
-            // source "expectimax" with a substituted move. Decide if that should use this message.
+            // "fallback" is a fixed move order (LLM miss or illegal expectimax result).
             if (suggestion.source === "fallback") {
                 setHint("AI could not suggest a move");
                 return;

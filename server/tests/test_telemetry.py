@@ -259,7 +259,7 @@ def test_metrics_counts_expectimax_suggest_source() -> None:
     assert client.post("/suggest", json={"board": OPEN_BOARD, "mode": "expectimax"}).status_code == 200
     body = client.get("/metrics").text
     assert PROM_SUGGEST_SOURCE in body
-    assert 'suggest_source="expectimax-stub"' in body
+    assert 'suggest_source="expectimax"' in body
     assert PROM_REQUEST_COUNT not in body or 'gen_ai_request_outcome=' not in body
 
 

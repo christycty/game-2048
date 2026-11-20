@@ -3,6 +3,7 @@ import time
 from collections.abc import Callable
 
 from app import telemetry as tel
+from app.expectimax import choose_move
 from app.llm import LlmClient, LlmError
 from app.moves import FALLBACK_ORDER, legal_moves
 from app.schemas import Mode, SuggestResponse
@@ -29,8 +30,8 @@ class MoveSuggester:
         self,
         llm: LlmClient,
         max_attempts: int = 3,
-        budget_seconds: float = 20,
-        attempt_timeout_seconds: float = 10,
+        budget_seconds: float = 40,
+        attempt_timeout_seconds: float = 20,
         clock: _Clock | None = None,
     ) -> None:
         self._llm = llm
@@ -50,8 +51,20 @@ class MoveSuggester:
             input_payload={"mode": mode, "board": board, "legal": legal},
         ) as suggest_span:
             if mode == "expectimax":
-                result = SuggestResponse(move=fallback, mode=mode, source="expectimax-stub")
-                return _record_result(suggest_span, result, [])
+                choice = choose_move(board)
+                if choice is not None and choice.move in legal:
+                    result = SuggestResponse(
+                        move=choice.move,
+                        mode=mode,
+                        source="expectimax",
+                        reason=choice.reason,
+                    )
+                    return _record_result(suggest_span, result, [])
+                # None = unscored/broken search; otherwise a move outside legal_moves.
+                detail = "no scored move" if choice is None else f"illegal move {choice.move}"
+                logger.warning("expectimax %s; falling back to %s", detail, fallback)
+                result = SuggestResponse(move=fallback, mode=mode, source="fallback")
+                return _record_result(suggest_span, result, [detail])
 
             rejected: list[str] = []
             invalid_reply = False

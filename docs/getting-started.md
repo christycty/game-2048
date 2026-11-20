@@ -49,7 +49,7 @@ docker compose --profile dev --profile metrics up
 - After a successful LLM suggest, `GET …/metrics` includes `gen_ai_client_operation_duration_seconds`, `gen_ai_client_request_count_total` (`success`), and `suggest_source_total`. Full scrape inventory + test contract: [agents/telemetry.md](agents/telemetry.md).
 - Compose **prod**: the board loads at the client host port and **AI** still returns a suggestion (nginx proxies `/suggest`).
 - The board loads; arrow keys or swipe move tiles and update score.
-- **AI** (LLM) returns a suggestion when Ollama and the model are up; **Play** applies that move.
+- **AI** in LLM mode returns a suggestion when Ollama and the model are up; Expectimax works without Ollama and shows a per-direction score line; **Play** applies the move.
 
 ## Useful checks
 

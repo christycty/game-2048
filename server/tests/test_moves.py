@@ -1,4 +1,4 @@
-from app.moves import _apply, legal_moves
+from app.moves import apply_move, legal_moves
 
 
 def test_left_merges_a_pair_once() -> None:
@@ -8,7 +8,7 @@ def test_left_merges_a_pair_once() -> None:
         [0, 0, 0, 0],
         [0, 0, 0, 0],
     ]
-    assert _apply(board, "left") == [
+    assert apply_move(board, "left") == [
         [4, 2, 0, 0],
         [0, 0, 0, 0],
         [0, 0, 0, 0],
@@ -24,7 +24,7 @@ def test_right_merges_the_pair_nearest_the_edge() -> None:
         [0, 0, 0, 0],
         [0, 0, 0, 0],
     ]
-    assert _apply(board, "right")[0] == [0, 0, 2, 4]
+    assert apply_move(board, "right")[0] == [0, 0, 2, 4]
 
 
 def test_down_merges_a_vertical_pair() -> None:
@@ -34,7 +34,7 @@ def test_down_merges_a_vertical_pair() -> None:
         [0, 0, 0, 0],
         [0, 0, 0, 0],
     ]
-    assert _apply(board, "down") == [
+    assert apply_move(board, "down") == [
         [0, 0, 0, 0],
         [0, 0, 0, 0],
         [0, 0, 0, 0],
@@ -49,8 +49,8 @@ def test_three_vertical_tiles_merge_once_toward_the_edge() -> None:
         [2, 0, 0, 0],
         [0, 0, 0, 0],
     ]
-    assert [row[0] for row in _apply(board, "up")] == [4, 2, 0, 0]
-    assert [row[0] for row in _apply(board, "down")] == [0, 0, 2, 4]
+    assert [row[0] for row in apply_move(board, "up")] == [4, 2, 0, 0]
+    assert [row[0] for row in apply_move(board, "down")] == [0, 0, 2, 4]
 
 
 def test_left_merges_each_pair_once_and_not_the_result() -> None:
@@ -60,7 +60,7 @@ def test_left_merges_each_pair_once_and_not_the_result() -> None:
         [0, 0, 0, 0],
         [0, 0, 0, 0],
     ]
-    applied = _apply(board, "left")
+    applied = apply_move(board, "left")
     assert applied[0] == [4, 4, 0, 0]
     assert applied[1] == [4, 4, 0, 0]
 
@@ -72,7 +72,7 @@ def test_up_merges_a_vertical_pair() -> None:
         [0, 0, 0, 0],
         [0, 0, 0, 0],
     ]
-    assert _apply(board, "up") == [
+    assert apply_move(board, "up") == [
         [4, 0, 0, 0],
         [0, 0, 0, 0],
         [0, 0, 0, 0],

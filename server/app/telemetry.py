@@ -228,7 +228,7 @@ def setup_telemetry(
         suggest_source=meter.create_counter(
             name="suggest.source",
             unit="{suggestion}",
-            description="Suggest responses by source (llm / fallback / expectimax-stub).",
+            description="Suggest responses by source (llm / fallback / expectimax).",
         ),
     )
 
