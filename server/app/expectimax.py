@@ -111,13 +111,8 @@ def _chance_value(
     if cached is not None:
         return cached
 
+    # A legal slide always leaves an empty cell, so the spawn has a place to land.
     empties = _empty_cells(board)
-    if not empties:
-        # A move always frees or keeps an empty cell before spawn; still be defensive.
-        value = _max_value(board, depth, cache, deadline, clock)
-        cache[key] = value
-        return value
-
     total = 0.0
     weight = 1.0 / len(empties)
     for row, col in empties:
@@ -234,12 +229,7 @@ def _apply(board: Board, direction: str) -> Board:
 
 
 def _empty_cells(board: Board) -> list[tuple[int, int]]:
-    return [
-        (row, col)
-        for row in range(_SIZE)
-        for col in range(_SIZE)
-        if board[row][col] == 0
-    ]
+    return [(row, col) for row in range(_SIZE) for col in range(_SIZE) if board[row][col] == 0]
 
 
 def _empty_count(board: Board) -> int:
