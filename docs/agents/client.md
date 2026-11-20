@@ -80,7 +80,7 @@ A board-changing move clears the pending suggestion and its hint. A blocked move
 
 Changing the mode clears a pending suggestion. Choosing the same mode again is a no-op. **Play {Direction}** calls `handleMove` with that direction, so confirm shares the swipe and key path.
 
-The UI does not show the response `mode` or `source` fields. Expectimax on the server is still a stub; the client only sends the mode string.
+The UI does not show the response `mode` or `source` fields beyond treating `"fallback"` as failure. Expectimax reasons are the server score line and appear in the same hint as LLM reasons.
 
 ## Rules (`game.js`)
 

@@ -27,16 +27,18 @@ flowchart TD
   A[Receive board + mode] --> B{Legal moves?}
   B -->|none| C[409]
   B -->|yes| D{mode}
-  D -->|expectimax| E[Stub: first legal in fixed order]
+  D -->|expectimax| E[Depth-limited search + score reason]
   D -->|llm| F[Ollama chat with retries]
   F -->|valid move + reason| G[source: llm]
   F -->|exhausted| H[source: fallback<br/>UI treats as failure]
-  E --> I[Response]
-  G --> I
-  H --> I
+  E -->|legal search move| I[source: expectimax]
+  E -->|illegal / miss| H
+  G --> J[Response]
+  I --> J
+  H --> J
 ```
 
-The API stays healthy when Ollama is down (`GET /health` never calls the model). The client only offers **Play** when the suggestion is usable—not on fallback or transport errors.
+The API stays healthy when Ollama is down (`GET /health` never calls the model). Expectimax never calls Ollama. The client only offers **Play** when the suggestion is usable—not on fallback or transport errors.
 
 ## Coarse module map
 
@@ -55,15 +57,17 @@ flowchart LR
     Main[main.py]
     Suggester[suggester.py]
     Moves[moves.py]
+    Expectimax[expectimax.py]
     LLM[llm.py]
     Main --> Suggester
     Suggester --> Moves
+    Suggester --> Expectimax
     Suggester --> LLM
   end
   Api --> Main
 ```
 
-Client owns the playable rules and UI. Server owns suggestion modes, legality checks for the coach, and the Ollama client. Both sides implement the same slide/merge rules so “legal” means the same thing.
+Client owns the playable rules and UI. Server owns suggestion modes, legality checks for the coach, expectimax search, and the Ollama client. Both sides implement the same slide/merge rules so “legal” means the same thing.
 
 ## Stack
 

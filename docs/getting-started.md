@@ -43,7 +43,7 @@ docker compose --profile prod up   # API + nginx static client
 
 - `GET http://127.0.0.1:8000/health` returns `{"status":"ok"}` (even if Ollama is down).
 - The board loads; arrow keys or swipe move tiles and update score.
-- **AI** (LLM) returns a suggestion when Ollama and the model are up; **Play** applies that move.
+- **AI** in LLM mode returns a suggestion when Ollama and the model are up; Expectimax works without Ollama and shows a per-direction score line; **Play** applies the move.
 
 ## Useful checks
 

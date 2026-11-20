@@ -14,6 +14,8 @@ The browser calls `http://localhost:8000/suggest` by default. Override with `VIT
 
 Host API env comes from `server/.env` or the shell. Copy `server/.env.example` for local uvicorn. That file is not read by Compose for the API container.
 
+Default LLM attempt timeout is 20s and suggestion budget 40s (budget must cover two attempts). Optional Phoenix export uses `EXPORT_TRACES` and `PHOENIX_COLLECTOR_ENDPOINT` on the host process; Compose injects `COMPOSE_PHOENIX_COLLECTOR_ENDPOINT` into the API container the same way it does for Ollama.
+
 ## Compose
 
 From the repo root:
