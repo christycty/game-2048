@@ -48,7 +48,7 @@ If a human section has **no diagram and more than ~15 lines**, it probably belon
 
 **Feel:** precise, path-heavy, checklist-friendly. Current truth only.
 
-**Canonical detail pages:** `prd.md`, `client.md`, `server.md`, `runtime.md`, plus `review-patterns/`.
+**Canonical detail pages:** `prd.md`, `client.md`, `server.md`, `telemetry.md`, `runtime.md`, plus `review-patterns/`.
 
 **Root `AGENTS.md`:** short entrypoint (goals, hard rules, pointers). Keep it scannable; put depth in `docs/agents/`. Always link [writing-docs.md](writing-docs.md) so future agents inherit these conventions.
 
@@ -93,6 +93,20 @@ Short anti-pattern notes under `docs/agents/review-patterns/` are encouraged. Pr
 If behavior, API shapes, env names, ports, Compose, or product non-goals change, update the **canonical agent page in the same PR**. Touch human pages only when a newcomer’s story or diagram would otherwise lie.
 
 PR authors fill the Docs section in [`.github/PULL_REQUEST_TEMPLATE.md`](../../.github/PULL_REQUEST_TEMPLATE.md). Mark **Docs N/A** only for changes that do not affect users, runtime, or product rules (and say why).
+
+### PR Verify screenshots
+
+Evidence goes **in the PR summary**, not only as a separate comment. Apply to client UI **and** ops UIs (Grafana, Prometheus, `/metrics` text).
+
+| Do | Don't |
+|---|---|
+| Frame the **new** state (mode + suggestion + Play; GenAI series; dashboard with data) | Default board / empty panels “because the page loads” |
+| Width ≥ ~800px of real content | Phone-narrow strips |
+| Crop to the useful region (autocrop letterboxing / huge empty dark margins) | Tall square captures with the UI in a thin band at the top |
+| Prefer a focused view when the full page is mostly noise (e.g. GenAI lines from `/metrics`, Grafana panels) | Paste an entire raw `/metrics` dump dominated by unrelated HTTP series |
+| Attach via `gh pr edit --attach` (one file at a time) and embed the image markdown **under Verify → UI** | Leave screenshots only in a comment |
+
+Browser automation often pads to a large canvas. **Inspect the PNG before upload**: if most of the image is empty, crop or re-shoot. Avoid CDP `clip` / `captureBeyondViewport` crops that tile or duplicate UI.
 
 ### Freshness by doc kind
 

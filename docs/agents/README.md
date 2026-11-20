@@ -4,10 +4,11 @@ Implementation truth for coding agents and deep readers. Product narrative and d
 
 | Doc | Role |
 |---|---|
-| [writing-docs.md](writing-docs.md) | **How to maintain docs** (trees, length, freshness, CI checks) |
+| [writing-docs.md](writing-docs.md) | **How to maintain docs** (trees, length, freshness, CI checks, PR screenshot quality) |
 | [prd.md](prd.md) | Product behavior, non-goals, success criteria |
 | [client.md](client.md) | Client layout, UX wiring, game rules, tests |
 | [server.md](server.md) | API layout, suggest pipeline, settings, tests |
+| [telemetry.md](telemetry.md) | **Telemetry inventory**: every span/metric; Phoenix vs Prometheus/Grafana; GenAI ops panel → series map |
 | [runtime.md](runtime.md) | Local run, Compose, images, CI |
 | [review-patterns/](review-patterns/client-anti-patterns.md) | Review heuristics / anti-patterns ([server](review-patterns/server-anti-patterns.md)) |
 

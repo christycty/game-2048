@@ -82,7 +82,7 @@ flowchart LR
   Telemetry -.->|OTLP when EXPORT_TRACES| Phoenix[Phoenix]
 ```
 
-Client owns the playable rules and UI. Server owns suggestion modes, per-mode process-wide rate limits, legality checks for the coach, expectimax search, the Ollama client, and Phoenix OTLP tracing when `EXPORT_TRACES` is on (default; collector optional—traces only, no scrape metrics on mainline). Both sides implement the same slide/merge rules so “legal” means the same thing.
+Client owns the playable rules and UI. Server owns suggestion modes, per-mode process-wide rate limits, legality checks for the coach, expectimax search, the Ollama client, Phoenix OTLP tracing when `EXPORT_TRACES` is on (default; collector optional), and always-on `GET /metrics` (optional Compose Prometheus/Grafana). Both sides implement the same slide/merge rules so “legal” means the same thing.
 
 ## Stack
 
@@ -91,7 +91,8 @@ Client owns the playable rules and UI. Server owns suggestion modes, per-mode pr
 | Client | React 19, Vite, plain JavaScript |
 | API | Python 3.12, FastAPI, Pydantic |
 | Model | Host Ollama (`OLLAMA_MODEL`, default `gemma4:latest`) |
-| Run | Local processes or Docker Compose profiles `dev` / `prod` |
+| Run | Local processes or Docker Compose profiles `dev` / `prod` (+ optional `metrics`) |
+| Observability | Phoenix (OTLP traces); `GET /metrics` + optional Prometheus/Grafana; inventory in [agents/telemetry.md](agents/telemetry.md) |
 | CI | Docs scripts + link check, lint/test, client build, image build, Compose config checks |
 
 ## Deploy profiles
@@ -100,7 +101,8 @@ Client owns the playable rules and UI. Server owns suggestion modes, per-mode pr
 |---|---|
 | `dev` | API with reload + Vite client (API published; Vite proxies `/suggest`) |
 | `prod` | API unpublished + nginx static client (`${CLIENT_HOST_PORT}`→80; nginx proxies `/suggest`) |
+| `metrics` | Prometheus + Grafana (pair with `dev` or `prod`) |
 
-Ollama always stays on the host. Compose reaches it via `host.docker.internal` (override with `COMPOSE_OLLAMA_BASE_URL`).
+Ollama and Phoenix stay on the host. Compose reaches them via `host.docker.internal` (override with `COMPOSE_OLLAMA_BASE_URL` / `COMPOSE_PHOENIX_COLLECTOR_ENDPOINT`).
 
 More runtime edge cases: [agents/runtime.md](agents/runtime.md).

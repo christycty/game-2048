@@ -23,7 +23,7 @@ Package name: `game-2048-server`. Entry: `app.main:app`. Python ≥ 3.11 (images
 
 | Path | Role |
 |---|---|
-| `app/main.py` | App factory, CORS, rate limit gate, `/health`, `/suggest`. |
+| `app/main.py` | App factory, CORS, rate limit gate, `/health`, `/suggest`, `/metrics`. |
 | `app/schemas.py` | Request and response models. Tile and mode validation. |
 | `app/suggester.py` | Mode dispatch, LLM retries, fallback, expectimax search. |
 | `app/expectimax.py` | Depth-limited expectimax with spawn chance nodes. |
@@ -31,13 +31,14 @@ Package name: `game-2048-server`. Entry: `app.main:app`. Python ≥ 3.11 (images
 | `app/llm.py` | Ollama chat client, prompt, JSON parse. |
 | `app/rate_limit.py` | Process-wide sliding-window cap for `/suggest`. |
 | `app/config.py` | Env-backed settings. |
-| `app/telemetry.py` | Phoenix / OpenInference tracing setup. |
+| `app/telemetry.py` | Phoenix OTLP traces + Prometheus `/metrics` (GenAI histograms + request_count). |
 
 ## HTTP
 
 | Method | Path | Success | Notes |
 |---|---|---|---|
 | `GET` | `/health` | `{"status":"ok"}` | Never calls Ollama. |
+| `GET` | `/metrics` | Prometheus text | Always on. GenAI + FastAPI HTTP series; inventory in [telemetry.md](telemetry.md). Not traced. |
 | `POST` | `/suggest` | `SuggestResponse` | Handler order: Pydantic `422` (before the rate-limit gate; does not consume either mode’s cap) → that mode’s process rate limit `429` + `Retry-After` + `detail: "too many suggestions"` (before suggester / any mode) → `409` when no legal move → `200` with `SuggestResponse`. |
 
 CORS allows `http://localhost:${CLIENT_HOST_PORT}` and `http://127.0.0.1:${CLIENT_HOST_PORT}` (default 5173), methods `GET` and `POST`. Same-origin `/suggest` through Vite or nginx does not need CORS; the allowlist remains for builds that set `VITE_API_BASE_URL` to the API origin.
@@ -118,16 +119,15 @@ Loaded from the environment and optional `server/.env` (Compose does not use tha
 | `SUGGEST_RATE_LIMIT_EXPECTIMAX_REQUESTS` | `30` | 1–120; Expectimax bucket (process-wide) |
 | `SUGGEST_RATE_LIMIT_WINDOW_SECONDS` | `60` | 1–3600; shared window for both modes |
 | `CLIENT_HOST_PORT` | `5173` | 1–65535; CORS allowlist |
-| `EXPORT_TRACES` | `true` | Gates **OTLP export** only (instrumentation still loads when `false`). Host uvicorn / one-off image runs honor this env; CI pytest and smoke `docker run` set `false`. Compose `dev`/`prod` hardcode `true` (see [runtime.md](runtime.md)) |
-| `PHOENIX_COLLECTOR_ENDPOINT` | `http://localhost:6006` | Host process default; exporter posts to `{endpoint}/v1/traces` (or a full traces URL) |
+| `EXPORT_TRACES` | `true` | Gates **OTLP export** only (instrumentation still loads when `false`). Host uvicorn / one-off image runs honor this env; CI pytest and smoke `docker run` set `false`. Compose `dev`/`prod` hardcode `true` (see [runtime.md](runtime.md)). Metrics / `GET /metrics` stay on regardless. |
+| `PHOENIX_COLLECTOR_ENDPOINT` | `http://localhost:6006` | Host process default; exporter posts to `{endpoint}/v1/traces` (or a full traces URL). Compose uses `COMPOSE_PHOENIX_COLLECTOR_ENDPOINT`. |
 | `PHOENIX_API_KEY` | unset | Optional bearer; sent only for HTTPS or local/`host.docker.internal` HTTP |
 
-## Tracing (Phoenix / OpenInference)
+## Observability
 
-- When `EXPORT_TRACES=true`, spans export over OTLP HTTP to Phoenix. There is **no** scrape `/metrics` or Grafana on mainline (in-process GenAI histograms stay local).
-- Typical LLM tree: FastAPI `POST /suggest` → `suggest` chain → sibling `ollama chat` spans per attempt. Expectimax opens `suggest` without LLM children. Stuck board (`409`) is a single HTTP span (no nested `suggest`).
-- Auto HTTP spans skip `/health`, `/docs`, `/openapi.json`, `/redoc`. Retry/fallback detail may appear as span-only `failures` output (not in the API body).
-- Details and CI env split: [runtime.md](runtime.md).
+Phoenix = forensics (spans, prompts, retries, TTFT events). Grafana = ops aggregates from Prometheus scrapes of `GET /metrics`. Prometheus stores the time series; Grafana only queries them. Full inventory (every span, event, series, label, and Phoenix vs Grafana ownership): [telemetry.md](telemetry.md). Compose scrape UI: [runtime.md](runtime.md).
+
+Typical LLM tree: FastAPI `POST /suggest` → `suggest` chain → sibling `ollama chat` spans per attempt. Expectimax opens `suggest` without LLM children. Stuck board (`409`) is a single HTTP span (no nested `suggest`). Auto HTTP spans skip `/health`, `/metrics`, `/docs`, `/openapi.json`, `/redoc`. Retry/fallback detail may appear as span-only `failures` output (not in the API body).
 
 ## Tests
 
@@ -135,7 +135,7 @@ Loaded from the environment and optional `server/.env` (Compose does not use tha
 - `tests/test_suggest.py` covers health, CORS, per-mode rate limits before the suggester (including the **default** 5-call LLM cap and a separate Expectimax bucket), LLM success and reason, illegal-move retry, exhausted fallback, expectimax search + score reason, illegal-search fallback, stuck-board 409, bad payload 422, Ollama HTTP failures, prod schema omission, attempt bounds, and the time budget stop.
 - `tests/test_expectimax.py` covers legality, spawn odds, depth/budget cutoffs, and the reason format.
 - `tests/test_moves.py` covers the slide and merge rules used for legality.
-- `tests/test_telemetry.py` covers export URL, API-key policy, nesting, retries, errors, health exclusion, and stuck-board span shape.
+- `tests/test_telemetry.py` covers Phoenix URL/header rules, per-app exporters, excluded `/health` and `/metrics`, span nesting, retries, errors, stuck-board span shape, GenAI series on `/metrics` after a suggest (success / request / response / parse / illegal_move / timeout + suggest sources), and HTTP scrape status codes for `/suggest` (200 / 422 / 409 / 429).
 - `tests/test_suggest_e2e.py` is marked `e2e` for real Ollama under `APP_ENV=prod`. It sizes `SUGGEST_RATE_LIMIT_REQUESTS` from its parametrized call volume, asserts `source == "llm"` with a short reason, and includes a non-e2e expectimax HTTP smoke that does not need Ollama.
 
 ## Not built yet

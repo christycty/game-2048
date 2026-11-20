@@ -38,13 +38,16 @@ cp .env.example .env   # set COMPOSE_PROJECT_NAME + ports for this worktree
 docker compose --profile dev up    # API + Vite
 # or
 docker compose --profile prod up   # nginx client; API unpublished
+# optional scrapers:
+docker compose --profile dev --profile metrics up
 ```
 
-`docker compose up` with no profile starts nothing. Published ports are loopback-only. Defaults are API `8000` and client `5173`; override with `API_HOST_PORT` / `CLIENT_HOST_PORT`. Prod publishes only the client; nginx forwards `/suggest`.
+`docker compose up` with no profile starts nothing. Published ports are loopback-only. Defaults are API `8000` and client `5173` (override with `API_HOST_PORT` / `CLIENT_HOST_PORT`); with `metrics`, also Prometheus / Grafana (`PROMETHEUS_HOST_PORT` / `GRAFANA_HOST_PORT`). Prod publishes only the client; nginx forwards `/suggest`.
 
 ## It worked if…
 
 - Path A / Compose **dev**: `GET http://127.0.0.1:${API_HOST_PORT:-8000}/health` returns `{"status":"ok"}` (even if Ollama is down).
+- After a successful LLM suggest, `GET …/metrics` includes `gen_ai_client_operation_duration_seconds`, `gen_ai_client_request_count_total` (`success`), and `suggest_source_total`. Full scrape inventory + test contract: [agents/telemetry.md](agents/telemetry.md).
 - Compose **prod**: the board loads at the client host port and **AI** still returns a suggestion (nginx proxies `/suggest`).
 - The board loads; arrow keys or swipe move tiles and update score.
 - **AI** in LLM mode returns a suggestion when Ollama and the model are up; Expectimax works without Ollama and shows a per-direction score line; **Play** applies the move.
