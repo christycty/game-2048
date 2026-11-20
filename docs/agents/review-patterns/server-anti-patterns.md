@@ -37,3 +37,7 @@ A new process-wide control (rate limit, budget, shared client) is not done when 
 ## Isolation helpers must pin every env-backed field
 
 `Settings(**partial)` still fills omitted fields from the process env and `.env`. A helper that claims isolation must pass **every** model field as an init kwarg, and a test must poison the env (or assert the pinned key set equals `Settings.model_fields`) so a new setting cannot land unpinned.
+
+## No bare magic numbers
+
+A tuned weight, depth cutoff, or similar coefficient is a named constant. The name (and a short comment when the name is not enough) carries the intent; a bare `270.0` in an expression does not.

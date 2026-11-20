@@ -44,7 +44,7 @@ Suggestions are optional. The player always keeps control of the board: they can
 | Mode | Product intent today |
 |---|---|
 | **LLM** (default) | Ask a language model for a legal next move and a short reason. |
-| **Expectimax** | Ask for a move from a search-style strategy. On the current product, this path is a placeholder: it returns a simple deterministic legal move, not a real expectimax search. |
+| **Expectimax** | Ask for a move from depth-limited expectimax search. The hint lists a score for each direction (`N/A` when that slide is illegal). |
 
 The player can switch modes before asking. Changing mode drops any suggestion that was waiting for confirmation. Mode radios are locked while Auto Play is running.
 
@@ -79,7 +79,7 @@ AI is unavailable when the game is over, while a move animation is playing, whil
 - Leaderboards or cloud-saved best scores
 - Accounts, auth, or billing
 - Multiplayer or shared rooms
-- A finished expectimax (or other search) strategy beyond the current placeholder
+- Deep tournament-strength search (expectimax stays shallow for a fast suggestion)
 - Mobile app stores or native shells (browser only)
 
 ## Success criteria
@@ -88,13 +88,13 @@ A release matches this product when:
 
 - A new visitor can start a game, move with keys or swipe, see score update, lose, and start over without confusion.
 - Best score survives New Game within the same page load and resets on full reload.
-- The player can request an LLM suggestion, read the reason when one is returned, confirm with **Play**, and see that move applied like any other move.
+- The player can request an LLM or Expectimax suggestion, read the reason when one is returned, confirm with **Play**, and see that move applied like any other move.
 - The player can start **Auto Play**, watch usable suggestions apply in a loop, and stop with **Stop**, New Game, a manual move, loss, or a failed suggestion.
 - A failed or unusable suggestion leaves the board unchanged and shows a clear failure message (including a distinct rate-limit message).
-- Expectimax is selectable, but its placeholder behavior is understood as not yet a real search coach.
+- Expectimax returns a legal search move with a per-direction score line the player can read.
 
 ## Open product decisions
 
-- Whether expectimax (or other modes) should become real strategies before calling the feature “multi-mode AI.”
+- Whether expectimax should search deeper (or expose more of the heuristic) for stronger play.
 - Whether best score should persist across reloads.
 - Whether a future host should add auth or a public demo URL—rate limiting already bounds model spend; auth and a public URL are still out of scope.

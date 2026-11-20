@@ -5,7 +5,7 @@ FALLBACK_ORDER = ("left", "up", "right", "down")
 
 
 def legal_moves(board: list[list[int]]) -> list[str]:
-    return [direction for direction in DIRECTIONS if _apply(board, direction) != board]
+    return [direction for direction in DIRECTIONS if apply_move(board, direction) != board]
 
 
 def first_legal_move(board: list[list[int]]) -> str | None:
@@ -16,7 +16,7 @@ def first_legal_move(board: list[list[int]]) -> str | None:
     return None
 
 
-def _apply(board: list[list[int]], direction: str) -> list[list[int]]:
+def apply_move(board: list[list[int]], direction: str) -> list[list[int]]:
     if direction == "left":
         return [_slide_line(row) for row in board]
     if direction == "right":

@@ -46,7 +46,7 @@ docker compose --profile prod up   # nginx client; API unpublished
 - Path A / Compose **dev**: `GET http://127.0.0.1:${API_HOST_PORT:-8000}/health` returns `{"status":"ok"}` (even if Ollama is down).
 - Compose **prod**: the board loads at the client host port and **AI** still returns a suggestion (nginx proxies `/suggest`).
 - The board loads; arrow keys or swipe move tiles and update score.
-- **AI** (LLM) returns a suggestion when Ollama and the model are up; **Play** applies that move.
+- **AI** in LLM mode returns a suggestion when Ollama and the model are up; Expectimax works without Ollama and shows a per-direction score line; **Play** applies the move.
 
 ## Useful checks
 

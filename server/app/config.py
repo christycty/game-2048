@@ -14,8 +14,9 @@ class Settings(BaseSettings):
     ollama_structured_output: bool = True
     # One hung call must not consume the whole suggestion, and the env cannot raise these.
     llm_max_attempts: int = Field(default=3, ge=1, le=5)
-    llm_attempt_timeout_seconds: float = Field(default=10, gt=0, le=10)
-    llm_suggest_budget_seconds: float = Field(default=20, gt=0, le=20)
+    llm_attempt_timeout_seconds: float = Field(default=20, gt=0, le=20)
+    # Budget covers at least two attempt timeouts so a slow first call can still retry.
+    llm_suggest_budget_seconds: float = Field(default=40, gt=0, le=40)
     # Process-wide caps, split by mode. Nginx is the only prod caller.
     # SUGGEST_RATE_LIMIT_REQUESTS remains the LLM bucket (Ollama spend).
     suggest_rate_limit_requests: int = Field(default=5, ge=1, le=30)
@@ -33,6 +34,14 @@ class Settings(BaseSettings):
     def prod_uses_plain_json(self) -> "Settings":
         if self.app_env == "prod":
             self.ollama_structured_output = False
+        return self
+
+    @model_validator(mode="after")
+    def budget_covers_two_attempts(self) -> "Settings":
+        # Raise a stale short budget up to two attempt timeouts (upgrade-safe).
+        needed = self.llm_attempt_timeout_seconds * 2
+        if self.llm_suggest_budget_seconds < needed:
+            self.llm_suggest_budget_seconds = needed
         return self
 
     @property

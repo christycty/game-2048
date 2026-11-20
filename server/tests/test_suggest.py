@@ -11,7 +11,14 @@ from app.main import create_app
 from app.rate_limit import SuggestRateLimiter
 from app.schemas import MAX_TILE
 from app.suggester import MoveSuggester
-from helpers import E2E_BOARD_COUNT, E2E_RUN_COUNT, E2E_SUGGEST_CALLS, isolated_settings
+from helpers import (
+    COLUMN_PAIR,
+    E2E_BOARD_COUNT,
+    E2E_RUN_COUNT,
+    E2E_SUGGEST_CALLS,
+    SORTED_ROW,
+    isolated_settings,
+)
 
 OPEN_BOARD = [
     [2, 0, 0, 0],
@@ -271,17 +278,75 @@ def test_exhausted_retries_fall_back() -> None:
     assert llm.calls == 3
 
 
-def test_expectimax_stub_skips_the_model() -> None:
+def test_expectimax_skips_the_model() -> None:
     llm = FakeLLM(["up"])
-    response = _client(llm).post("/suggest", json={"board": OPEN_BOARD, "mode": "expectimax"})
+    response = _client(llm).post("/suggest", json={"board": SORTED_ROW, "mode": "expectimax"})
+    assert response.status_code == 200
+    body = response.json()
+    assert body["mode"] == "expectimax"
+    assert body["source"] == "expectimax"
+    # Up is the fallback and would smash the sorted row. Right only slides the 2.
+    assert body["move"] == "right"
+    assert body["reason"].startswith("Score of each direction: ")
+    assert "Up = N/A" not in body["reason"]  # up is legal but worse
+    assert "Left = N/A" in body["reason"]
+    assert llm.calls == 0
+
+
+def test_expectimax_merges_instead_of_sliding() -> None:
+    response = _client(FakeLLM([])).post(
+        "/suggest", json={"board": COLUMN_PAIR, "mode": "expectimax"}
+    )
+    assert response.status_code == 200
+    body = response.json()
+    assert body["source"] == "expectimax"
+    assert body["move"] in {"up", "down"}
+    assert body["reason"].startswith("Score of each direction: ")
+    assert "Left =" in body["reason"]
+    assert "N/A" in body["reason"]
+
+
+def test_expectimax_drops_an_illegal_search_move(monkeypatch: pytest.MonkeyPatch) -> None:
+    from app.expectimax import Choice
+
+    monkeypatch.setattr(
+        "app.suggester.choose_move",
+        lambda _board: Choice(
+            "up", "Score of each direction: Left = N/A, Right = 1.0, Up = 2.0, Down = 1.0"
+        ),
+    )
+    response = _client(FakeLLM([])).post(
+        "/suggest", json={"board": OPEN_BOARD, "mode": "expectimax"}
+    )
     assert response.status_code == 200
     assert response.json() == {
         "move": "right",
         "mode": "expectimax",
-        "source": "expectimax-stub",
+        "source": "fallback",
         "reason": None,
     }
-    assert llm.calls == 0
+
+
+def test_expectimax_falls_back_when_search_returns_none(monkeypatch: pytest.MonkeyPatch) -> None:
+    # Budget expired before any depth, or search aborted — not a scored move.
+    monkeypatch.setattr("app.suggester.choose_move", lambda _board: None)
+    response = _client(FakeLLM([])).post(
+        "/suggest", json={"board": OPEN_BOARD, "mode": "expectimax"}
+    )
+    assert response.status_code == 200
+    assert response.json() == {
+        "move": "right",
+        "mode": "expectimax",
+        "source": "fallback",
+        "reason": None,
+    }
+
+
+def test_expectimax_stuck_board_is_conflict() -> None:
+    response = _client(FakeLLM([])).post(
+        "/suggest", json={"board": STUCK_BOARD, "mode": "expectimax"}
+    )
+    assert response.status_code == 409
 
 
 def test_stuck_board_is_conflict() -> None:
@@ -566,7 +631,13 @@ def test_attempt_count_stays_between_one_and_five() -> None:
     with pytest.raises(ValidationError):
         isolated_settings(llm_attempt_timeout_seconds=30)
     with pytest.raises(ValidationError):
-        isolated_settings(llm_suggest_budget_seconds=90)
+        isolated_settings(llm_suggest_budget_seconds=60)
+    # 20s attempts need a 40s budget. A stale shorter budget is raised to the floor.
+    raised = isolated_settings(llm_attempt_timeout_seconds=20, llm_suggest_budget_seconds=30)
+    assert raised.llm_suggest_budget_seconds == 40
+    shorter = isolated_settings(llm_attempt_timeout_seconds=10, llm_suggest_budget_seconds=20)
+    assert shorter.llm_attempt_timeout_seconds == 10
+    assert shorter.llm_suggest_budget_seconds == 20
 
 
 def test_fallback_logs_the_failed_attempts(caplog: pytest.LogCaptureFixture) -> None:
@@ -580,12 +651,13 @@ def test_fallback_logs_the_failed_attempts(caplog: pytest.LogCaptureFixture) -> 
 
 def test_time_budget_stops_further_attempts() -> None:
     llm = FakeLLM([LlmError("slow")] * 3)
-    ticks = iter([0.0, 0.0, 11.0])
+    # After the first attempt, only 15s remain — below the 20s attempt timeout.
+    ticks = iter([0.0, 0.0, 25.0])
     suggester = MoveSuggester(
         llm,
         max_attempts=3,
-        budget_seconds=20,
-        attempt_timeout_seconds=10,
+        budget_seconds=40,
+        attempt_timeout_seconds=20,
         clock=lambda: next(ticks),
     )
     response = suggester.suggest(OPEN_BOARD, "llm")

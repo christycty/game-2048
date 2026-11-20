@@ -36,17 +36,17 @@ sequenceDiagram
 | Mode | Intent today |
 |---|---|
 | **LLM** (default) | Language model returns a legal move and a short reason. |
-| **Expectimax** | Search-style coach; currently a deterministic placeholder, not real expectimax. |
+| **Expectimax** | Depth-limited search with spawn chance nodes; reason lists a score per direction (`N/A` if illegal). |
 
 ## Non-goals (for now)
 
-Undo, cloud best scores, auth, multiplayer, a finished search coach, native apps.
+Undo, cloud best scores, auth, multiplayer, deep tournament-strength search, native apps.
 
 ## Success looks like
 
 - A visitor can play, lose, and start over without confusion.
 - Best score survives **New Game** on the same page load; a full reload resets it.
-- LLM suggest → reason → **Play** applies the move like any other input.
+- LLM or Expectimax suggest → reason → **Play** applies the move like any other input.
 - **Auto Play** applies usable suggestions in a loop until Stop, loss, failure, or a manual move.
 - A failed suggestion leaves the board unchanged with a clear message.
 
