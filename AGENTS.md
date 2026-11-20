@@ -18,7 +18,7 @@ Human docs are orientation only. **Implementation truth is under `docs/agents/`.
 
 1. Tile spawn: two **2**s on random empty cells at start; after each board-changing move, spawn a **2** or **4** on a random empty cell.
 2. Surface: current score, session best, new game only—no undo or leaderboard.
-3. AI suggestions on the server: client sends board + mode; server returns a suggested move. Multiple modes over time; LLM first (Expectimax may be a stub).
+3. AI suggestions on the server: client sends board + mode; server returns a suggested move. Modes today: LLM and depth-limited Expectimax (score-line reason).
 
 ## Client
 

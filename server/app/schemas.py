@@ -4,7 +4,7 @@ from pydantic import BaseModel, Field, model_validator
 
 Move = Literal["up", "down", "left", "right"]
 Mode = Literal["llm", "expectimax"]
-Source = Literal["llm", "fallback", "expectimax-stub"]
+Source = Literal["llm", "fallback", "expectimax"]
 # 4 through 131072 fills all 16 cells, so a 4x4 board cannot hold a higher tile.
 MAX_TILE = 1 << 17
 

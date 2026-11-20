@@ -10,6 +10,7 @@ from helpers import (
     E2E_BOARD_COUNT,
     E2E_RUN_COUNT,
     E2E_SUGGEST_CALLS,
+    SORTED_ROW,
     isolated_settings,
 )
 
@@ -85,3 +86,23 @@ def test_gemma_returns_a_legal_move_and_a_short_reason(
     assert body["move"] in legal_moves(board)
     words = body["reason"].split()
     assert 1 <= len(words) <= 50
+
+
+class _UnusedLLM:
+    def suggest_move(self, *args, **kwargs):
+        raise AssertionError("expectimax must not call the model")
+
+
+def test_expectimax_returns_a_legal_search_move() -> None:
+    # Search never talks to Ollama. Keep the smoke next to the LLM e2e tests
+    # so both suggest modes are wired here; do not mark it e2e or CI skips it.
+    client = TestClient(create_app(isolated_settings(app_env="prod"), _UnusedLLM()))
+    response = client.post("/suggest", json={"board": SORTED_ROW, "mode": "expectimax"})
+    assert response.status_code == 200
+    body = response.json()
+    assert body["mode"] == "expectimax"
+    assert body["source"] == "expectimax"
+    assert body["move"] == "right"
+    assert body["move"] in legal_moves(SORTED_ROW)
+    assert body["reason"].startswith("Score of each direction: ")
+    assert "Left = N/A" in body["reason"]
