@@ -57,9 +57,10 @@ def create_app(
     )
     # The page calls same-origin /suggest. This list is for a build that sets
     # VITE_API_BASE_URL to the API origin. localhost and 127.0.0.1 differ.
+    # CLIENT_HOST_PORT moves with the worktree when 5173 is taken.
     app.add_middleware(
         CORSMiddleware,
-        allow_origins=["http://localhost:5173", "http://127.0.0.1:5173"],
+        allow_origins=settings.cors_origins,
         allow_methods=["GET", "POST"],
         allow_headers=["*"],
     )

@@ -10,13 +10,13 @@ From `client/`:
 
 ```bash
 npm install
-npm run dev       # Vite dev server on :5173
+npm run dev       # Vite on CLIENT_HOST_PORT (default 5173; reads repo-root .env)
 npm test          # Vitest for React components, then node:test for game.js, swipe.js, and api.js
 npm run lint      # oxlint
 npm run build     # production bundle
 ```
 
-The page calls same-origin `/suggest` by default. Vite proxies that path to the API (`API_PROXY_TARGET`, default `http://127.0.0.1:8000`). Set `VITE_API_BASE_URL` to an absolute origin only to bypass the proxy. CORS on the API still allows the Vite origins for that case. See [runtime.md](runtime.md) for Compose and Docker.
+The page calls same-origin `/suggest` by default. Vite proxies that path to the API (`API_PROXY_TARGET`, or `http://127.0.0.1:${API_HOST_PORT:-8000}`). Set `VITE_API_BASE_URL` to an absolute origin only to bypass the proxy. CORS follows `CLIENT_HOST_PORT` for that case. See [runtime.md](runtime.md) for Compose, Docker, and worktree ports.
 
 Stack: React 19, Vite, plain JavaScript. The page title is 2048. The app mounts from `index.html` into `#root` through `src/main.jsx`.
 

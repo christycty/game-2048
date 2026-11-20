@@ -8,11 +8,11 @@ How the client, API, and host model fit together. File-level detail lives under 
 flowchart TB
   subgraph host [Host machine]
     Ollama[Ollama :11434]
-    subgraph edge [Page origin :5173]
+    subgraph edge [Page origin]
       Client[Client UI]
       Proxy[Vite or nginx /suggest]
     end
-    API[API :8000]
+    API[API]
   end
   Player((Player)) --> Client
   Client -->|"POST /suggest<br/>same origin"| Proxy
@@ -20,7 +20,7 @@ flowchart TB
   API -->|"LLM mode"| Ollama
 ```
 
-Ports bind to loopback. The browser calls same-origin `/suggest`; Vite (dev) or nginx (prod Compose) forwards to the API. Prod Compose does not publish the API host port.
+Ports bind to loopback. Host publish ports come from `API_HOST_PORT` / `CLIENT_HOST_PORT` (defaults 8000 / 5173) so worktrees can diverge. The browser calls same-origin `/suggest`; Vite (dev) or nginx (prod Compose) forwards to the API. Prod Compose does not publish the API host port.
 
 ## Suggestion path
 
@@ -86,7 +86,7 @@ Client owns the playable rules and UI. Server owns suggestion modes, the process
 | Profile | What runs |
 |---|---|
 | `dev` | API with reload + Vite client (API published; Vite proxies `/suggest`) |
-| `prod` | API unpublished + nginx static client on host port 5173 (nginx proxies `/suggest`) |
+| `prod` | API unpublished + nginx static client on `CLIENT_HOST_PORT` (nginx proxies `/suggest`) |
 
 Ollama always stays on the host. Compose reaches it via `host.docker.internal` (override with `COMPOSE_OLLAMA_BASE_URL`).
 

@@ -11,7 +11,7 @@ From `server/`:
 ```bash
 # copy server/.env.example if you want local overrides
 uv sync --extra dev          # or: pip install -e ".[dev]"
-uvicorn app.main:app --reload --host 127.0.0.1 --port 8000
+uvicorn app.main:app --reload --host 127.0.0.1 --port "${API_HOST_PORT:-8000}"
 pytest                       # unit tests; skips e2e
 pytest --e2e                 # needs a local Ollama and the configured model
 ruff format --check . && ruff check .
@@ -39,7 +39,7 @@ Package name: `game-2048-server`. Entry: `app.main:app`. Python ≥ 3.11 (images
 | `GET` | `/health` | `{"status":"ok"}` | Never calls Ollama. |
 | `POST` | `/suggest` | `SuggestResponse` | `409` when the board has no legal move. `422` on bad payload. `429` + `Retry-After` when the process rate limit is hit (checked before the model). |
 
-CORS allows `http://localhost:5173` and `http://127.0.0.1:5173`, methods `GET` and `POST`. Same-origin `/suggest` through Vite or nginx does not need CORS; the allowlist remains for builds that set `VITE_API_BASE_URL` to the API origin.
+CORS allows `http://localhost:${CLIENT_HOST_PORT}` and `http://127.0.0.1:${CLIENT_HOST_PORT}` (default 5173), methods `GET` and `POST`. Same-origin `/suggest` through Vite or nginx does not need CORS; the allowlist remains for builds that set `VITE_API_BASE_URL` to the API origin.
 
 In `APP_ENV=dev`, `/docs` and `/openapi.json` are open. In `prod` they return 404. Redoc is always off. Title: `2048 suggestions`.
 
@@ -107,6 +107,7 @@ Loaded from the environment and optional `server/.env` (Compose does not use tha
 | `LLM_SUGGEST_BUDGET_SECONDS` | `20` | >0, ≤20 |
 | `SUGGEST_RATE_LIMIT_REQUESTS` | `5` | 1–30; process-wide |
 | `SUGGEST_RATE_LIMIT_WINDOW_SECONDS` | `60` | 1–3600 |
+| `CLIENT_HOST_PORT` | `5173` | 1–65535; CORS allowlist |
 
 ## Tests
 

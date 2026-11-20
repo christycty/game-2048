@@ -20,12 +20,12 @@ flowchart LR
 ```bash
 # Terminal 1 — Ollama on the host (model from OLLAMA_MODEL, default gemma4:latest)
 # Terminal 2
-cd server && uv sync --extra dev && uvicorn app.main:app --reload --host 127.0.0.1 --port 8000
+cd server && uv sync --extra dev && uvicorn app.main:app --reload --host 127.0.0.1 --port "${API_HOST_PORT:-8000}"
 # Terminal 3
 cd client && npm install && npm run dev
 ```
 
-Open `http://127.0.0.1:5173`. Or use Compose: `docker compose --profile dev up` (see [getting started](docs/getting-started.md)).
+Open `http://127.0.0.1:${CLIENT_HOST_PORT:-5173}`. Or use Compose: `cp .env.example .env` then `docker compose --profile dev up` (see [getting started](docs/getting-started.md)). Per-worktree ports: `API_HOST_PORT`, `CLIENT_HOST_PORT`, `COMPOSE_PROJECT_NAME`.
 
 ## Docs
 

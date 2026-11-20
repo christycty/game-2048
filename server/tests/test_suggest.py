@@ -186,6 +186,28 @@ def test_other_origins_cannot_call_suggest() -> None:
     assert response.headers.get("access-control-allow-origin") is None
 
 
+def test_cors_follows_client_host_port() -> None:
+    app = create_app(isolated_settings(client_host_port=5180), FakeLLM([]))
+    client = TestClient(app)
+    allowed = client.options(
+        "/suggest",
+        headers={
+            "Origin": "http://127.0.0.1:5180",
+            "Access-Control-Request-Method": "POST",
+            "Access-Control-Request-Headers": "content-type",
+        },
+    )
+    assert allowed.headers["access-control-allow-origin"] == "http://127.0.0.1:5180"
+    blocked = client.options(
+        "/suggest",
+        headers={
+            "Origin": "http://127.0.0.1:5173",
+            "Access-Control-Request-Method": "POST",
+        },
+    )
+    assert blocked.headers.get("access-control-allow-origin") is None
+
+
 def test_docs_follow_environment() -> None:
     assert _client(FakeLLM([])).get("/docs").status_code == 200
     assert _client(FakeLLM([]), env="prod").get("/docs").status_code == 404

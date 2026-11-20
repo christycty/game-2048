@@ -7,29 +7,41 @@ How the client, API, and host Ollama run together. Human quick path: [../getting
 Typical loop:
 
 1. Ollama on the host at `http://localhost:11434`, with the model named in `OLLAMA_MODEL` (default `gemma4:latest`).
-2. API from `server/` on `127.0.0.1:8000`.
-3. Client from `client/` on `127.0.0.1:5173` (`npm run dev`).
+2. API from `server/` on `127.0.0.1:${API_HOST_PORT}` (default `8000`).
+3. Client from `client/` on `127.0.0.1:${CLIENT_HOST_PORT}` (default `5173`; Vite loads those names from the repo-root `.env`).
 
-The page calls **same-origin** `/suggest` by default. Vite proxies that path to `http://127.0.0.1:8000` (override with `API_PROXY_TARGET`). Set `VITE_API_BASE_URL` to an absolute API origin only when you intentionally bypass the proxy. CORS still allows `http://localhost:5173` and `http://127.0.0.1:5173` for that absolute-origin case.
+The page calls **same-origin** `/suggest` by default. Vite proxies that path to `http://127.0.0.1:${API_HOST_PORT}` (override with `API_PROXY_TARGET`). Set `VITE_API_BASE_URL` to an absolute API origin only when you intentionally bypass the proxy. CORS allows `http://localhost:${CLIENT_HOST_PORT}` and `http://127.0.0.1:${CLIENT_HOST_PORT}` for that absolute-origin case.
 
-Host API env comes from `server/.env` or the shell. Copy `server/.env.example` for local uvicorn. That file is not read by Compose for the API container.
+Host API env comes from `server/.env` or the shell. Copy `server/.env.example` for local uvicorn. That file is not read by Compose for the API container. Keep `CLIENT_HOST_PORT` in sync with the page port when you use absolute API URLs.
+
+## Worktrees and ports
+
+Multiple checkouts on one machine collide on Compose project name and on host ports. In the repo-root `.env` (from `.env.example`):
+
+| Variable | Role |
+|---|---|
+| `COMPOSE_PROJECT_NAME` | Distinct Compose project (networks, volumes, container names) |
+| `API_HOST_PORT` | Host loopback port published for the **dev** API (default `8000`) |
+| `CLIENT_HOST_PORT` | Host loopback port for Vite / nginx (default `5173`); also drives API CORS |
+
+Container-listen ports stay `8000` (API) and `5173` / `80` (client). Only the **host** mapping moves.
 
 ## Compose
 
 From the repo root:
 
 ```bash
-cp .env.example .env   # optional; see COMPOSE_OLLAMA_BASE_URL notes below
+cp .env.example .env   # then set COMPOSE_PROJECT_NAME + ports for this worktree
 docker compose --profile dev up
 docker compose --profile prod up
 ```
 
 | Profile | Services | Ports (loopback only) |
 |---|---|---|
-| `dev` | `dev` (API with reload), `client-dev` (Vite) | API `8000`, client `5173` |
-| `prod` | `prod` (API, **unpublished**), `client` (nginx) | client `5173`→container `80` only |
+| `dev` | `dev` (API with reload), `client-dev` (Vite) | API `${API_HOST_PORT}`→8000, client `${CLIENT_HOST_PORT}`→5173 |
+| `prod` | `prod` (API, **unpublished**), `client` (nginx) | client `${CLIENT_HOST_PORT}`→80 only |
 
-Published ports bind `127.0.0.1` and `::1` so a LAN peer cannot reach them. Prod does **not** publish the API. The page origin stays on 5173; nginx in the client image forwards `/suggest` to `prod:8000` on the Compose network (Docker DNS `127.0.0.11`, 30s read timeout for the suggestion budget). Dev Compose still publishes the API so a host process can call it; `client-dev` sets `API_PROXY_TARGET=http://dev:8000`.
+Published ports bind `127.0.0.1` and `::1` so a LAN peer cannot reach them. Prod does **not** publish the API. The page origin is the client host port; nginx in the client image forwards `/suggest` to `prod:8000` on the Compose network (Docker DNS `127.0.0.11`, 30s read timeout for the suggestion budget). Dev Compose still publishes the API so a host process can call it; `client-dev` sets `API_PROXY_TARGET=http://dev:8000`.
 
 Ollama stays on the host. Inside the API container the default URL is `http://host.docker.internal:11434`. Set `COMPOSE_OLLAMA_BASE_URL` in the root `.env` to override that. Do not set `OLLAMA_BASE_URL` in the root `.env`: that name is for a host uvicorn process (`server/.env.example` uses localhost), and Compose must not replace the container URL with it.
 
@@ -56,7 +68,7 @@ Server image: `python:3.12-slim`, `pip install -e .`, uvicorn on `0.0.0.0:8000`.
 
 - Server: install, `ruff format --check`, `ruff check`, `pytest` (e2e off).
 - Client: install, lint, test, build.
-- Docker: build both images, curl `/health` on the server image without Ollama, check Compose config for the default Ollama URL, loopback port bindings, and that **prod publishes no host ports**.
+- Docker: build both images, curl `/health` on the server image without Ollama, check Compose config for the default Ollama URL, loopback port bindings, that **prod publishes no host ports**, and that `API_HOST_PORT` / `CLIENT_HOST_PORT` remaps publish.
 
 ## Not in this layout
 
