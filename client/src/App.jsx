@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import Board from "./components/Board";
 import ScoreCard from "./components/ScoreCard";
 import ActionPanel from "./components/ActionPanel";
-import { suggestMove } from "./api";
+import { suggestMove, SuggestError } from "./api";
 import { applyMove, createInitialTiles, hasMoves, SETTLE_MS, tilesToBoard } from "./game";
 import "./App.css";
 
@@ -174,10 +174,14 @@ function App() {
 
             setPendingMove(suggestion.move);
             setHint(hintText);
-        } catch {
+        } catch (error) {
             if (suggestTokenRef.current !== token) return;
             setPendingMove(null);
-            setHint("AI could not suggest a move");
+            setHint(
+                error instanceof SuggestError && error.status === 429
+                    ? "Too many suggestions. Wait a moment and try again."
+                    : "AI could not suggest a move",
+            );
             stopAutoPlay();
         } finally {
             if (suggestTokenRef.current === token) {

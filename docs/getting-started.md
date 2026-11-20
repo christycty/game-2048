@@ -12,36 +12,39 @@ Two ways to run: local processes (typical while hacking) or Compose profiles.
 ## Path A — local processes
 
 ```bash
+cp .env.example .env   # optional; set API_HOST_PORT / CLIENT_HOST_PORT if 8000/5173 are taken
+
 # 1. Ollama listening on http://localhost:11434
 
-# 2. API
+# 2. API (use the same API_HOST_PORT as .env)
 cd server
-cp .env.example .env   # optional
+cp .env.example .env   # optional; keep CLIENT_HOST_PORT in sync
 uv sync --extra dev
-uvicorn app.main:app --reload --host 127.0.0.1 --port 8000
+uvicorn app.main:app --reload --host 127.0.0.1 --port "${API_HOST_PORT:-8000}"
 
-# 3. Client
+# 3. Client (Vite reads repo-root .env for CLIENT_HOST_PORT / API_HOST_PORT)
 cd client
 npm install
 npm run dev
 ```
 
-Open `http://127.0.0.1:5173`. The page calls `http://localhost:8000` unless `VITE_API_BASE_URL` is set.
+Open `http://127.0.0.1:${CLIENT_HOST_PORT:-5173}`. The page calls same-origin `/suggest`; Vite proxies it to the API host port unless `VITE_API_BASE_URL` is set.
 
 ## Path B — Compose
 
 ```bash
-cp .env.example .env   # optional; see notes in that file
+cp .env.example .env   # set COMPOSE_PROJECT_NAME + ports for this worktree
 docker compose --profile dev up    # API + Vite
 # or
-docker compose --profile prod up   # API + nginx static client
+docker compose --profile prod up   # nginx client; API unpublished
 ```
 
-`docker compose up` with no profile starts nothing. Published ports are loopback-only (`8000` API, `5173` client).
+`docker compose up` with no profile starts nothing. Published ports are loopback-only. Defaults are API `8000` and client `5173`; override with `API_HOST_PORT` / `CLIENT_HOST_PORT`. Prod publishes only the client; nginx forwards `/suggest`.
 
 ## It worked if…
 
-- `GET http://127.0.0.1:8000/health` returns `{"status":"ok"}` (even if Ollama is down).
+- Path A / Compose **dev**: `GET http://127.0.0.1:${API_HOST_PORT:-8000}/health` returns `{"status":"ok"}` (even if Ollama is down).
+- Compose **prod**: the board loads at the client host port and **AI** still returns a suggestion (nginx proxies `/suggest`).
 - The board loads; arrow keys or swipe move tiles and update score.
 - **AI** (LLM) returns a suggestion when Ollama and the model are up; **Play** applies that move.
 
@@ -58,4 +61,4 @@ npm run lint
 npm run build
 ```
 
-Env pitfalls, Linux Docker + Ollama, and image builds: [agents/runtime.md](agents/runtime.md).
+Env pitfalls, worktree ports, Linux Docker + Ollama, rate limits, and image builds: [agents/runtime.md](agents/runtime.md).

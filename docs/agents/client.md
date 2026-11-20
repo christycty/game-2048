@@ -10,13 +10,13 @@ From `client/`:
 
 ```bash
 npm install
-npm run dev       # Vite dev server on :5173
+npm run dev       # Vite on CLIENT_HOST_PORT (default 5173; reads repo-root .env)
 npm test          # Vitest for React components, then node:test for game.js, swipe.js, and api.js
 npm run lint      # oxlint
 npm run build     # production bundle
 ```
 
-The page calls the API at `VITE_API_BASE_URL`, or `http://localhost:8000` when that env is unset. There is no Vite proxy. CORS on the API allows the Vite origins. See [runtime.md](runtime.md) for Compose and Docker.
+The page calls same-origin `/suggest` by default. Vite proxies that path to the API (`API_PROXY_TARGET`, or `http://127.0.0.1:${API_HOST_PORT:-8000}`). Set `VITE_API_BASE_URL` to an absolute origin only to bypass the proxy. CORS follows `CLIENT_HOST_PORT` for that case. See [runtime.md](runtime.md) for Compose, Docker, and worktree ports.
 
 Stack: React 19, Vite, plain JavaScript. The page title is 2048. The app mounts from `index.html` into `#root` through `src/main.jsx`.
 
@@ -79,7 +79,8 @@ A manual board-changing move while Auto Play is running stops Auto Play.
 2. Calls `suggestMove(tilesToBoard(tiles), aiMode)`.
 3. If `source` is `"fallback"`, shows **AI could not suggest a move**, does not offer **Play**, and stops Auto Play. The fixed fallback order is not treated as a model choice.
 4. On a usable body, shows `Suggested: {Move}.` plus the reason when present. If Auto Play is off, sets `pendingMove`. If Auto Play is on, applies the move immediately via `handleMove` (marked as an auto-apply so the loop is not treated as a manual takeover).
-5. On network or HTTP failure, shows the same error line as fallback and stops Auto Play.
+5. On HTTP `429`, shows **Too many suggestions. Wait a moment and try again.**, does not offer **Play**, and stops Auto Play.
+6. On other network or HTTP failure, shows the same error line as fallback and stops Auto Play.
 
 After an Auto Play move settles, if Auto Play is still on and the game is not lost, `App` calls `handleSuggest` again. Loss, **Stop**, **New Game**, a manual move, or an unusable suggestion ends the loop.
 
@@ -124,11 +125,11 @@ A swipe starts on pointer down (left button only for a mouse), captures the poin
 
 - `src/game.test.js` covers the deal, ids, slides, single merges, blocked moves, spawn timing, loss, and `tilesToBoard`.
 - `src/swipe.test.js` covers the threshold and axis choice.
-- `src/api.test.js` covers the default `/suggest` URL, success body, and `SuggestError` statuses.
-- `src/App.test.jsx` covers score timing, shared swipe and key paths, best score across a new game, a cancelled slide, a lost game ignoring input, suggest-then-confirm, Auto Play apply/loop/stop/fallback/manual takeover, mode selection, fallback and failed requests, and dropping a stale suggestion after a board-changing move.
+- `src/api.test.js` covers the default same-origin `/suggest` URL, success body, and `SuggestError` statuses including 429.
+- `src/App.test.jsx` covers score timing, shared swipe and key paths, best score across a new game, a cancelled slide, a lost game ignoring input, suggest-then-confirm, Auto Play apply/loop/stop/fallback/manual takeover, mode selection, fallback / rate-limit / failed requests, and dropping a stale suggestion after a board-changing move.
 - `src/components/Board.test.jsx` covers the slide, overlay stacking, and pointer capture.
 - `src/components/ScoreCard.test.jsx` covers opening and closing help.
 
 ## Not built yet
 
-There is no undo, no leaderboard, and no saved best score. The client does not proxy `/suggest` through Vite or nginx, and does not surface `source` beyond treating `"fallback"` as an error. Help text still mentions only keys and swipe.
+There is no undo, no leaderboard, and no saved best score. The client does not surface `source` beyond treating `"fallback"` as an error. Help text still mentions only keys and swipe.

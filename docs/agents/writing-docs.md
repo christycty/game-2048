@@ -54,7 +54,7 @@ If a human section has **no diagram and more than ~15 lines**, it probably belon
 
 **Prefer:**
 
-- Constraints and invariants (“no Vite proxy”, “best score is session-only”)
+- Constraints and invariants (“prod API unpublished”, “best score is session-only”)
 - Tables for behavior, HTTP, settings, layout
 - “Not built yet” / “Not in this layout” sections
 - Commands that actually run in this repo
