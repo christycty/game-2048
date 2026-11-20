@@ -14,7 +14,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from app.cancel import SuggestCancelled
-from app.expectimax import choose_move
+from app.expectimax import Choice, choose_move
 from app.llm import ModelSuggestion, OllamaClient
 from app.main import DisconnectCancelMiddleware, create_app
 from app.rate_limit import SuggestRateLimiter
@@ -58,6 +58,42 @@ class BlockingLLM:
             if self.release.is_set():
                 return ModelSuggestion("right", "ok")
             time.sleep(0.01)
+
+
+class BlockingExpectimax:
+    """Stand-in for choose_move: blocks until cancel or release (real search is too fast)."""
+
+    def __init__(self) -> None:
+        self.started = threading.Event()
+        self.release = threading.Event()
+        self.cancelled_with: threading.Event | None = None
+        self.calls = 0
+        self._lock = threading.Lock()
+
+    def __call__(
+        self,
+        board: list[list[int]],
+        *,
+        depth: int | None = None,
+        budget_seconds: float | None = None,
+        clock: object | None = None,
+        cancel: threading.Event | None = None,
+    ) -> Choice:
+        with self._lock:
+            self.calls += 1
+        self.started.set()
+        while True:
+            if cancel is not None and cancel.is_set():
+                self.cancelled_with = cancel
+                raise SuggestCancelled()
+            if self.release.is_set():
+                return Choice("right", "Score of each direction: Right = 1.0")
+            time.sleep(0.01)
+
+
+class UnusedLLM:
+    def suggest_move(self, *args: object, **kwargs: object) -> ModelSuggestion:
+        raise AssertionError("llm must not run for expectimax suggest")
 
 
 def test_suggester_raises_when_cancel_set_before_llm() -> None:
@@ -423,6 +459,78 @@ def test_asgi_disconnect_cancels_blocking_llm() -> None:
         assert llm.cancelled_with is not None
         assert status_a == 499
         llm.release.set()
+        status_b = await asyncio.wait_for(task_b, timeout=3)
+        assert status_b == 200
+
+    asyncio.run(run())
+
+
+def test_asgi_disconnect_cancels_blocking_expectimax(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Full stack expectimax: disconnect A while both run → A 499, concurrent B still 200."""
+    search = BlockingExpectimax()
+    monkeypatch.setattr("app.suggester.choose_move", search)
+    settings = isolated_settings(
+        suggest_rate_limit_requests=10,
+        suggest_rate_limit_expectimax_requests=10,
+    )
+    app = create_app(settings, UnusedLLM())
+    body = json.dumps({"board": OPEN_BOARD, "mode": "expectimax"}).encode()
+
+    async def one_call(*, disconnect_gate: asyncio.Event | None) -> int | None:
+        scope = {
+            "type": "http",
+            "asgi": {"version": "3.0"},
+            "http_version": "1.1",
+            "method": "POST",
+            "scheme": "http",
+            "path": "/suggest",
+            "raw_path": b"/suggest",
+            "query_string": b"",
+            "headers": [
+                (b"host", b"test"),
+                (b"content-type", b"application/json"),
+                (b"content-length", str(len(body)).encode()),
+            ],
+            "client": ("127.0.0.1", 50000),
+            "server": ("test", 80),
+            "state": {},
+        }
+        messages: list[dict] = [{"type": "http.request", "body": body, "more_body": False}]
+        sent: list[dict] = []
+
+        async def receive() -> dict:
+            if messages:
+                return messages.pop(0)
+            if disconnect_gate is not None:
+                await disconnect_gate.wait()
+                return {"type": "http.disconnect"}
+            await asyncio.sleep(60)
+            return {"type": "http.disconnect"}
+
+        async def send(message: dict) -> None:
+            sent.append(message)
+
+        await app(scope, receive, send)
+        return next(
+            (m.get("status") for m in sent if m.get("type") == "http.response.start"),
+            None,
+        )
+
+    async def run() -> None:
+        gate = asyncio.Event()
+        task_a = asyncio.create_task(one_call(disconnect_gate=gate))
+        task_b = asyncio.create_task(one_call(disconnect_gate=None))
+        deadline = time.monotonic() + 2
+        while search.calls < 2 and time.monotonic() < deadline:
+            await asyncio.sleep(0.01)
+        assert search.calls == 2
+        gate.set()
+        status_a = await asyncio.wait_for(task_a, timeout=3)
+        assert search.cancelled_with is not None
+        assert status_a == 499
+        search.release.set()
         status_b = await asyncio.wait_for(task_b, timeout=3)
         assert status_b == 200
 
