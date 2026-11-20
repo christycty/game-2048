@@ -28,7 +28,7 @@ npm install
 npm run dev
 ```
 
-Open `http://127.0.0.1:${CLIENT_HOST_PORT:-5173}`. The page calls same-origin `/suggest`; Vite proxies it to the API host port unless `VITE_API_BASE_URL` is set.
+Open `http://127.0.0.1:${CLIENT_HOST_PORT:-5173}`. By default the page calls same-origin `/suggest` and Vite proxies it to the API host port. Set `VITE_API_BASE_URL` to an absolute API origin to call the API directly (CORS applies; the Vite proxy is unused).
 
 ## Path B — Compose
 

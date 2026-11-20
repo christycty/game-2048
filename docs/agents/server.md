@@ -1,6 +1,6 @@
 # Server
 
-FastAPI service that suggests the next 2048 move. The process is healthy even when Ollama is down. An LLM failure still returns a legal move from a fixed order. Expectimax runs a depth-limited search and does not call the model.
+FastAPI service that suggests the next 2048 move. The process is healthy even when Ollama is down. On LLM exhaustion the API still returns HTTP 200 with `source: "fallback"` and a legal move from a fixed order; the client treats fallback as an unusable suggestion (no **Play**—same as other failures). Expectimax runs a depth-limited search and does not call the model.
 
 Agent/implementer detail for the API. Human architecture overview: [../architecture.md](../architecture.md). Product rules: [prd.md](prd.md).
 
@@ -117,7 +117,7 @@ Loaded from the environment and optional `server/.env` (Compose does not use tha
 | `SUGGEST_RATE_LIMIT_REQUESTS` | `5` | 1–30; process-wide |
 | `SUGGEST_RATE_LIMIT_WINDOW_SECONDS` | `60` | 1–3600 |
 | `CLIENT_HOST_PORT` | `5173` | 1–65535; CORS allowlist |
-| `EXPORT_TRACES` | `true` | CI sets `false` |
+| `EXPORT_TRACES` | `true` | Host uvicorn / one-off image runs honor this env; CI pytest and smoke `docker run` set `false`. Compose `dev`/`prod` hardcode `true` (see [runtime.md](runtime.md)) |
 | `PHOENIX_COLLECTOR_ENDPOINT` | `http://localhost:6006` | Host process default |
 | `PHOENIX_API_KEY` | unset | Optional |
 

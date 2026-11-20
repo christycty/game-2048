@@ -64,16 +64,21 @@ flowchart LR
     Moves[moves.py]
     Expectimax[expectimax.py]
     LLM[llm.py]
+    Telemetry[telemetry.py]
     Main --> Limit
     Main --> Suggester
+    Main --> Telemetry
     Suggester --> Moves
     Suggester --> Expectimax
     Suggester --> LLM
+    Suggester --> Telemetry
+    LLM --> Telemetry
   end
   Api --> Main
+  Telemetry -.->|OTLP when EXPORT_TRACES| Phoenix[Phoenix]
 ```
 
-Client owns the playable rules and UI. Server owns suggestion modes, the process-wide rate limit, legality checks for the coach, expectimax search, and the Ollama client. Both sides implement the same slide/merge rules so “legal” means the same thing.
+Client owns the playable rules and UI. Server owns suggestion modes, the process-wide rate limit, legality checks for the coach, expectimax search, the Ollama client, and optional Phoenix tracing. Both sides implement the same slide/merge rules so “legal” means the same thing.
 
 ## Stack
 
@@ -83,7 +88,7 @@ Client owns the playable rules and UI. Server owns suggestion modes, the process
 | API | Python 3.12, FastAPI, Pydantic |
 | Model | Host Ollama (`OLLAMA_MODEL`, default `gemma4:latest`) |
 | Run | Local processes or Docker Compose profiles `dev` / `prod` |
-| CI | Lint, test, image build, Compose config checks |
+| CI | Docs scripts + link check, lint/test, client build, image build, Compose config checks |
 
 ## Deploy profiles
 

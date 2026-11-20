@@ -26,7 +26,7 @@ Multiple checkouts on one machine collide on Compose project name and on host po
 
 Container-listen ports stay `8000` (API) and `5173` / `80` (client). Only the **host** mapping moves.
 
-Default LLM attempt timeout is 20s and suggestion budget 40s (budget must cover two attempts). Optional Phoenix export uses `EXPORT_TRACES` and `PHOENIX_COLLECTOR_ENDPOINT` on the host process; Compose injects `COMPOSE_PHOENIX_COLLECTOR_ENDPOINT` into the API container the same way it does for Ollama.
+Default LLM attempt timeout is 20s and suggestion budget 40s (budget must cover two attempts). Phoenix export: host uvicorn respects `EXPORT_TRACES` / `PHOENIX_COLLECTOR_ENDPOINT` from `server/.env` (or the shell). Compose `dev` / `prod` API services hardcode `EXPORT_TRACES=true` and inject `COMPOSE_PHOENIX_COLLECTOR_ENDPOINT` the same way they do for Ollama—turning export off for Compose requires changing `docker-compose.yml`.
 
 ## Compose
 
@@ -68,9 +68,10 @@ Server image: `python:3.12-slim`, `pip install -e .`, uvicorn on `0.0.0.0:8000`.
 
 `.github/workflows/ci.yml`:
 
-- Server: install, `ruff format --check`, `ruff check`, `pytest` (e2e off).
+- Docs: script unit tests, `check_doc_links.py`, freshness nudge (`check_docs_freshness.py`).
+- Server: install, `ruff format --check`, `ruff check`, `pytest` (e2e off; `EXPORT_TRACES` off for tests).
 - Client: install, lint, test, build.
-- Docker: build both images, curl `/health` on the server image without Ollama, check Compose config for the default Ollama URL, loopback port bindings, that **prod publishes no host ports**, and that `API_HOST_PORT` / `CLIENT_HOST_PORT` remaps publish.
+- Docker: build both images, curl `/health` on the server image without Ollama, check Compose config for the default Ollama URL, loopback port bindings, that **prod publishes no host ports**, that `API_HOST_PORT` / `CLIENT_HOST_PORT` remaps publish, and that Compose API services keep `EXPORT_TRACES=true`.
 
 ## Not in this layout
 
