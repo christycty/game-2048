@@ -2,7 +2,13 @@ import time
 
 import pytest
 
-from app.expectimax import _BUDGET_SECONDS, _chance_value, _freeze, choose_move
+from app.expectimax import (
+    _BUDGET_SECONDS,
+    _SearchBroken,
+    _chance_value,
+    _freeze,
+    choose_move,
+)
 from app.moves import first_legal_move, legal_moves
 from helpers import COLUMN_PAIR, SORTED_ROW
 
@@ -119,6 +125,27 @@ def test_a_cutoff_keeps_the_last_finished_depth() -> None:
     assert kept == shallow
 
 
+def test_cutoff_before_any_depth_returns_none() -> None:
+    # Expiring before depth 0 finishes must not invent a score line where N/A
+    # would mean "illegal". The suggester treats None as fallback.
+    board = [
+        [2, 0, 0, 0],
+        [0, 0, 0, 0],
+        [0, 0, 0, 0],
+        [0, 0, 0, 0],
+    ]
+    started = False
+
+    def expire_before_depth_zero() -> float:
+        nonlocal started
+        if not started:
+            started = True
+            return 0.0
+        return 1.0
+
+    assert choose_move(board, budget_seconds=0.5, clock=expire_before_depth_zero) is None
+
+
 def test_returns_none_when_the_board_is_stuck() -> None:
     board = [
         [2, 4, 8, 16],
@@ -189,8 +216,27 @@ def test_chance_node_rejects_a_full_board() -> None:
             [8192, 16384, 32768, 65536],
         ]
     )
-    with pytest.raises(AssertionError, match="full board"):
+    with pytest.raises(_SearchBroken, match="full board"):
         _chance_value(full, 0, {})
+
+
+def test_full_board_at_a_chance_node_aborts_the_search(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Force the unreachable chance-node path through choose_move so the
+    # request layer gets None and can fall back instead of a 500.
+    board = [
+        [2, 0, 0, 0],
+        [0, 0, 0, 0],
+        [0, 0, 0, 0],
+        [0, 0, 0, 0],
+    ]
+
+    def boom(_board, _depth, _cache, deadline=None, clock=None):
+        raise _SearchBroken("chance node reached a full board")
+
+    monkeypatch.setattr("app.expectimax._chance_value", boom)
+    assert choose_move(board, depth=0) is None
 
 
 def test_reason_lists_a_score_or_na_for_each_direction() -> None:

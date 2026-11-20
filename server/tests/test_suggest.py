@@ -193,6 +193,21 @@ def test_expectimax_drops_an_illegal_search_move(monkeypatch: pytest.MonkeyPatch
     }
 
 
+def test_expectimax_falls_back_when_search_returns_none(monkeypatch: pytest.MonkeyPatch) -> None:
+    # Budget expired before any depth, or search aborted — not a scored move.
+    monkeypatch.setattr("app.suggester.choose_move", lambda _board: None)
+    response = _client(FakeLLM([])).post(
+        "/suggest", json={"board": OPEN_BOARD, "mode": "expectimax"}
+    )
+    assert response.status_code == 200
+    assert response.json() == {
+        "move": "right",
+        "mode": "expectimax",
+        "source": "fallback",
+        "reason": None,
+    }
+
+
 def test_expectimax_stuck_board_is_conflict() -> None:
     response = _client(FakeLLM([])).post(
         "/suggest", json={"board": STUCK_BOARD, "mode": "expectimax"}
@@ -483,9 +498,9 @@ def test_attempt_count_stays_between_one_and_five() -> None:
         isolated_settings(llm_attempt_timeout_seconds=30)
     with pytest.raises(ValidationError):
         isolated_settings(llm_suggest_budget_seconds=60)
-    # 20s attempts need a 40s budget. A shorter budget would skip the retry.
-    with pytest.raises(ValidationError):
-        isolated_settings(llm_attempt_timeout_seconds=20, llm_suggest_budget_seconds=30)
+    # 20s attempts need a 40s budget. A stale shorter budget is raised to the floor.
+    raised = isolated_settings(llm_attempt_timeout_seconds=20, llm_suggest_budget_seconds=30)
+    assert raised.llm_suggest_budget_seconds == 40
     shorter = isolated_settings(llm_attempt_timeout_seconds=10, llm_suggest_budget_seconds=20)
     assert shorter.llm_attempt_timeout_seconds == 10
     assert shorter.llm_suggest_budget_seconds == 20

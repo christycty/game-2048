@@ -30,8 +30,8 @@ class Settings(BaseSettings):
 
     @model_validator(mode="after")
     def budget_covers_two_attempts(self) -> "Settings":
-        # A slow first call still needs time for one retry. The caps allow a
-        # 20s attempt with a shorter budget, which would skip the model entirely.
-        if self.llm_suggest_budget_seconds < self.llm_attempt_timeout_seconds * 2:
-            raise ValueError("suggestion budget must cover two attempt timeouts")
+        # Raise a stale short budget up to two attempt timeouts (upgrade-safe).
+        needed = self.llm_attempt_timeout_seconds * 2
+        if self.llm_suggest_budget_seconds < needed:
+            self.llm_suggest_budget_seconds = needed
         return self

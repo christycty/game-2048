@@ -84,13 +84,13 @@ Score of each direction: Left = N/A, Right = 1053.4, Up = N/A, Down = 771.2
 
 1. Builds the legal move set with the same slide rules as the client.
 2. Picks a fallback: first direction in `FALLBACK_ORDER` (`left`, `up`, `right`, `down`) that is legal. None → `NoLegalMove` → HTTP 409.
-3. **`expectimax`**: `choose_move` runs depth-limited expectimax (chance node: uniform empty cell, 2 at 90% / 4 at 10%). Returns `source: "expectimax"` with the score-line `reason`. If search returns a non-legal move, substitutes the fallback with `source: "fallback"`.
+3. **`expectimax`**: `choose_move` runs depth-limited expectimax (chance node: uniform empty cell, 2 at 90% / 4 at 10%). Returns `source: "expectimax"` with the score-line `reason`. If search returns a non-legal move, or returns nothing (budget expired before any depth finished, or an unreachable state), substitutes the fallback with `source: "fallback"`.
 4. **`llm`**: up to `LLM_MAX_ATTEMPTS` calls, stopped early when the remaining `LLM_SUGGEST_BUDGET_SECONDS` cannot cover another `LLM_ATTEMPT_TIMEOUT_SECONDS` wait.
 5. Accepts a reply only when the move is legal and the reason is a non-blank string after strip.
 6. Retries on illegal moves (recorded as rejected), blank reasons, and `LlmError`.
 7. After exhaustion: `source: "fallback"`, `move` is the fallback, `reason` is null.
 
-Expectimax depth: open boards (≥8 empties) search to depth 1; tighter boards to depth 2. Wall budget ~0.5s with iterative deepening (keeps the last finished depth).
+Expectimax depth: open boards (≥8 empties) search to depth 1; tighter boards to depth 2. Wall budget ~0.5s with iterative deepening (keeps the last finished depth; if none finished, falls back). `N/A` in the reason means that direction is illegal, not unscored.
 
 ## LLM (`OllamaClient`)
 
@@ -112,7 +112,7 @@ Loaded from the environment and optional `server/.env` (Compose does not use tha
 | `OLLAMA_STRUCTURED_OUTPUT` | `true` | Forced off in prod |
 | `LLM_MAX_ATTEMPTS` | `3` | 1–5 |
 | `LLM_ATTEMPT_TIMEOUT_SECONDS` | `20` | >0, ≤20 |
-| `LLM_SUGGEST_BUDGET_SECONDS` | `40` | >0, ≤40; must be ≥ 2× attempt timeout |
+| `LLM_SUGGEST_BUDGET_SECONDS` | `40` | >0, ≤40; raised to 2× attempt timeout when lower |
 | `EXPORT_TRACES` | `true` | CI sets `false` |
 | `PHOENIX_COLLECTOR_ENDPOINT` | `http://localhost:6006` | Host process default |
 | `PHOENIX_API_KEY` | unset | Optional |

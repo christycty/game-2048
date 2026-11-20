@@ -14,20 +14,22 @@ from typing import NamedTuple
 from app.moves import DIRECTIONS, FALLBACK_ORDER, apply_move
 
 Board = tuple[tuple[int, ...], ...]
-# Tests pass a fake clock so the budget can expire on the next read, without
-# sleeping through a real timeout. Production omits it and uses monotonic time.
+# Tests inject a fake clock; production uses monotonic time.
 _Clock = Callable[[], float]
 _SIZE = 4
 _TWO_PROB = 0.9
 _FOUR_PROB = 0.1
-# Game-over leaves need a hard penalty so the search avoids trapping itself.
-_GAME_OVER = -1_000_000.0
+_GAME_OVER = -1_000_000.0  # worse than any living board
 _FALLBACK_RANK = {direction: index for index, direction in enumerate(FALLBACK_ORDER)}
-# Depth is extra plies after the root move, and each ply spawns on every empty cell.
-# Depth 3+ held the suggestion request for seconds, so the request path stays at 1 or 2
-# and still gives up once the budget is spent.
+# Depth 3+ was too slow for /suggest; stay at 1–2 and cut on this wall budget.
 _BUDGET_SECONDS = 0.5
-_REASON_ORDER = ("left", "right", "up", "down")
+_OPEN_BOARD_EMPTIES = 8  # ≥ this → depth 1; tighter boards → depth 2
+# Leaf heuristic weights (tuned for shallow search, not tournament play).
+_EMPTY_WEIGHT = 270.0
+_MAX_TILE_WEIGHT = 20.0
+_SMOOTHNESS_WEIGHT = 12.0
+_MONOTONICITY_WEIGHT = 20.0
+_CORNER_BONUS = 50.0
 _REASON_LABEL = {"left": "Left", "right": "Right", "up": "Up", "down": "Down"}
 
 
@@ -40,6 +42,10 @@ class _TimeUp(Exception):
     """The suggestion budget ran out before this depth finished."""
 
 
+class _SearchBroken(Exception):
+    """Search hit a board state that should be unreachable."""
+
+
 def choose_move(
     board: list[list[int]],
     *,
@@ -47,40 +53,42 @@ def choose_move(
     budget_seconds: float | None = None,
     clock: _Clock | None = None,
 ) -> Choice | None:
-    """Return the best legal direction and score line, or None when stuck."""
+    """Best legal move and score line, or None if stuck / unscored / broken."""
     root = _freeze(board)
     legal = _legal_directions(root)
     if not legal:
         return None
 
     now = clock or time.monotonic
-    # An explicit depth with no budget is one complete search. Tests use that
-    # path so the result does not depend on how fast the machine is.
+    # depth set, no budget → one full search (deterministic for tests).
     if depth is not None and budget_seconds is None:
-        move, scores = _best_at_depth(root, legal, depth, deadline=None, clock=now)
+        try:
+            move, scores = _best_at_depth(root, legal, depth, deadline=None, clock=now)
+        except _SearchBroken:
+            return None
         return Choice(move, _format_reason(scores))
 
     limit = _depth_for(root) if depth is None else depth
     seconds = _BUDGET_SECONDS if budget_seconds is None else budget_seconds
     deadline = now() + seconds
-    # Keep the last depth that finished. A cutoff mid-depth must not compare a
-    # half-scored move with a fully scored one.
-    best = legal[0]
+    # Keep only fully finished depths so partial scores never win.
+    best: str | None = None
     scores: dict[str, float | None] | None = None
     try:
         for current in range(limit + 1):
             best, scores = _best_at_depth(root, legal, current, deadline, now)
     except _TimeUp:
         pass
-    if scores is None:
-        # Cut off before any depth finished; still label illegal moves as N/A.
-        scores = {direction: None for direction in DIRECTIONS}
+    except _SearchBroken:
+        return None
+    if scores is None or best is None:
+        return None  # nothing finished; N/A means illegal, not unscored
     return Choice(best, _format_reason(scores))
 
 
 def _format_reason(scores: dict[str, float | None]) -> str:
     parts: list[str] = []
-    for direction in _REASON_ORDER:
+    for direction in DIRECTIONS:
         value = scores[direction]
         shown = "N/A" if value is None else f"{value:.1f}"
         parts.append(f"{_REASON_LABEL[direction]} = {shown}")
@@ -88,9 +96,8 @@ def _format_reason(scores: dict[str, float | None]) -> str:
 
 
 def _depth_for(board: Board) -> int:
-    # Open boards branch on every empty cell, so they get one ply. Tighter
-    # boards can afford a second. Neither is deep enough to stall the request.
-    if _empty_count(board) >= 8:
+    # Open boards fan out on every empty; keep them shallow.
+    if _empty_count(board) >= _OPEN_BOARD_EMPTIES:
         return 1
     return 2
 
@@ -117,7 +124,6 @@ def _best_at_depth(
 
 
 def _check(deadline: float | None, clock: _Clock) -> None:
-    # No deadline means the caller asked for a full search, so the clock stays unread.
     if deadline is not None and clock() >= deadline:
         raise _TimeUp
 
@@ -135,9 +141,10 @@ def _chance_value(
     if cached is not None:
         return cached
 
-    # A legal slide always leaves an empty cell, so the spawn has a place to land.
+    # Legal slides always leave ≥1 empty for the spawn.
     empties = _empty_cells(board)
-    assert empties, "chance node reached a full board"
+    if not empties:
+        raise _SearchBroken("chance node reached a full board")
     total = 0.0
     weight = 1.0 / len(empties)
     for row, col in empties:
@@ -163,7 +170,6 @@ def _max_value(
 
     legal = _legal_directions(board)
     if not legal:
-        # Must beat a merely cramped living board, including at depth-0 leaves.
         value = _GAME_OVER
         cache[key] = value
         return value
@@ -184,15 +190,14 @@ def _max_value(
 def _evaluate(board: Board) -> float:
     empty = _empty_count(board)
     max_tile = max(value for row in board for value in row)
-    score = empty * 270.0
+    score = empty * _EMPTY_WEIGHT
     if max_tile:
-        score += math.log2(max_tile) * 20.0
+        score += math.log2(max_tile) * _MAX_TILE_WEIGHT
     score += _smoothness(board)
     score += _monotonicity(board)
-    # Keep the highest tile in a corner when possible.
     corners = (board[0][0], board[0][3], board[3][0], board[3][3])
     if max_tile and max_tile in corners:
-        score += 50.0
+        score += _CORNER_BONUS
     return score
 
 
@@ -209,11 +214,12 @@ def _smoothness(board: Board) -> float:
                 penalty -= abs(left - math.log2(board[row][col + 1]))
             if row + 1 < _SIZE and board[row + 1][col]:
                 penalty -= abs(left - math.log2(board[row + 1][col]))
-    return penalty * 12.0
+    return penalty * _SMOOTHNESS_WEIGHT
 
 
 def _monotonicity(board: Board) -> float:
-    """Reward rows and columns that rise or fall steadily."""
+    """Reward the stronger of increasing vs decreasing on each axis."""
+    # totals: row↓, row↑, col↓, col↑ (log gaps); take max per axis.
     totals = [0.0, 0.0, 0.0, 0.0]
     for row in range(_SIZE):
         for col in range(_SIZE - 1):
@@ -237,18 +243,17 @@ def _monotonicity(board: Board) -> float:
                 totals[2] += b - a
             else:
                 totals[3] += a - b
-    return 20.0 * (max(totals[0], totals[1]) + max(totals[2], totals[3]))
+    return _MONOTONICITY_WEIGHT * (max(totals[0], totals[1]) + max(totals[2], totals[3]))
 
 
 def _legal_directions(board: Board) -> list[str]:
     legal = [direction for direction in DIRECTIONS if _apply(board, direction) != board]
-    # Stable tie-break matches the previous stub's preferred order when scores equal.
+    # Tie-break matches FALLBACK_ORDER (same as the old stub).
     return sorted(legal, key=_FALLBACK_RANK.__getitem__)
 
 
 def _apply(board: Board, direction: str) -> Board:
-    # One slider for search and for legal_moves. A second copy can suggest a move
-    # the rest of the API treats as illegal.
+    # Same slider as legal_moves — a second copy can drift from the API.
     moved = apply_move([list(row) for row in board], direction)
     return _freeze(moved)
 

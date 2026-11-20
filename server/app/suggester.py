@@ -59,11 +59,11 @@ class MoveSuggester:
                         reason=choice.reason,
                     )
                     return _record_result(suggest_span, result, [])
-                # Search failed or drifted from legal_moves; same signal as an LLM miss.
-                bad = None if choice is None else choice.move
-                logger.warning("expectimax returned %s; falling back to %s", bad, fallback)
+                # None = unscored/broken search; otherwise a move outside legal_moves.
+                detail = "no scored move" if choice is None else f"illegal move {choice.move}"
+                logger.warning("expectimax %s; falling back to %s", detail, fallback)
                 result = SuggestResponse(move=fallback, mode=mode, source="fallback")
-                return _record_result(suggest_span, result, [f"illegal move {bad}"])
+                return _record_result(suggest_span, result, [detail])
 
             rejected: list[str] = []
             invalid_reply = False
