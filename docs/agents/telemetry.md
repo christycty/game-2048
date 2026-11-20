@@ -95,15 +95,18 @@ Always on. Names below are the **Prometheus text** forms (OTel dots → undersco
 
 ### Series charted in Grafana (GenAI ops)
 
-These are the only scrape series the provisioned dashboard uses. Everything else on `/metrics` is noise or secondary.
+Every panel on the provisioned dashboard and the **exact** Prom series suffix it queries. Nothing else on `/metrics` is charted here.
 
-| Series | Kind | Labels (useful) | Grafana panel(s) |
-|---|---|---|---|
-| `http_server_duration_milliseconds_*` | Histogram | `http_target="/suggest"`, `http_status_code` | POST /suggest by status; POST /suggest latency (p50/p95) |
-| `suggest_source_total` | Counter | `suggest_source` = `llm` \| `fallback` \| `expectimax` | Suggest by source |
-| `gen_ai_client_request_count_total` | Counter | `gen_ai_request_outcome` = `success` \| `error` \| `timeout`; optional `error_type` (`request` / `response` / `parse` / `illegal_move`) | LLM request success rate; LLM requests by outcome; LLM errors by type |
-| `gen_ai_client_operation_duration_seconds_*` | Histogram | model / provider / operation | LLM call duration p95 (Ollama body path; includes later parse/illegal failures; excludes timeout/request failures) |
-| `gen_ai_client_token_usage_*` | Histogram | `gen_ai_token_type` = `input` \| `output` | Token usage rate by type |
+| Panel | Prom series used | Aggregation / labels |
+|---|---|---|
+| POST /suggest by status | `http_server_duration_milliseconds_count` | `sum by (http_status_code)` · `http_target="/suggest"` |
+| Suggest by source | `suggest_source_total` | `sum by (suggest_source)` · `llm` \| `fallback` \| `expectimax` |
+| POST /suggest latency | `http_server_duration_milliseconds_bucket` | `histogram_quantile` p50 + p95 · `http_target="/suggest"` |
+| LLM request success rate | `gen_ai_client_request_count_total` | `success` rate / total rate; empty when idle (`total rate == 0`) |
+| LLM requests by outcome | `gen_ai_client_request_count_total` | `sum by (gen_ai_request_outcome)` · `success` \| `error` \| `timeout` |
+| LLM errors by type | `gen_ai_client_request_count_total` | `sum by (error_type)` where `gen_ai_request_outcome="error"` · `request` \| `response` \| `parse` \| `illegal_move` |
+| LLM call duration p95 | `gen_ai_client_operation_duration_seconds_bucket` | `histogram_quantile(0.95, …)` (Ollama body path; includes later parse/illegal failures; excludes timeout/request failures) |
+| Token usage rate by type | `gen_ai_client_token_usage_sum` | `sum by (gen_ai_token_type)` · `input` \| `output` |
 
 ### Present but not charted (noise / secondary)
 
