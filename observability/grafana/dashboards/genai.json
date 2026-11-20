@@ -25,7 +25,7 @@
       "targets": [
         {
           "datasource": { "type": "prometheus", "uid": "prometheus" },
-          "expr": "histogram_quantile(0.95, sum by (le) (rate(gen_ai_client_operation_duration_seconds_bucket[5m])))",
+          "expr": "histogram_quantile(0.95, sum by (le) (rate(gen_ai_client_operation_duration_seconds_bucket[1m])))",
           "legendFormat": "p95",
           "refId": "A"
         }
@@ -53,7 +53,7 @@
       "targets": [
         {
           "datasource": { "type": "prometheus", "uid": "prometheus" },
-          "expr": "sum by (gen_ai_token_type) (rate(gen_ai_client_token_usage_sum[5m]))",
+          "expr": "sum by (gen_ai_token_type) (rate(gen_ai_client_token_usage_sum[1m]))",
           "legendFormat": "{{gen_ai_token_type}}",
           "refId": "A"
         }
