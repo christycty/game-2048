@@ -177,7 +177,7 @@ def test_expectimax_drops_an_illegal_search_move(monkeypatch: pytest.MonkeyPatch
     assert response.json() == {
         "move": "right",
         "mode": "expectimax",
-        "source": "expectimax",
+        "source": "fallback",
         "reason": None,
     }
 

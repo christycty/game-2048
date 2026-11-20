@@ -37,9 +37,11 @@ class MoveSuggester:
             raise NoLegalMove()
         if mode == "expectimax":
             move = choose_move(board)
-            if move not in legal:
-                move = fallback
-            return SuggestResponse(move=move, mode=mode, source="expectimax")
+            if move in legal:
+                return SuggestResponse(move=move, mode=mode, source="expectimax")
+            # Search failed or drifted from legal_moves; same signal as an LLM miss.
+            logger.warning("expectimax returned %s; falling back to %s", move, fallback)
+            return SuggestResponse(move=fallback, mode=mode, source="fallback")
 
         rejected: list[str] = []
         invalid_reply = False
