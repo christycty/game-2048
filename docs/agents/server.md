@@ -137,7 +137,7 @@ Typical LLM tree: FastAPI `POST /suggest` → `suggest` chain → sibling `ollam
 - `tests/test_expectimax.py` covers legality, spawn odds, depth/budget cutoffs, and the reason format.
 - `tests/test_moves.py` covers the slide and merge rules used for legality.
 - `tests/test_telemetry.py` covers Phoenix URL/header rules, per-app exporters, excluded `/health` / `/metrics` / `/client-events`, client `traceparent` continuation, client beacon counters, span nesting, retries, errors, stuck-board span shape, GenAI series on `/metrics` after a suggest (success / request / response / parse / illegal_move / timeout + suggest sources), and HTTP scrape status codes for `/suggest` (200 / 422 / 409 / 429).
-- `tests/test_suggest_e2e.py` is marked `e2e` for real Ollama under `APP_ENV=prod`. It sizes `SUGGEST_RATE_LIMIT_REQUESTS` from its parametrized call volume, asserts `source == "llm"` with a short reason, and includes a non-e2e expectimax HTTP smoke that does not need Ollama.
+- `tests/test_suggest_e2e.py` marks real-Ollama cases `e2e` under `APP_ENV=prod` (parametrized legal move + reason, `traceparent` accepted, GenAI `/metrics` after success; rate limit sized for the matrix + extras). Default suite covers health, `/metrics`, `422` (no rate-limit spend), stuck-board `409`, LLM-bucket `429` + `Retry-After`, expectimax search, unreachable-Ollama `fallback`, and `/client-events` beacons → `client_suggest_outcome` scrape series.
 
 ## Not built yet
 
