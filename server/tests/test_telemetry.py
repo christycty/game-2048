@@ -212,7 +212,6 @@ def test_suggest_nests_llm_under_suggest_chain() -> None:
     assert llm_span.start_time <= first_token.timestamp <= llm_span.end_time
 
     done = next(event for event in llm_span.events if event.name == "Generation Done")
-    assert 0 <= done.attributes["time_to_done"] < 1
     assert done.attributes["provider_total"] == pytest.approx(0.6)
     assert done.attributes["time_per_output_token"] == pytest.approx(0.025)
 

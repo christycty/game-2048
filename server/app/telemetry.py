@@ -1,3 +1,9 @@
+"""Phoenix / OpenInference tracing for suggestion requests.
+
+Each app owns its tracer and exporter. A request binds that tracer so
+threadpool work still records on the app that served it.
+"""
+
 from __future__ import annotations
 
 import json
@@ -33,16 +39,16 @@ SERVICE_NAME = "game-2048-server"
 _LOOPBACK = {"localhost", "127.0.0.1", "::1"}
 # Compose reaches Phoenix on the host at this name.
 _DOCKER_HOST_ALIAS = "host.docker.internal"
-# ASGI send/receive child spans and health checks are noise for LLM traces.
+# Keep the Phoenix tree on suggestion work.
 _EXCLUDED_URLS = "/health,/docs,/openapi.json,/redoc"
-# Phoenix keys off this OpenInference name to place time-to-first-token.
-# This call is not a stream; the timestamp is the prefill stand-in.
+# Phoenix places TTFT from this OpenInference event name.
+# The call is not streamed; the stamp is load + prompt_eval.
 _FIRST_TOKEN_EVENT = "First Token Stream Event"
 _GENERATION_DONE_EVENT = "Generation Done"
 _DURATION_BUCKETS = (0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5, 10, 20)
 _TOKEN_BUCKETS = (1, 4, 16, 64, 256, 1024, 4096, 16384)
 
-# Re-export OpenInference keys used by tests and callers.
+# OpenInference keys used by tests and callers.
 OPENINFERENCE_SPAN_KIND = SpanAttributes.OPENINFERENCE_SPAN_KIND
 LLM_SYSTEM = SpanAttributes.LLM_SYSTEM
 LLM_PROVIDER = SpanAttributes.LLM_PROVIDER
@@ -83,8 +89,8 @@ class _RequestTelemetry:
     metrics: LlmMetrics
 
 
-# Request spans must use the app that is serving them. A process-global provider
-# would send later apps' traces to whichever app was created last.
+# Per-request binding: a process-global provider would send later apps'
+# traces to whichever app was created last.
 _request_telemetry: ContextVar[_RequestTelemetry | None] = ContextVar(
     "request_telemetry",
     default=None,
@@ -127,6 +133,7 @@ class _RequestTelemetryMiddleware:
 
 
 def traces_url(collector_endpoint: str) -> str:
+    """Accept a Phoenix base URL or a full `/v1/traces` path."""
     endpoint = collector_endpoint.rstrip("/")
     if endpoint.endswith("/v1/traces"):
         return endpoint
@@ -134,6 +141,7 @@ def traces_url(collector_endpoint: str) -> str:
 
 
 def exporter_headers(collector_endpoint: str, api_key: str | None) -> dict[str, str] | None:
+    """Send the API key only over HTTPS or to a local collector."""
     if not api_key:
         return None
     parsed = urlparse(traces_url(collector_endpoint))
@@ -149,7 +157,7 @@ def exporter_headers(collector_endpoint: str, api_key: str | None) -> dict[str, 
 
 
 def _tag_http_span(span: Span, scope: dict) -> None:
-    """Phoenix groups this request with its LLM children only when the server span is a CHAIN."""
+    """Mark the FastAPI server span as CHAIN so Phoenix nests LLM children under it."""
     path = scope.get("path") or ""
     if path in _EXCLUDED_URLS.split(","):
         return
@@ -161,6 +169,7 @@ def setup_telemetry(
     settings: Settings,
     span_processor: SpanProcessor | None = None,
 ) -> TracerProvider:
+    """Wire this app's tracer, in-process metrics, and FastAPI instrumentation."""
     endpoint = traces_url(settings.phoenix_collector_endpoint)
     resource = Resource.create({"service.name": SERVICE_NAME})
     provider = TracerProvider(resource=resource)
@@ -173,8 +182,9 @@ def setup_telemetry(
             )
         provider.add_span_processor(span_processor)
 
-    # Phoenix ingests traces, not OTLP metrics. Keep instruments in-process so
-    # time-to-first-token, time-to-done, and token histograms are available later.
+    # TODO(metrics): Stage 1 — Prometheus reader + /metrics (duration + token
+    # usage). Stage 2 — Compose Prometheus/Grafana. See plan/metrics-stages.md.
+    # Phoenix ingests traces only; these histograms are in-process until Stage 1.
     meter_provider = MeterProvider(resource=resource)
     meter = meter_provider.get_meter(SERVICE_NAME)
     app_metrics = LlmMetrics(
@@ -205,8 +215,7 @@ def setup_telemetry(
     )
 
     app_tracer = provider.get_tracer(SERVICE_NAME)
-    # Inside the OTEL middleware, so the endpoint (and its threadpool copy of
-    # the context) records CHAIN and LLM spans on this app's exporter.
+    # Bind before FastAPIInstrumentor so the threadpool endpoint shares this tracer.
     app.add_middleware(
         _RequestTelemetryMiddleware,
         tracer=app_tracer,
@@ -256,6 +265,7 @@ def set_json_io(
     input_payload: object | None = None,
     output_payload: object | None = None,
 ) -> None:
+    """Attach JSON input/output for Phoenix chain views."""
     if input_payload is not None:
         span.set_attribute(INPUT_VALUE, json.dumps(input_payload))
         span.set_attribute(INPUT_MIME_TYPE, OpenInferenceMimeTypeValues.JSON.value)
@@ -265,11 +275,13 @@ def set_json_io(
 
 
 def mark_chain_io(span: Span, *, input_payload: object, output_payload: object) -> None:
+    """Tag a span as CHAIN and set its JSON I/O."""
     span.set_attribute(OPENINFERENCE_SPAN_KIND, SPAN_KIND_CHAIN)
     set_json_io(span, input_payload=input_payload, output_payload=output_payload)
 
 
 def annotate_llm_span(span: Span, model: str) -> None:
+    """OpenInference LLM labels for an Ollama chat call."""
     span.set_attribute(OPENINFERENCE_SPAN_KIND, SPAN_KIND_LLM)
     span.set_attribute(LLM_PROVIDER, OpenInferenceLLMProviderValues.OLLAMA.value)
     span.set_attribute(LLM_SYSTEM, "ollama")
@@ -284,7 +296,7 @@ def set_llm_messages(
     finish_reason: str | None = None,
     invocation: dict[str, object] | None = None,
 ) -> None:
-    """Chat content lives in llm.* messages; input/output mirror for Phoenix list view."""
+    """Chat content in llm.* messages; input/output mirror for the Phoenix list view."""
     span.set_attribute(LLM_INPUT_MESSAGE_ROLE, "user")
     span.set_attribute(LLM_INPUT_MESSAGE_CONTENT, prompt)
     span.set_attribute(INPUT_VALUE, prompt)
@@ -308,6 +320,11 @@ def record_llm_usage(
     wall_seconds: float,
     started_ns: int,
 ) -> None:
+    """Map an Ollama chat body onto token attrs, latency events, and histograms.
+
+    `wall_seconds` is the client wait (span duration). Provider timings come from
+    the response body and land on events.
+    """
     prompt_tokens = _as_int(body.get("prompt_eval_count"))
     completion_tokens = _as_int(body.get("eval_count"))
     cache_read = _as_int(body.get("prompt_eval_cached_count"))
@@ -334,8 +351,7 @@ def record_llm_usage(
     if isinstance(response_model, str) and response_model and response_model != model:
         span.set_attribute(SpanAttributes.LLM_RESPONSE_MODEL_NAME, response_model)
 
-    # Span duration is the client end-to-end time. Provider timings stay on the
-    # event, and the first-token stamp is clamped so it cannot fall outside the span.
+    # Clamp the first-token stamp so Phoenix keeps it inside this span.
     if ttft is not None:
         first_token = {
             key: value
@@ -351,14 +367,15 @@ def record_llm_usage(
             attributes=first_token,
             timestamp=_timestamp_inside_span(span, started_ns, ttft),
         )
-    done_attrs: dict[str, float] = {"time_to_done": wall_seconds}
+    done_attrs: dict[str, float] = {}
     if total is not None:
         done_attrs["provider_total"] = total
     if eval_time is not None:
         done_attrs["eval"] = eval_time
     if seconds_per_token is not None:
         done_attrs["time_per_output_token"] = seconds_per_token
-    span.add_event(_GENERATION_DONE_EVENT, attributes=done_attrs)
+    if done_attrs:
+        span.add_event(_GENERATION_DONE_EVENT, attributes=done_attrs)
 
     metric_attrs = {
         "gen_ai.operation.name": "chat",
@@ -389,11 +406,10 @@ def mark_span_error(span: Span, error: Exception) -> None:
 
 
 def _timestamp_inside_span(span: Span, started_ns: int, offset_seconds: float) -> int:
-    """Place an event inside the still-open span.
+    """Clamp an event timestamp into the still-open span.
 
-    Provider timings can be longer than the client span (a fast test double, or
-    a clock that does not match the process). Phoenix drops or mis-draws events
-    that fall outside the span.
+    Provider timings can exceed the client span (fast test doubles, clock skew).
+    Phoenix drops or mis-draws events outside the span window.
     """
     start = getattr(span, "start_time", None)
     if not isinstance(start, int):
@@ -415,7 +431,7 @@ def _ttft_seconds(
     ttd: float | None,
     eval_time: float | None,
 ) -> float | None:
-    # Prefill + load is the non-streaming stand-in for time to first token.
+    # Prefill + load stands in for time to first token when the call is not streamed.
     parts = [part for part in (load, prompt_eval) if part is not None]
     if parts:
         return sum(parts)
