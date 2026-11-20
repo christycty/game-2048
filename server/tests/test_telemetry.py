@@ -178,6 +178,34 @@ def test_health_and_asgi_noise_are_not_traced() -> None:
     assert '"source": "llm"' in root.attributes[OUTPUT_VALUE]
 
 
+def test_suggest_continues_client_traceparent() -> None:
+    """Browser W3C traceparent must join the server HTTP + suggest spans."""
+    exporter = InMemorySpanExporter()
+    app = create_app(
+        isolated_settings(export_traces=True),
+        _QuietLLM(),
+        SimpleSpanProcessor(exporter),
+    )
+    # Fixed ids from the W3C Trace Context examples.
+    trace_id_hex = "4bf92f3577b34da6a3ce929d0e0e4736"
+    parent_span_hex = "00f067aa0ba902b7"
+    response = TestClient(app).post(
+        "/suggest",
+        json={"board": OPEN_BOARD, "mode": "llm"},
+        headers={"traceparent": f"00-{trace_id_hex}-{parent_span_hex}-01"},
+    )
+    assert response.status_code == 200
+
+    finished = exporter.get_finished_spans()
+    assert {span.name for span in finished} == {"POST /suggest", "suggest"}
+    expected_trace_id = int(trace_id_hex, 16)
+    assert all(span.context.trace_id == expected_trace_id for span in finished)
+
+    root = next(span for span in finished if span.name == "POST /suggest")
+    assert root.parent is not None
+    assert root.parent.span_id == int(parent_span_hex, 16)
+
+
 def test_metrics_exposes_gen_ai_series_after_suggest() -> None:
     def handler(request: httpx.Request) -> httpx.Response:
         return httpx.Response(

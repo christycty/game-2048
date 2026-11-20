@@ -9,7 +9,9 @@ const BOARD = [
     [0, 0, 0, 2],
 ];
 
-test("suggestMove posts the board and mode, then returns the body", async () => {
+const TRACEPARENT_RE = /^00-[0-9a-f]{32}-[0-9a-f]{16}-01$/;
+
+test("suggestMove posts the board and mode with traceparent, then returns the body", async () => {
     const calls = [];
     const fetchImpl = async (url, options) => {
         calls.push({ url, options });
@@ -27,6 +29,7 @@ test("suggestMove posts the board and mode, then returns the body", async () => 
     assert.equal(calls[0].url, "/suggest");
     assert.equal(calls[0].options.method, "POST");
     assert.equal(calls[0].options.headers["Content-Type"], "application/json");
+    assert.match(calls[0].options.headers.traceparent, TRACEPARENT_RE);
     assert.deepEqual(JSON.parse(calls[0].options.body), { board: BOARD, mode: "llm" });
     assert.deepEqual(body, { move: "left", mode: "llm", source: "llm", reason: "Merges." });
 });
