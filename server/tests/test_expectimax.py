@@ -232,7 +232,7 @@ def test_full_board_at_a_chance_node_aborts_the_search(
         [0, 0, 0, 0],
     ]
 
-    def boom(_board, _depth, _cache, deadline=None, clock=None):
+    def boom(_board, _depth, _cache, deadline=None, clock=None, cancel=None):
         raise _SearchBroken("chance node reached a full board")
 
     monkeypatch.setattr("app.expectimax._chance_value", boom)
@@ -254,13 +254,13 @@ def test_search_broken_keeps_the_last_finished_depth(
     assert shallow == "up"
     calls = 0
 
-    def boom_after_depth_zero(board, depth, cache, deadline=None, clock=None):
+    def boom_after_depth_zero(board, depth, cache, deadline=None, clock=None, cancel=None):
         nonlocal calls
         calls += 1
         # Depth 0 finishes (root chance nodes). Depth 1 starts a deeper ply.
         if depth >= 1:
             raise _SearchBroken("chance node reached a full board")
-        return _chance_value(board, depth, cache, deadline, clock)
+        return _chance_value(board, depth, cache, deadline, clock, cancel=cancel)
 
     monkeypatch.setattr("app.expectimax._chance_value", boom_after_depth_zero)
     kept = choose_move(board, depth=1, budget_seconds=2).move

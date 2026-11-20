@@ -69,7 +69,9 @@ def choose_move(
     # depth set, no budget → one full search (deterministic for tests).
     if depth is not None and budget_seconds is None:
         try:
-            move, scores = _best_at_depth(root, legal, depth, deadline=None, clock=now)
+            move, scores = _best_at_depth(
+                root, legal, depth, deadline=None, clock=now, cancel=cancel
+            )
         except _SearchBroken:
             return None
         return Choice(move, _format_reason(scores))
@@ -84,7 +86,9 @@ def choose_move(
         for current in range(limit + 1):
             if cancel is not None and cancel.is_set():
                 raise SuggestCancelled()
-            best, scores = _best_at_depth(root, legal, current, deadline, now)
+            best, scores = _best_at_depth(
+                root, legal, current, deadline, now, cancel=cancel
+            )
     except (_TimeUp, _SearchBroken):
         # Budget or an unreachable state mid-depth: keep the last finished depth.
         pass
@@ -115,14 +119,17 @@ def _best_at_depth(
     depth: int,
     deadline: float | None,
     clock: _Clock,
+    cancel: threading.Event | None = None,
 ) -> tuple[str, dict[str, float | None]]:
     cache: dict[tuple[Board, int, bool], float] = {}
     scores: dict[str, float | None] = {direction: None for direction in DIRECTIONS}
     best_move = legal[0]
     best_score = -math.inf
     for direction in legal:
-        _check(deadline, clock)
-        score = _chance_value(_apply(root, direction), depth, cache, deadline, clock)
+        _check(deadline, clock, cancel)
+        score = _chance_value(
+            _apply(root, direction), depth, cache, deadline, clock, cancel=cancel
+        )
         scores[direction] = score
         if score > best_score:
             best_score = score
@@ -130,7 +137,13 @@ def _best_at_depth(
     return best_move, scores
 
 
-def _check(deadline: float | None, clock: _Clock) -> None:
+def _check(
+    deadline: float | None,
+    clock: _Clock,
+    cancel: threading.Event | None = None,
+) -> None:
+    if cancel is not None and cancel.is_set():
+        raise SuggestCancelled()
     if deadline is not None and clock() >= deadline:
         raise _TimeUp
 
@@ -141,8 +154,9 @@ def _chance_value(
     cache: dict[tuple[Board, int, bool], float],
     deadline: float | None = None,
     clock: _Clock = time.monotonic,
+    cancel: threading.Event | None = None,
 ) -> float:
-    _check(deadline, clock)
+    _check(deadline, clock, cancel)
     key = (board, depth, False)
     cached = cache.get(key)
     if cached is not None:
@@ -157,7 +171,9 @@ def _chance_value(
     for row, col in empties:
         for tile, prob in ((2, _TWO_PROB), (4, _FOUR_PROB)):
             spawned = _place(board, row, col, tile)
-            total += weight * prob * _max_value(spawned, depth, cache, deadline, clock)
+            total += weight * prob * _max_value(
+                spawned, depth, cache, deadline, clock, cancel=cancel
+            )
     cache[key] = total
     return total
 
@@ -168,8 +184,9 @@ def _max_value(
     cache: dict[tuple[Board, int, bool], float],
     deadline: float | None = None,
     clock: _Clock = time.monotonic,
+    cancel: threading.Event | None = None,
 ) -> float:
-    _check(deadline, clock)
+    _check(deadline, clock, cancel)
     key = (board, depth, True)
     cached = cache.get(key)
     if cached is not None:
@@ -187,7 +204,9 @@ def _max_value(
         return value
 
     value = max(
-        _chance_value(_apply(board, direction), depth - 1, cache, deadline, clock)
+        _chance_value(
+            _apply(board, direction), depth - 1, cache, deadline, clock, cancel=cancel
+        )
         for direction in legal
     )
     cache[key] = value
