@@ -85,7 +85,7 @@ Score of each direction: Left = N/A, Right = 1053.4, Up = N/A, Down = 771.2
 
 1. Builds the legal move set with the same slide rules as the client.
 2. Picks a fallback: first direction in `FALLBACK_ORDER` (`left`, `up`, `right`, `down`) that is legal. None → `NoLegalMove` → HTTP 409.
-3. **`expectimax`**: `choose_move` runs depth-limited expectimax (chance node: uniform empty cell, 2 at 90% / 4 at 10%). Returns `source: "expectimax"` with the score-line `reason`. If search returns a non-legal move, or returns nothing (budget expired before any depth finished, or an unreachable state), substitutes the fallback with `source: "fallback"`.
+3. **`expectimax`**: `choose_move` runs depth-limited expectimax (chance node: uniform empty cell, 2 at 90% / 4 at 10%). Returns `source: "expectimax"` with the score-line `reason`. If search returns a non-legal move, or returns nothing (budget expired or an unreachable state before any depth finished), substitutes the fallback with `source: "fallback"`. A cut mid-depth keeps the last finished depth.
 4. **`llm`**: up to `LLM_MAX_ATTEMPTS` calls, stopped early when the remaining `LLM_SUGGEST_BUDGET_SECONDS` cannot cover another `LLM_ATTEMPT_TIMEOUT_SECONDS` wait.
 5. Accepts a reply only when the move is legal and the reason is a non-blank string after strip.
 6. Retries on illegal moves (recorded as rejected), blank reasons, and `LlmError`.

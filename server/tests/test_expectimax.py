@@ -239,6 +239,35 @@ def test_full_board_at_a_chance_node_aborts_the_search(
     assert choose_move(board, depth=0) is None
 
 
+def test_search_broken_keeps_the_last_finished_depth(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Same board as the budget cutoff: depth 0 wants up. Breaking on the next
+    # depth must keep up, matching _TimeUp — not discard the finished ply.
+    board = [
+        [0, 0, 0, 0],
+        [0, 4, 2, 4],
+        [0, 0, 0, 0],
+        [0, 0, 0, 0],
+    ]
+    shallow = choose_move(board, depth=0).move
+    assert shallow == "up"
+    calls = 0
+
+    def boom_after_depth_zero(board, depth, cache, deadline=None, clock=None):
+        nonlocal calls
+        calls += 1
+        # Depth 0 finishes (root chance nodes). Depth 1 starts a deeper ply.
+        if depth >= 1:
+            raise _SearchBroken("chance node reached a full board")
+        return _chance_value(board, depth, cache, deadline, clock)
+
+    monkeypatch.setattr("app.expectimax._chance_value", boom_after_depth_zero)
+    kept = choose_move(board, depth=1, budget_seconds=2).move
+    assert kept == shallow
+    assert calls > 0
+
+
 def test_reason_lists_a_score_or_na_for_each_direction() -> None:
     # Only right and down change this board. Left and up stay N/A.
     board = [

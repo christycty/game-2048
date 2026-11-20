@@ -77,10 +77,9 @@ def choose_move(
     try:
         for current in range(limit + 1):
             best, scores = _best_at_depth(root, legal, current, deadline, now)
-    except _TimeUp:
+    except (_TimeUp, _SearchBroken):
+        # Budget or an unreachable state mid-depth: keep the last finished depth.
         pass
-    except _SearchBroken:
-        return None
     if scores is None or best is None:
         return None  # nothing finished; N/A means illegal, not unscored
     return Choice(best, _format_reason(scores))
