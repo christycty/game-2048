@@ -89,12 +89,14 @@ jobs:
           COMPOSE_OLLAMA_BASE_URL=http://ollama.example:11434 \
           COMPOSE_PHOENIX_COLLECTOR_ENDPOINT=http://phoenix.example:6006 \
             docker compose --profile dev config --format json > /tmp/compose-override.json
+          docker compose --profile metrics config --format json > /tmp/compose-metrics.json
           python3 - <<'PY'
           import json
           from pathlib import Path
 
           data = json.loads(Path("/tmp/compose.json").read_text())
           override = json.loads(Path("/tmp/compose-override.json").read_text())
+          metrics = json.loads(Path("/tmp/compose-metrics.json").read_text())
           loopback = {"127.0.0.1", "::1"}
 
           def env_value(config, service, key):
@@ -107,17 +109,17 @@ jobs:
                       return item.split("=", 1)[1]
               raise SystemExit(f"{service} missing {key}")
 
-          def bindings(service):
+          def bindings(config, service):
               found = []
-              for port in data["services"][service].get("ports") or []:
+              for port in config["services"][service].get("ports") or []:
                   ip = port.get("host_ip") or ""
                   if ip not in loopback:
                       raise SystemExit(f"{service} publishes {ip!r}, want loopback")
                   found.append((ip, int(port["published"]), int(port["target"])))
               return found
 
-          def expect(service, published, target):
-              found = bindings(service)
+          def expect(config, service, published, target):
+              found = bindings(config, service)
               for ip in loopback:
                   if (ip, published, target) not in found:
                       raise SystemExit(f"{service} missing {ip}:{published}->{target}, have {found}")
@@ -140,9 +142,21 @@ jobs:
           phoenix_override = env_value(override, "dev", "PHOENIX_COLLECTOR_ENDPOINT")
           if phoenix_override != "http://phoenix.example:6006":
               raise SystemExit(f"COMPOSE_PHOENIX_COLLECTOR_ENDPOINT did not apply: {phoenix_override!r}")
-          expect("dev", 8000, 8000)
-          expect("prod", 8000, 8000)
-          expect("client-dev", 5173, 5173)
-          expect("client", 5173, 80)
+          expect(data, "dev", 8000, 8000)
+          expect(data, "prod", 8000, 8000)
+          expect(data, "client-dev", 5173, 5173)
+          expect(data, "client", 5173, 80)
+          expect(metrics, "prometheus", 9090, 9090)
+          expect(metrics, "grafana", 3000, 3000)
+          for service in ("dev", "prod"):
+              aliases = (
+                  data["services"][service]
+                  .get("networks", {})
+                  .get("default", {})
+                  .get("aliases")
+                  or []
+              )
+              if "api" not in aliases:
+                  raise SystemExit(f"{service} missing network alias 'api', have {aliases}")
           print("compose service DNS ok")
           PY

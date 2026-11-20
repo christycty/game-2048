@@ -1,10 +1,11 @@
 # Every service is behind a profile. `docker compose up` starts nothing
-# unless you pass --profile dev or --profile prod.
+# unless you pass --profile dev, --profile prod, and/or --profile metrics.
 # Published ports are loopback-only. localhost is ::1 on some machines,
 # so each port is published on 127.0.0.1 and ::1.
 # host-gateway makes host.docker.internal resolve on Linux Docker Engine.
 # Docker Desktop can reach an Ollama bound to 127.0.0.1 at that name.
 # Linux Docker Engine cannot: start Ollama with OLLAMA_HOST=0.0.0.0.
+# Prometheus scrapes Compose DNS `api:8000` (alias on both API services).
 
 services:
   dev:
@@ -14,6 +15,10 @@ services:
     ports:
       - "127.0.0.1:8000:8000"
       - "[::1]:8000:8000"
+    networks:
+      default:
+        aliases:
+          - api
     extra_hosts:
       - "host.docker.internal:host-gateway"
     environment:
@@ -58,6 +63,10 @@ services:
     ports:
       - "127.0.0.1:8000:8000"
       - "[::1]:8000:8000"
+    networks:
+      default:
+        aliases:
+          - api
     extra_hosts:
       - "host.docker.internal:host-gateway"
     environment:
@@ -84,5 +93,42 @@ services:
       - "127.0.0.1:5173:80"
       - "[::1]:5173:80"
 
+  # Optional ops UI. Pair with an API profile:
+  #   docker compose --profile dev --profile metrics up
+  prometheus:
+    profiles: ["metrics"]
+    image: prom/prometheus:v2.55.1
+    ports:
+      - "127.0.0.1:9090:9090"
+      - "[::1]:9090:9090"
+    volumes:
+      - ./observability/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus-data:/prometheus
+    command:
+      - --config.file=/etc/prometheus/prometheus.yml
+      - --storage.tsdb.path=/prometheus
+      - --web.enable-lifecycle
+
+  grafana:
+    profiles: ["metrics"]
+    image: grafana/grafana:11.3.1
+    ports:
+      - "127.0.0.1:3000:3000"
+      - "[::1]:3000:3000"
+    environment:
+      GF_AUTH_ANONYMOUS_ENABLED: "true"
+      GF_AUTH_ANONYMOUS_ORG_ROLE: Viewer
+      GF_AUTH_BASIC_ENABLED: "false"
+      GF_USERS_ALLOW_SIGN_UP: "false"
+      GF_DASHBOARDS_DEFAULT_HOME_DASHBOARD_PATH: /var/lib/grafana/dashboards/genai.json
+    volumes:
+      - ./observability/grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./observability/grafana/dashboards:/var/lib/grafana/dashboards:ro
+      - grafana-data:/var/lib/grafana
+    depends_on:
+      - prometheus
+
 volumes:
   client-node-modules:
+  prometheus-data:
+  grafana-data:
