@@ -45,7 +45,7 @@ Excluded from tracing: `/health`, `/metrics`, `/docs`, `/openapi.json`, `/redoc`
 | HTTP status rates, API latency | **Grafana** | Aggregates from FastAPI HTTP scrape series |
 | Suggest `source` (`llm` / `fallback` / …) | **Grafana** | API-level scrape counter (HTTP 200 ≠ model win) |
 | LLM success / error / timeout rate | **Grafana** | Per-attempt `request_count` scrape series |
-| LLM duration p95, token burn | **Grafana** | GenAI histogram scrape series |
+| LLM duration p50/p95, token burn | **Grafana** | GenAI histogram scrape series |
 | Ad-hoc PromQL / “is scrape up?” | Prometheus Graph | Not a product dashboard |
 
 ---
@@ -105,7 +105,7 @@ Every panel on the provisioned dashboard and the **exact** Prom series suffix it
 | LLM request success rate | `gen_ai_client_request_count_total` | `success` rate / total rate; empty when idle (`total rate == 0`) |
 | LLM requests by outcome | `gen_ai_client_request_count_total` | `sum by (gen_ai_request_outcome)` · `success` \| `error` \| `timeout` |
 | LLM errors by type | `gen_ai_client_request_count_total` | `sum by (error_type)` where `gen_ai_request_outcome="error"` · `request` \| `response` \| `parse` \| `illegal_move` |
-| LLM call duration p95 | `gen_ai_client_operation_duration_seconds_bucket` | `histogram_quantile(0.95, …)` (Ollama body path; includes later parse/illegal failures; excludes timeout/request failures) |
+| LLM call duration | `gen_ai_client_operation_duration_seconds_bucket` | `histogram_quantile` p50 + p95 (Ollama body path; includes later parse/illegal failures; excludes timeout/request failures) |
 | Token usage rate by type | `gen_ai_client_token_usage_sum` | `sum by (gen_ai_token_type)` · `input` \| `output` |
 
 ### Present but not charted (noise / secondary)

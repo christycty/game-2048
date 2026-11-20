@@ -279,6 +279,7 @@
         },
         "overrides": []
       },
+      "description": "p50 / p95 wall time for Ollama body-path calls.",
       "gridPos": { "h": 9, "w": 12, "x": 0, "y": 20 },
       "id": 1,
       "targets": [
@@ -287,9 +288,15 @@
           "expr": "histogram_quantile(0.95, sum by (le) (rate(gen_ai_client_operation_duration_seconds_bucket[5m])))",
           "legendFormat": "p95",
           "refId": "A"
+        },
+        {
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "expr": "histogram_quantile(0.50, sum by (le) (rate(gen_ai_client_operation_duration_seconds_bucket[5m])))",
+          "legendFormat": "p50",
+          "refId": "B"
         }
       ],
-      "title": "LLM call duration p95",
+      "title": "LLM call duration",
       "type": "timeseries",
       "options": {
         "legend": {
@@ -298,7 +305,7 @@
           "showLegend": true,
           "calcs": ["lastNotNull"]
         },
-        "tooltip": { "mode": "single", "sort": "none" }
+        "tooltip": { "mode": "multi", "sort": "none" }
       }
     },
     {
