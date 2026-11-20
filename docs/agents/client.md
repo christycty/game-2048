@@ -2,7 +2,7 @@
 
 The playable 2048 board. A new game deals two 2s. Arrow keys and swipes slide and merge tiles. Score and best score update after each slide. The AI control asks the suggestion API for a move; the player confirms before it plays.
 
-This describes the client on the `docs` branch, which tracks `main`. Product behavior for non-implementers is in [prd.md](prd.md).
+Agent/implementer detail for the client. Human architecture overview: [../architecture.md](../architecture.md). Product rules: [prd.md](prd.md).
 
 ## Run
 

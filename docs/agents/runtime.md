@@ -1,6 +1,6 @@
 # Runtime
 
-How the client, API, and host Ollama run together on `main`. Every Compose service sits behind a profile: `docker compose up` alone starts nothing.
+How the client, API, and host Ollama run together. Human quick path: [../getting-started.md](../getting-started.md). Every Compose service sits behind a profile: `docker compose up` alone starts nothing.
 
 ## Local processes
 

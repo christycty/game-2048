@@ -2,7 +2,7 @@
 
 FastAPI service that suggests the next 2048 move. The process is healthy even when Ollama is down. An LLM failure still returns a legal move from a fixed order. Expectimax is a stub that returns that same order without calling the model.
 
-This describes the server on the `docs` branch, which tracks `main`. Product behavior for non-implementers is in [prd.md](prd.md).
+Agent/implementer detail for the API. Human architecture overview: [../architecture.md](../architecture.md). Product rules: [prd.md](prd.md).
 
 ## Run
 

@@ -2,7 +2,7 @@
 
 A single-player 2048 game in the browser. The player slides tiles to merge matching numbers, tracks score, and can ask for an AI suggestion for the next move—then decide whether to take it.
 
-This document describes intended product behavior for human readers. Implementation detail lives in [client.md](client.md), [server.md](server.md), and [runtime.md](runtime.md).
+Product rules for implementers and agents. Human-oriented narrative: [../overview.md](../overview.md). Implementation detail: [client.md](client.md), [server.md](server.md), [runtime.md](runtime.md).
 
 ## Goals
 
