@@ -656,6 +656,52 @@ test("stopping auto play ends the loop after the current move", async () => {
     expect(applyMove).toHaveBeenCalledTimes(1);
 });
 
+test("stopping auto play during the gap re-enables AI without waiting out the pause", async () => {
+    suggestMove.mockResolvedValue({
+        move: "right",
+        mode: "llm",
+        source: "llm",
+        reason: null,
+    });
+    applyMove.mockReturnValue({
+        moved: true,
+        scoreGained: 0,
+        visualTiles: [{ id: 1, row: 0, col: 3, value: 2, fromRow: 0, fromCol: 0, sliding: true }],
+        resolvedTiles: [{ id: 1, row: 0, col: 3, value: 2 }],
+        lost: false,
+    });
+
+    render(<App />);
+    fireEvent.click(screen.getByRole("button", { name: "Auto Play" }));
+
+    await act(async () => {
+        await Promise.resolve();
+    });
+
+    await act(async () => {
+        vi.advanceTimersByTime(SETTLE_MS);
+        await Promise.resolve();
+    });
+
+    // Still inside the post-settle gap; busy is held for the pause.
+    expect(screen.getByRole("button", { name: "AI" }).disabled).toBe(true);
+    fireEvent.click(screen.getByRole("button", { name: "Stop" }));
+
+    expect(screen.getByRole("button", { name: "Auto Play" }).getAttribute("aria-pressed")).toBe(
+        "false",
+    );
+    expect(screen.getByRole("button", { name: "AI" }).disabled).toBe(false);
+    expect(screen.getByRole("button", { name: "Auto Play" }).disabled).toBe(false);
+
+    await act(async () => {
+        vi.advanceTimersByTime(AUTO_PLAY_GAP_MS);
+        await Promise.resolve();
+    });
+
+    expect(suggestMove).toHaveBeenCalledTimes(1);
+    expect(applyMove).toHaveBeenCalledTimes(1);
+});
+
 test("a fallback during auto play stops the loop", async () => {
     suggestMove.mockResolvedValue({
         move: "left",
@@ -774,4 +820,132 @@ test("auto play applies a pending suggestion then continues", async () => {
 
     expect(suggestMove).toHaveBeenCalledTimes(2);
     expect(applyMove).toHaveBeenLastCalledWith(afterPending, "down");
+});
+
+test("a blocked pending move when starting auto play stops the loop", async () => {
+    suggestMove.mockResolvedValue({
+        move: "right",
+        mode: "llm",
+        source: "llm",
+        reason: "Opens space on the left.",
+    });
+    applyMove.mockReturnValue({
+        moved: false,
+        scoreGained: 0,
+        visualTiles: opening,
+        resolvedTiles: opening,
+        lost: false,
+    });
+
+    render(<App />);
+    fireEvent.click(screen.getByRole("button", { name: "AI" }));
+
+    await act(async () => {
+        await Promise.resolve();
+    });
+
+    expect(screen.getByRole("button", { name: "Play Right" })).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Auto Play" }));
+
+    expect(applyMove).toHaveBeenCalledWith(opening, "right");
+    expect(screen.getByRole("status").textContent).toBe("AI could not suggest a move");
+    expect(screen.queryByRole("button", { name: /Play / })).toBeNull();
+    expect(screen.getByRole("button", { name: "Auto Play" }).getAttribute("aria-pressed")).toBe(
+        "false",
+    );
+    expect(screen.getByRole("button", { name: "AI" }).disabled).toBe(false);
+});
+
+test("a loss during auto play stops the loop", async () => {
+    suggestMove.mockResolvedValue({
+        move: "right",
+        mode: "llm",
+        source: "llm",
+        reason: null,
+    });
+    applyMove.mockReturnValue({
+        moved: true,
+        scoreGained: 4,
+        visualTiles: [{ id: 1, row: 0, col: 3, value: 2, fromRow: 0, fromCol: 0, sliding: true }],
+        resolvedTiles: [{ id: 1, row: 0, col: 3, value: 2 }],
+        lost: true,
+    });
+
+    render(<App />);
+    fireEvent.click(screen.getByRole("button", { name: "Auto Play" }));
+
+    await act(async () => {
+        await Promise.resolve();
+    });
+
+    await act(async () => {
+        vi.advanceTimersByTime(SETTLE_MS + AUTO_PLAY_GAP_MS);
+        await Promise.resolve();
+    });
+
+    expect(screen.getByText("Game over")).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Auto Play" }).getAttribute("aria-pressed")).toBe(
+        "false",
+    );
+    expect(suggestMove).toHaveBeenCalledTimes(1);
+    expect(applyMove).toHaveBeenCalledTimes(1);
+});
+
+test("a rate limit during auto play stops the loop", async () => {
+    suggestMove.mockRejectedValue(new SuggestError("suggestion rate limit", { status: 429 }));
+
+    render(<App />);
+    fireEvent.click(screen.getByRole("button", { name: "Auto Play" }));
+
+    await act(async () => {
+        await Promise.resolve();
+    });
+
+    expect(applyMove).not.toHaveBeenCalled();
+    expect(screen.getByRole("status").textContent).toBe(
+        "Too many suggestions. Wait a moment and try again.",
+    );
+    expect(screen.getByRole("button", { name: "Auto Play" }).getAttribute("aria-pressed")).toBe(
+        "false",
+    );
+    expect(screen.getByRole("button", { name: "AI" }).disabled).toBe(false);
+});
+
+test("a new game during auto play cancels the next suggestion", async () => {
+    createInitialTiles.mockReset();
+    createInitialTiles.mockReturnValueOnce(opening).mockReturnValueOnce(restarted);
+    suggestMove.mockResolvedValue({
+        move: "right",
+        mode: "llm",
+        source: "llm",
+        reason: null,
+    });
+    applyMove.mockReturnValue({
+        moved: true,
+        scoreGained: 0,
+        visualTiles: [{ id: 1, row: 0, col: 3, value: 2, fromRow: 0, fromCol: 0, sliding: true }],
+        resolvedTiles: [{ id: 1, row: 0, col: 3, value: 2 }],
+        lost: false,
+    });
+
+    render(<App />);
+    fireEvent.click(screen.getByRole("button", { name: "Auto Play" }));
+
+    await act(async () => {
+        await Promise.resolve();
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: "New Game" }));
+    expect(screen.getByRole("button", { name: "Auto Play" }).getAttribute("aria-pressed")).toBe(
+        "false",
+    );
+
+    await act(async () => {
+        vi.advanceTimersByTime(SETTLE_MS + AUTO_PLAY_GAP_MS);
+        await Promise.resolve();
+    });
+
+    expect(suggestMove).toHaveBeenCalledTimes(1);
+    expect(applyMove).toHaveBeenCalledTimes(1);
+    expect(screen.getByRole("button", { name: "AI" }).disabled).toBe(false);
 });

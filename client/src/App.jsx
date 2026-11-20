@@ -54,6 +54,11 @@ function App() {
         if (!autoPlayingRef.current) return;
         autoPlayingRef.current = false;
         setAutoPlaying(false);
+        // The post-settle gap keeps busy true so AI stays inactive through the pause.
+        // Stopping must release that hold when nothing else is in flight.
+        if (!animatingRef.current && !suggestingRef.current) {
+            setBusy(false);
+        }
     }
 
     function startGame() {
@@ -126,7 +131,7 @@ function App() {
                 return;
             }
             if (autoPlayingRef.current) {
-                // Keep busy through the gap; Stop / New Game clears autoPlaying or bumps the token.
+                // Keep busy through the gap. Stop releases busy when idle; New Game bumps the token.
                 window.setTimeout(() => {
                     if (moveTokenRef.current !== token) return;
                     if (!autoPlayingRef.current) {
@@ -146,6 +151,7 @@ function App() {
         if (animatingRef.current || lostRef.current || suggestingRef.current) return;
         if (!hasMoves(tilesRef.current)) {
             stopAutoPlay();
+            if (!animatingRef.current) setBusy(false);
             return;
         }
 
@@ -159,7 +165,7 @@ function App() {
         try {
             const suggestion = await suggestMove(tilesToBoard(tilesRef.current), aiModeRef.current);
             if (suggestTokenRef.current !== token) return;
-            // "fallback" is a fixed move order (LLM miss or illegal expectimax result).
+            // "fallback" is a fixed move order, not a model choice.
             if (suggestion.source === "fallback") {
                 setHint("AI could not suggest a move");
                 stopAutoPlay();
@@ -224,8 +230,13 @@ function App() {
 
         if (pendingMove) {
             autoApplyingRef.current = true;
-            handleMove(pendingMove);
+            const moved = handleMove(pendingMove);
             autoApplyingRef.current = false;
+            if (!moved) {
+                setPendingMove(null);
+                setHint("AI could not suggest a move");
+                stopAutoPlay();
+            }
             return;
         }
         void handleSuggest();
