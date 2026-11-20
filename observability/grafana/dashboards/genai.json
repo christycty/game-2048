@@ -36,7 +36,7 @@
       "targets": [
         {
           "datasource": { "type": "prometheus", "uid": "prometheus" },
-          "expr": "sum by (http_status_code) (rate(http_server_duration_milliseconds_count{http_target=\"/suggest\"}[5m]))",
+          "expr": "sum by (http_status_code) (rate(http_server_duration_milliseconds_count{http_target=\"/suggest\"}[5m])) > 0",
           "legendFormat": "{{http_status_code}}",
           "refId": "A"
         }
@@ -75,7 +75,7 @@
       "targets": [
         {
           "datasource": { "type": "prometheus", "uid": "prometheus" },
-          "expr": "sum by (suggest_source) (rate(suggest_source_total[5m]))",
+          "expr": "sum by (suggest_source) (rate(suggest_source_total[5m])) > 0",
           "legendFormat": "{{suggest_source}}",
           "refId": "A"
         }
@@ -114,13 +114,13 @@
       "targets": [
         {
           "datasource": { "type": "prometheus", "uid": "prometheus" },
-          "expr": "histogram_quantile(0.95, sum by (le) (rate(http_server_duration_milliseconds_bucket{http_target=\"/suggest\"}[5m])))",
+          "expr": "histogram_quantile(0.95, sum by (le) (rate(http_server_duration_milliseconds_bucket{http_target=\"/suggest\"}[5m]))) and on() (sum(rate(http_server_duration_milliseconds_count{http_target=\"/suggest\"}[5m])) > 0)",
           "legendFormat": "p95",
           "refId": "A"
         },
         {
           "datasource": { "type": "prometheus", "uid": "prometheus" },
-          "expr": "histogram_quantile(0.50, sum by (le) (rate(http_server_duration_milliseconds_bucket{http_target=\"/suggest\"}[5m])))",
+          "expr": "histogram_quantile(0.50, sum by (le) (rate(http_server_duration_milliseconds_bucket{http_target=\"/suggest\"}[5m]))) and on() (sum(rate(http_server_duration_milliseconds_count{http_target=\"/suggest\"}[5m])) > 0)",
           "legendFormat": "p50",
           "refId": "B"
         }
@@ -207,7 +207,7 @@
       "targets": [
         {
           "datasource": { "type": "prometheus", "uid": "prometheus" },
-          "expr": "sum by (gen_ai_request_outcome) (rate(gen_ai_client_request_count_total[5m]))",
+          "expr": "sum by (gen_ai_request_outcome) (rate(gen_ai_client_request_count_total[5m])) > 0",
           "legendFormat": "{{gen_ai_request_outcome}}",
           "refId": "A"
         }
@@ -246,7 +246,7 @@
       "targets": [
         {
           "datasource": { "type": "prometheus", "uid": "prometheus" },
-          "expr": "sum by (error_type) (rate(gen_ai_client_request_count_total{gen_ai_request_outcome=\"error\"}[5m]))",
+          "expr": "sum by (error_type) (rate(gen_ai_client_request_count_total{gen_ai_request_outcome=\"error\"}[5m])) > 0",
           "legendFormat": "{{error_type}}",
           "refId": "A"
         }
@@ -285,13 +285,13 @@
       "targets": [
         {
           "datasource": { "type": "prometheus", "uid": "prometheus" },
-          "expr": "histogram_quantile(0.95, sum by (le) (rate(gen_ai_client_operation_duration_seconds_bucket[5m])))",
+          "expr": "histogram_quantile(0.95, sum by (le) (rate(gen_ai_client_operation_duration_seconds_bucket[5m]))) and on() (sum(rate(gen_ai_client_operation_duration_seconds_count[5m])) > 0)",
           "legendFormat": "p95",
           "refId": "A"
         },
         {
           "datasource": { "type": "prometheus", "uid": "prometheus" },
-          "expr": "histogram_quantile(0.50, sum by (le) (rate(gen_ai_client_operation_duration_seconds_bucket[5m])))",
+          "expr": "histogram_quantile(0.50, sum by (le) (rate(gen_ai_client_operation_duration_seconds_bucket[5m]))) and on() (sum(rate(gen_ai_client_operation_duration_seconds_count[5m])) > 0)",
           "legendFormat": "p50",
           "refId": "B"
         }
@@ -330,7 +330,7 @@
       "targets": [
         {
           "datasource": { "type": "prometheus", "uid": "prometheus" },
-          "expr": "sum by (gen_ai_token_type) (rate(gen_ai_client_token_usage_sum[5m]))",
+          "expr": "sum by (gen_ai_token_type) (rate(gen_ai_client_token_usage_sum[5m])) > 0",
           "legendFormat": "{{gen_ai_token_type}}",
           "refId": "A"
         }

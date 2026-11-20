@@ -33,6 +33,7 @@ We intentionally **do not** scrape TTFT / time-per-output-token / prompt text: t
 - **API row:** `/suggest` by status (all codes), Suggest by source, Latency (p50/p95).
 - **LLM row:** success rate, outcomes, error types, duration, tokens.
 - Multi-series **rate** panels use **unstacked** lines (each series Y is absolute). Stacked areas make a smaller series look “above” a larger one.
+- Legends use **Last \*** = last non-null sample. Rate queries drop `== 0` samples (`> 0`) so idle series do not show a fake `0`; latency panels stay empty when there is no traffic.
 
 Excluded from tracing: `/health`, `/metrics`, `/docs`, `/openapi.json`, `/redoc`.
 
