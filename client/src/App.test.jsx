@@ -1,6 +1,7 @@
 import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
 import App from "./App.jsx";
+import { suggestMove } from "./api";
 import { applyMove, createInitialTiles, SETTLE_MS } from "./game";
 
 // These tests lock input and score timing. The move rules are covered in game.test.js.
@@ -12,6 +13,10 @@ vi.mock("./game", async () => {
         applyMove: vi.fn(),
     };
 });
+
+vi.mock("./api", () => ({
+    suggestMove: vi.fn(),
+}));
 
 // The board before any move, and the board a new game deals.
 const opening = [{ id: 1, row: 0, col: 0, value: 2 }];
@@ -28,6 +33,7 @@ function press(key) {
 beforeEach(() => {
     createInitialTiles.mockReset();
     applyMove.mockReset();
+    suggestMove.mockReset();
     createInitialTiles.mockReturnValue(opening);
     // The clock stays still until a test moves it past the end of the slide.
     vi.useFakeTimers();
@@ -244,7 +250,256 @@ test("a new game clears a loss and accepts another move", () => {
     expect(applyMove).toHaveBeenLastCalledWith(restarted, "left");
 });
 
-test("the AI control stays inactive until it can suggest a move", () => {
+test("the AI control is active when the board can still move", () => {
     render(<App />);
+    expect(screen.getByRole("button", { name: "AI" }).disabled).toBe(false);
+});
+
+test("the AI control stays inactive after the game is lost", () => {
+    const resolved = [{ id: 1, row: 0, col: 0, value: 2 }];
+    applyMove.mockReturnValue({
+        moved: true,
+        scoreGained: 4,
+        visualTiles: resolved,
+        resolvedTiles: resolved,
+        lost: true,
+    });
+
+    render(<App />);
+    press("ArrowUp");
+    act(() => {
+        vi.advanceTimersByTime(SETTLE_MS);
+    });
+
     expect(screen.getByRole("button", { name: "AI" }).disabled).toBe(true);
+});
+
+test("an AI suggestion shows the move without applying it", async () => {
+    suggestMove.mockResolvedValue({
+        move: "right",
+        mode: "llm",
+        source: "llm",
+        reason: "Opens space on the left.",
+    });
+
+    render(<App />);
+    fireEvent.click(screen.getByRole("button", { name: "AI" }));
+
+    expect(screen.getByRole("button", { name: "Thinking…" }).disabled).toBe(true);
+
+    await act(async () => {
+        await Promise.resolve();
+    });
+
+    expect(suggestMove).toHaveBeenCalledTimes(1);
+    expect(suggestMove).toHaveBeenCalledWith(
+        [
+            [2, 0, 0, 0],
+            [0, 0, 0, 0],
+            [0, 0, 0, 0],
+            [0, 0, 0, 0],
+        ],
+        "llm",
+    );
+    expect(applyMove).not.toHaveBeenCalled();
+    expect(screen.getByRole("status").textContent).toBe(
+        "Suggested: Right. Opens space on the left.",
+    );
+    expect(screen.getByRole("button", { name: "Play Right" }).disabled).toBe(false);
+});
+
+test("applying an AI suggestion plays the pending move", async () => {
+    suggestMove.mockResolvedValue({
+        move: "right",
+        mode: "llm",
+        source: "llm",
+        reason: "Opens space on the left.",
+    });
+    applyMove.mockReturnValue({
+        moved: true,
+        scoreGained: 0,
+        visualTiles: [{ id: 1, row: 0, col: 3, value: 2, fromRow: 0, fromCol: 0, sliding: true }],
+        resolvedTiles: [{ id: 1, row: 0, col: 3, value: 2 }],
+        lost: false,
+    });
+
+    render(<App />);
+    fireEvent.click(screen.getByRole("button", { name: "AI" }));
+
+    await act(async () => {
+        await Promise.resolve();
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: "Play Right" }));
+
+    expect(applyMove).toHaveBeenCalledTimes(1);
+    expect(applyMove).toHaveBeenCalledWith(opening, "right");
+    expect(screen.queryByRole("button", { name: "Play Right" })).toBeNull();
+    expect(screen.queryByRole("status")).toBeNull();
+});
+
+test("expectimax mode is sent to the suggestion API", async () => {
+    suggestMove.mockResolvedValue({
+        move: "up",
+        mode: "expectimax",
+        source: "expectimax",
+        reason: null,
+    });
+
+    render(<App />);
+    fireEvent.click(screen.getByRole("radio", { name: "Expectimax" }));
+    fireEvent.click(screen.getByRole("button", { name: "AI" }));
+
+    await act(async () => {
+        await Promise.resolve();
+    });
+
+    expect(suggestMove).toHaveBeenCalledWith(
+        [
+            [2, 0, 0, 0],
+            [0, 0, 0, 0],
+            [0, 0, 0, 0],
+            [0, 0, 0, 0],
+        ],
+        "expectimax",
+    );
+    expect(screen.getByRole("status").textContent).toBe("Suggested: Up.");
+    expect(screen.getByRole("button", { name: "Play Up" })).toBeTruthy();
+});
+
+test("a fallback response reports the miss and offers no move", async () => {
+    suggestMove.mockResolvedValue({
+        move: "left",
+        mode: "llm",
+        source: "fallback",
+        reason: null,
+    });
+
+    render(<App />);
+    fireEvent.click(screen.getByRole("button", { name: "AI" }));
+
+    await act(async () => {
+        await Promise.resolve();
+    });
+
+    // The fixed order is not a suggestion, so the player is asked to try again.
+    expect(applyMove).not.toHaveBeenCalled();
+    expect(screen.getByRole("status").textContent).toBe("AI could not suggest a move");
+    expect(screen.queryByRole("button", { name: /Play / })).toBeNull();
+    expect(screen.getByRole("button", { name: "AI" }).disabled).toBe(false);
+});
+
+test("a failed AI suggestion leaves the board alone and reports the miss", async () => {
+    suggestMove.mockRejectedValue(new Error("offline"));
+
+    render(<App />);
+    fireEvent.click(screen.getByRole("button", { name: "AI" }));
+
+    await act(async () => {
+        await Promise.resolve();
+    });
+
+    expect(applyMove).not.toHaveBeenCalled();
+    expect(screen.getByRole("status").textContent).toBe("AI could not suggest a move");
+    expect(screen.queryByRole("button", { name: /Play / })).toBeNull();
+    expect(screen.getByRole("button", { name: "AI" }).disabled).toBe(false);
+});
+
+test("a player move during an AI request drops the late suggestion", async () => {
+    let finishSuggest;
+    suggestMove.mockImplementation(
+        () =>
+            new Promise((resolve) => {
+                finishSuggest = resolve;
+            }),
+    );
+    applyMove.mockReturnValue({
+        moved: true,
+        scoreGained: 0,
+        visualTiles: [{ id: 1, row: 0, col: 1, value: 2, fromRow: 0, fromCol: 0, sliding: true }],
+        resolvedTiles: [{ id: 1, row: 0, col: 1, value: 2 }],
+        lost: false,
+    });
+
+    render(<App />);
+    fireEvent.click(screen.getByRole("button", { name: "AI" }));
+    press("ArrowRight");
+
+    expect(applyMove).toHaveBeenCalledTimes(1);
+    expect(applyMove).toHaveBeenCalledWith(opening, "right");
+
+    await act(async () => {
+        finishSuggest({
+            move: "left",
+            mode: "llm",
+            source: "llm",
+            reason: "Would have gone left.",
+        });
+        await Promise.resolve();
+    });
+
+    // The late suggestion must not add a second move or leave its reason on screen.
+    expect(applyMove).toHaveBeenCalledTimes(1);
+    expect(screen.queryByRole("status")).toBeNull();
+    expect(screen.queryByRole("button", { name: /Play / })).toBeNull();
+});
+
+test("a blocked move during an AI request keeps the suggestion", async () => {
+    let finishSuggest;
+    suggestMove.mockImplementation(
+        () =>
+            new Promise((resolve) => {
+                finishSuggest = resolve;
+            }),
+    );
+    applyMove.mockReturnValue({
+        moved: false,
+        scoreGained: 0,
+        visualTiles: opening,
+        resolvedTiles: opening,
+        lost: false,
+    });
+
+    render(<App />);
+    fireEvent.click(screen.getByRole("button", { name: "AI" }));
+    press("ArrowLeft");
+
+    expect(applyMove).toHaveBeenCalledTimes(1);
+    expect(screen.getByRole("button", { name: "Thinking…" }).disabled).toBe(true);
+
+    await act(async () => {
+        finishSuggest({
+            move: "right",
+            mode: "expectimax",
+            source: "expectimax",
+            reason: null,
+        });
+        await Promise.resolve();
+    });
+
+    expect(screen.getByRole("status").textContent).toBe("Suggested: Right.");
+    expect(screen.getByRole("button", { name: "Play Right" })).toBeTruthy();
+});
+
+test("changing AI mode clears the pending suggestion", async () => {
+    suggestMove.mockResolvedValue({
+        move: "right",
+        mode: "llm",
+        source: "llm",
+        reason: "Opens space on the left.",
+    });
+
+    render(<App />);
+    fireEvent.click(screen.getByRole("button", { name: "AI" }));
+
+    await act(async () => {
+        await Promise.resolve();
+    });
+
+    expect(screen.getByRole("button", { name: "Play Right" })).toBeTruthy();
+    fireEvent.click(screen.getByRole("radio", { name: "Expectimax" }));
+
+    expect(screen.getByRole("radio", { name: "Expectimax" }).checked).toBe(true);
+    expect(screen.queryByRole("status")).toBeNull();
+    expect(screen.queryByRole("button", { name: "Play Right" })).toBeNull();
 });

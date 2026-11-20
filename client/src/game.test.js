@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { applyMove, createInitialTiles, GRID_SIZE, hasMoves } from "./game.js";
+import { applyMove, createInitialTiles, GRID_SIZE, hasMoves, tilesToBoard } from "./game.js";
 
 // One line of the array is one row of the board, from the top. A 0 is an empty cell.
 function board(rows) {
@@ -226,4 +226,13 @@ test("a spawn of 4 that matches a neighbor keeps the game going", () => {
     assert.equal(spawn.value, 4);
     assert.deepEqual([spawn.row, spawn.col], [3, 3]);
     assert.equal(result.lost, false);
+});
+
+test("tilesToBoard fills empty cells with 0 for the suggestion API", () => {
+    assert.deepEqual(tilesToBoard(board([[2, 0, 0, 4], [0, 0, 0, 0], [0, 0, 0, 0], [0, 8, 0, 0]])), [
+        [2, 0, 0, 4],
+        [0, 0, 0, 0],
+        [0, 0, 0, 0],
+        [0, 8, 0, 0],
+    ]);
 });

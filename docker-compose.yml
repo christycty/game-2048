@@ -25,6 +25,12 @@ services:
       LLM_MAX_ATTEMPTS: ${LLM_MAX_ATTEMPTS:-3}
       LLM_ATTEMPT_TIMEOUT_SECONDS: ${LLM_ATTEMPT_TIMEOUT_SECONDS:-20}
       LLM_SUGGEST_BUDGET_SECONDS: ${LLM_SUGGEST_BUDGET_SECONDS:-40}
+      # Traces stay on for dev and prod. CI passes EXPORT_TRACES=false to the
+      # API image. COMPOSE_PHOENIX_COLLECTOR_ENDPOINT, not PHOENIX_COLLECTOR_ENDPOINT:
+      # a host shell or server/.env that points at localhost must not replace this.
+      EXPORT_TRACES: "true"
+      PHOENIX_COLLECTOR_ENDPOINT: ${COMPOSE_PHOENIX_COLLECTOR_ENDPOINT:-http://host.docker.internal:6006}
+      PHOENIX_API_KEY: ${PHOENIX_API_KEY:-}
     volumes:
       - ./server:/app
     command: ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000", "--reload"]
@@ -61,6 +67,12 @@ services:
       LLM_MAX_ATTEMPTS: ${LLM_MAX_ATTEMPTS:-3}
       LLM_ATTEMPT_TIMEOUT_SECONDS: ${LLM_ATTEMPT_TIMEOUT_SECONDS:-20}
       LLM_SUGGEST_BUDGET_SECONDS: ${LLM_SUGGEST_BUDGET_SECONDS:-40}
+      # Traces stay on for dev and prod. CI passes EXPORT_TRACES=false to the
+      # API image. COMPOSE_PHOENIX_COLLECTOR_ENDPOINT, not PHOENIX_COLLECTOR_ENDPOINT:
+      # a host shell or server/.env that points at localhost must not replace this.
+      EXPORT_TRACES: "true"
+      PHOENIX_COLLECTOR_ENDPOINT: ${COMPOSE_PHOENIX_COLLECTOR_ENDPOINT:-http://host.docker.internal:6006}
+      PHOENIX_API_KEY: ${PHOENIX_API_KEY:-}
 
   # Published on 5173 so the page origin matches the API allowlist.
   client:

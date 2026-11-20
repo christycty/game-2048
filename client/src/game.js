@@ -90,6 +90,13 @@ export function hasMoves(tiles) {
     return false;
 }
 
+// The /suggest API takes a 4x4 of tile values, with 0 for an empty cell.
+export function tilesToBoard(tiles) {
+    const board = Array.from({ length: GRID_SIZE }, () => Array(GRID_SIZE).fill(0));
+    for (const tile of tiles) board[tile.row][tile.col] = tile.value;
+    return board;
+}
+
 // The shape the board renders. fromRow and fromCol are the cell the tile slides out of.
 function presentTile(tile, { value, fromRow, fromCol, isNew = false, isMerged = false, absorbing = false, sliding = false }) {
     return {

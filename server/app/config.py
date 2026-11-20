@@ -17,6 +17,10 @@ class Settings(BaseSettings):
     llm_attempt_timeout_seconds: float = Field(default=20, gt=0, le=20)
     # Budget covers at least two attempt timeouts so a slow first call can still retry.
     llm_suggest_budget_seconds: float = Field(default=40, gt=0, le=40)
+    phoenix_collector_endpoint: str = "http://localhost:6006"
+    phoenix_api_key: str | None = None
+    # Dev and prod export. CI sets EXPORT_TRACES=false.
+    export_traces: bool = True
 
     @model_validator(mode="after")
     def prod_uses_plain_json(self) -> "Settings":
