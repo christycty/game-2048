@@ -125,8 +125,13 @@ jobs:
           overridden = env_value(override, "dev", "OLLAMA_BASE_URL")
           if overridden != "http://ollama.example:11434":
               raise SystemExit(f"COMPOSE_OLLAMA_BASE_URL did not apply: {overridden!r}")
+          def expect_unpublished(service):
+              ports = data["services"][service].get("ports") or []
+              if ports:
+                  raise SystemExit(f"{service} publishes {ports}")
+
           expect("dev", 8000, 8000)
-          expect("prod", 8000, 8000)
+          expect_unpublished("prod")
           expect("client-dev", 5173, 5173)
           expect("client", 5173, 80)
           print("compose service DNS ok")
