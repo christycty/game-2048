@@ -19,6 +19,10 @@ class Settings(BaseSettings):
     # The whole process, not each caller. Nginx is the only prod caller.
     suggest_rate_limit_requests: int = Field(default=5, ge=1, le=30)
     suggest_rate_limit_window_seconds: float = Field(default=60, ge=1, le=3600)
+    phoenix_collector_endpoint: str = "http://localhost:6006"
+    phoenix_api_key: str | None = None
+    # Dev and prod export. CI sets EXPORT_TRACES=false.
+    export_traces: bool = True
 
     @model_validator(mode="after")
     def prod_uses_plain_json(self) -> "Settings":

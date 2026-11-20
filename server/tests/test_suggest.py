@@ -87,7 +87,7 @@ def test_suggest_rate_limit_stops_before_the_model() -> None:
     llm = FakeLLM(["right", "right", "right"])
     clock = _Clock()
     limiter = SuggestRateLimiter(2, 60, clock)
-    client = TestClient(create_app(isolated_settings(), llm, limiter))
+    client = TestClient(create_app(isolated_settings(), llm, rate_limiter=limiter))
     assert _suggest(client).status_code == 200
     assert _suggest(client).status_code == 200
 

@@ -1,4 +1,10 @@
+import os
+
 import pytest
+
+# The imported app is built at import time. Dev and prod export traces; tests
+# and CI keep the collector off. The API image in CI sets this same variable.
+os.environ["EXPORT_TRACES"] = "false"
 
 
 def pytest_addoption(parser: pytest.Parser) -> None:

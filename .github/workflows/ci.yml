@@ -4,6 +4,25 @@ on:
   pull_request:
 
 jobs:
+  docs:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Pin script behavior with unit tests
+        working-directory: scripts
+        run: python -m unittest discover -v -s . -p 'test_*.py'
+      - name: Check relative Markdown links
+        run: python scripts/check_doc_links.py
+      - name: Nudge when code changes without agent docs
+        env:
+          DOCS_BASE_REF: ${{ github.base_ref }}
+        run: python scripts/check_docs_freshness.py
+
   lint-test:
     runs-on: ubuntu-latest
     defaults:
@@ -21,6 +40,8 @@ jobs:
           ruff format --check .
           ruff check .
       - name: Test
+        env:
+          EXPORT_TRACES: "false"
         run: pytest
 
   client:
@@ -66,7 +87,7 @@ jobs:
           exit 1
       - name: API image serves health without Ollama
         run: |
-          docker run -d --name game-2048-server -p 127.0.0.1:8000:8000 game-2048-server
+          docker run -d --name game-2048-server -e EXPORT_TRACES=false -p 127.0.0.1:8000:8000 game-2048-server
           for _ in $(seq 1 30); do
             if curl -fsS -o /tmp/health.json http://127.0.0.1:8000/health \
               && python3 -c 'import json; assert json.load(open("/tmp/health.json"))["status"] == "ok"'; then
@@ -79,10 +100,13 @@ jobs:
       - name: Compose keeps the container URL and loopback ports
         run: |
           cp .env.example .env
-          printf '\nOLLAMA_BASE_URL=http://localhost:11434\n' >> .env
+          printf '\nOLLAMA_BASE_URL=http://localhost:11434\nPHOENIX_COLLECTOR_ENDPOINT=http://localhost:6006\nEXPORT_TRACES=false\n' >> .env
           OLLAMA_BASE_URL=http://localhost:11434 \
+          PHOENIX_COLLECTOR_ENDPOINT=http://localhost:6006 \
+          EXPORT_TRACES=false \
             docker compose --profile dev --profile prod config --format json > /tmp/compose.json
           COMPOSE_OLLAMA_BASE_URL=http://ollama.example:11434 \
+          COMPOSE_PHOENIX_COLLECTOR_ENDPOINT=http://phoenix.example:6006 \
             docker compose --profile dev config --format json > /tmp/compose-override.json
           python3 - <<'PY'
           import json
@@ -118,13 +142,24 @@ jobs:
                       raise SystemExit(f"{service} missing {ip}:{published}->{target}, have {found}")
 
           want = "http://host.docker.internal:11434"
+          phoenix = "http://host.docker.internal:6006"
           for service in ("dev", "prod"):
               got = env_value(data, service, "OLLAMA_BASE_URL")
               if got != want or "localhost" in got:
                   raise SystemExit(f"{service} OLLAMA_BASE_URL={got!r}, want {want!r}")
+              traces = env_value(data, service, "EXPORT_TRACES")
+              if traces != "true":
+                  raise SystemExit(f"{service} EXPORT_TRACES={traces!r}, want 'true'")
+              collector = env_value(data, service, "PHOENIX_COLLECTOR_ENDPOINT")
+              if collector != phoenix or "localhost" in collector:
+                  raise SystemExit(f"{service} PHOENIX_COLLECTOR_ENDPOINT={collector!r}, want {phoenix!r}")
           overridden = env_value(override, "dev", "OLLAMA_BASE_URL")
           if overridden != "http://ollama.example:11434":
               raise SystemExit(f"COMPOSE_OLLAMA_BASE_URL did not apply: {overridden!r}")
+          phoenix_override = env_value(override, "dev", "PHOENIX_COLLECTOR_ENDPOINT")
+          if phoenix_override != "http://phoenix.example:6006":
+              raise SystemExit(f"COMPOSE_PHOENIX_COLLECTOR_ENDPOINT did not apply: {phoenix_override!r}")
+
           def expect_unpublished(service):
               ports = data["services"][service].get("ports") or []
               if ports:
