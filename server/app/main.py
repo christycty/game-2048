@@ -134,12 +134,12 @@ def create_app(
 
     @app.post("/suggest", response_model=SuggestResponse)
     async def suggest(request: Request, body: SuggestRequest) -> SuggestResponse:
-        retry_after = limiters[body.mode].allow()
-        if retry_after is not None:
+        gate = limiters[body.mode].allow()
+        if gate.retry_after is not None:
             raise HTTPException(
                 status_code=429,
                 detail="too many suggestions",
-                headers={"Retry-After": str(retry_after)},
+                headers={"Retry-After": str(gate.retry_after)},
             )
         span = trace.get_current_span()
         set_json_io(span, input_payload={"board": body.board, "mode": body.mode})
@@ -148,6 +148,9 @@ def create_app(
         try:
             result = await asyncio.to_thread(suggester.suggest, body.board, body.mode, cancel)
         except SuggestCancelled as exc:
+            # Refund this request's hit only (token), so concurrent siblings keep theirs.
+            if gate.token is not None:
+                limiters[body.mode].release(gate.token)
             mark_span_error(span, exc)
             set_json_io(span, output_payload={"detail": "cancelled"})
             # 499 = client closed request (nginx convention). Best-effort if already gone.
