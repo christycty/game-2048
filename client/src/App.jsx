@@ -21,6 +21,7 @@ function App() {
     // Tracks a slide or an in-flight suggestion so the AI control can look inactive.
     const [busy, setBusy] = useState(false);
     const [suggesting, setSuggesting] = useState(false);
+    const [autoPlaying, setAutoPlaying] = useState(false);
     const [aiMode, setAiMode] = useState("llm");
     const [pendingMove, setPendingMove] = useState(null);
     const [hint, setHint] = useState(null);
@@ -31,6 +32,8 @@ function App() {
     const lostRef = useRef(false);
     const animatingRef = useRef(false);
     const suggestingRef = useRef(false);
+    const autoPlayingRef = useRef(false);
+    const autoApplyingRef = useRef(false);
     const moveTokenRef = useRef(0);
     const suggestTokenRef = useRef(0);
     const aiModeRef = useRef(aiMode);
@@ -40,12 +43,19 @@ function App() {
         setHint(null);
     }
 
+    function stopAutoPlay() {
+        if (!autoPlayingRef.current) return;
+        autoPlayingRef.current = false;
+        setAutoPlaying(false);
+    }
+
     function startGame() {
         const nextTiles = createInitialTiles();
         moveTokenRef.current += 1;
         suggestTokenRef.current += 1;
         animatingRef.current = false;
         suggestingRef.current = false;
+        autoPlayingRef.current = false;
         tilesRef.current = nextTiles;
         scoreRef.current = 0;
         lostRef.current = false;
@@ -54,6 +64,7 @@ function App() {
         setLost(false);
         setBusy(false);
         setSuggesting(false);
+        setAutoPlaying(false);
         clearSuggestion();
     }
 
@@ -67,6 +78,11 @@ function App() {
             return false;
         }
 
+        // A manual move while auto-play is running takes control back.
+        if (autoPlayingRef.current && !autoApplyingRef.current) {
+            stopAutoPlay();
+        }
+
         // A move that changes the board drops an in-flight suggestion so it cannot land on a stale board.
         if (suggestingRef.current) {
             suggestTokenRef.current += 1;
@@ -78,7 +94,12 @@ function App() {
         moveTokenRef.current = token;
         animatingRef.current = true;
         setBusy(true);
-        clearSuggestion();
+        // Auto-play keeps the latest hint visible while the move slides.
+        if (autoApplyingRef.current) {
+            setPendingMove(null);
+        } else {
+            clearSuggestion();
+        }
         setTiles(result.visualTiles);
 
         window.setTimeout(() => {
@@ -91,15 +112,28 @@ function App() {
             setCurrentScore(nextScore);
             setBestScore((best) => Math.max(best, nextScore));
             animatingRef.current = false;
+            if (result.lost) {
+                setLost(true);
+                setBusy(false);
+                stopAutoPlay();
+                return;
+            }
+            if (autoPlayingRef.current) {
+                // Keep busy while the next suggestion request starts.
+                void handleSuggest();
+                return;
+            }
             setBusy(false);
-            if (result.lost) setLost(true);
         }, SETTLE_MS);
         return true;
     }
 
     async function handleSuggest() {
         if (animatingRef.current || lostRef.current || suggestingRef.current) return;
-        if (!hasMoves(tilesRef.current)) return;
+        if (!hasMoves(tilesRef.current)) {
+            stopAutoPlay();
+            return;
+        }
 
         const token = suggestTokenRef.current + 1;
         suggestTokenRef.current = token;
@@ -114,20 +148,37 @@ function App() {
             // "fallback" is a fixed move order (LLM miss or illegal expectimax result).
             if (suggestion.source === "fallback") {
                 setHint("AI could not suggest a move");
+                stopAutoPlay();
                 return;
             }
             const reason =
                 typeof suggestion.reason === "string" ? suggestion.reason.trim() : "";
+            const hintText = reason
+                ? `Suggested: ${capitalize(suggestion.move)}. ${reason}`
+                : `Suggested: ${capitalize(suggestion.move)}.`;
+
+            if (autoPlayingRef.current) {
+                setHint(hintText);
+                suggestingRef.current = false;
+                setSuggesting(false);
+                autoApplyingRef.current = true;
+                const moved = handleMove(suggestion.move);
+                autoApplyingRef.current = false;
+                if (!moved) {
+                    setHint("AI could not suggest a move");
+                    stopAutoPlay();
+                    if (!animatingRef.current) setBusy(false);
+                }
+                return;
+            }
+
             setPendingMove(suggestion.move);
-            setHint(
-                reason
-                    ? `Suggested: ${capitalize(suggestion.move)}. ${reason}`
-                    : `Suggested: ${capitalize(suggestion.move)}.`,
-            );
+            setHint(hintText);
         } catch {
             if (suggestTokenRef.current !== token) return;
             setPendingMove(null);
             setHint("AI could not suggest a move");
+            stopAutoPlay();
         } finally {
             if (suggestTokenRef.current === token) {
                 suggestingRef.current = false;
@@ -140,6 +191,26 @@ function App() {
     function handleApplySuggestion() {
         if (!pendingMove || animatingRef.current || lostRef.current) return;
         handleMove(pendingMove);
+    }
+
+    function handleAutoPlayToggle() {
+        if (autoPlayingRef.current) {
+            stopAutoPlay();
+            return;
+        }
+        if (lostRef.current || animatingRef.current || suggestingRef.current) return;
+        if (!pendingMove && !hasMoves(tilesRef.current)) return;
+
+        autoPlayingRef.current = true;
+        setAutoPlaying(true);
+
+        if (pendingMove) {
+            autoApplyingRef.current = true;
+            handleMove(pendingMove);
+            autoApplyingRef.current = false;
+            return;
+        }
+        void handleSuggest();
     }
 
     function handleModeChange(mode) {
@@ -164,6 +235,8 @@ function App() {
 
     const canSuggest = !lost && !busy && hasMoves(tiles);
     const canApplySuggestion = Boolean(pendingMove) && !lost && !busy;
+    const canToggleAutoPlay =
+        autoPlaying || (!lost && !busy && (Boolean(pendingMove) || hasMoves(tiles)));
 
     return (
         <div className="app">
@@ -172,8 +245,11 @@ function App() {
             <ActionPanel
                 onNewGame={startGame}
                 onSuggest={handleSuggest}
-                canSuggest={canSuggest}
+                canSuggest={canSuggest && !autoPlaying}
                 suggesting={suggesting}
+                autoPlaying={autoPlaying}
+                onAutoPlayToggle={handleAutoPlayToggle}
+                canToggleAutoPlay={canToggleAutoPlay}
                 mode={aiMode}
                 onModeChange={handleModeChange}
                 pendingMove={pendingMove}

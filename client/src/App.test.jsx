@@ -503,3 +503,241 @@ test("changing AI mode clears the pending suggestion", async () => {
     expect(screen.queryByRole("status")).toBeNull();
     expect(screen.queryByRole("button", { name: "Play Right" })).toBeNull();
 });
+
+test("auto play applies a suggestion without waiting for Play", async () => {
+    suggestMove.mockResolvedValue({
+        move: "right",
+        mode: "llm",
+        source: "llm",
+        reason: "Opens space on the left.",
+    });
+    applyMove.mockReturnValue({
+        moved: true,
+        scoreGained: 0,
+        visualTiles: [{ id: 1, row: 0, col: 3, value: 2, fromRow: 0, fromCol: 0, sliding: true }],
+        resolvedTiles: [{ id: 1, row: 0, col: 3, value: 2 }],
+        lost: false,
+    });
+
+    render(<App />);
+    fireEvent.click(screen.getByRole("button", { name: "Auto Play" }));
+
+    await act(async () => {
+        await Promise.resolve();
+    });
+
+    expect(suggestMove).toHaveBeenCalledTimes(1);
+    expect(applyMove).toHaveBeenCalledWith(opening, "right");
+    expect(screen.queryByRole("button", { name: /Play / })).toBeNull();
+    expect(screen.getByRole("button", { name: "Stop" }).getAttribute("aria-pressed")).toBe("true");
+    expect(screen.getByRole("status").textContent).toBe(
+        "Suggested: Right. Opens space on the left.",
+    );
+});
+
+test("auto play requests another suggestion after the slide settles", async () => {
+    const afterFirst = [{ id: 1, row: 0, col: 3, value: 2 }];
+    suggestMove
+        .mockResolvedValueOnce({
+            move: "right",
+            mode: "llm",
+            source: "llm",
+            reason: null,
+        })
+        .mockResolvedValueOnce({
+            move: "down",
+            mode: "llm",
+            source: "llm",
+            reason: null,
+        });
+    applyMove
+        .mockReturnValueOnce({
+            moved: true,
+            scoreGained: 0,
+            visualTiles: [{ id: 1, row: 0, col: 3, value: 2, fromRow: 0, fromCol: 0, sliding: true }],
+            resolvedTiles: afterFirst,
+            lost: false,
+        })
+        .mockReturnValueOnce({
+            moved: true,
+            scoreGained: 0,
+            visualTiles: [{ id: 1, row: 3, col: 3, value: 2, fromRow: 0, fromCol: 3, sliding: true }],
+            resolvedTiles: [{ id: 1, row: 3, col: 3, value: 2 }],
+            lost: false,
+        });
+
+    render(<App />);
+    fireEvent.click(screen.getByRole("button", { name: "Auto Play" }));
+
+    await act(async () => {
+        await Promise.resolve();
+    });
+
+    expect(suggestMove).toHaveBeenCalledTimes(1);
+    expect(applyMove).toHaveBeenCalledTimes(1);
+
+    await act(async () => {
+        vi.advanceTimersByTime(SETTLE_MS);
+        await Promise.resolve();
+    });
+
+    expect(suggestMove).toHaveBeenCalledTimes(2);
+    expect(applyMove).toHaveBeenCalledTimes(2);
+    expect(applyMove).toHaveBeenLastCalledWith(afterFirst, "down");
+});
+
+test("stopping auto play ends the loop after the current move", async () => {
+    suggestMove.mockResolvedValue({
+        move: "right",
+        mode: "llm",
+        source: "llm",
+        reason: null,
+    });
+    applyMove.mockReturnValue({
+        moved: true,
+        scoreGained: 0,
+        visualTiles: [{ id: 1, row: 0, col: 3, value: 2, fromRow: 0, fromCol: 0, sliding: true }],
+        resolvedTiles: [{ id: 1, row: 0, col: 3, value: 2 }],
+        lost: false,
+    });
+
+    render(<App />);
+    fireEvent.click(screen.getByRole("button", { name: "Auto Play" }));
+
+    await act(async () => {
+        await Promise.resolve();
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: "Stop" }));
+    expect(screen.getByRole("button", { name: "Auto Play" }).getAttribute("aria-pressed")).toBe(
+        "false",
+    );
+
+    await act(async () => {
+        vi.advanceTimersByTime(SETTLE_MS);
+        await Promise.resolve();
+    });
+
+    expect(suggestMove).toHaveBeenCalledTimes(1);
+    expect(applyMove).toHaveBeenCalledTimes(1);
+});
+
+test("a fallback during auto play stops the loop", async () => {
+    suggestMove.mockResolvedValue({
+        move: "left",
+        mode: "llm",
+        source: "fallback",
+        reason: null,
+    });
+
+    render(<App />);
+    fireEvent.click(screen.getByRole("button", { name: "Auto Play" }));
+
+    await act(async () => {
+        await Promise.resolve();
+    });
+
+    expect(applyMove).not.toHaveBeenCalled();
+    expect(screen.getByRole("status").textContent).toBe("AI could not suggest a move");
+    expect(screen.getByRole("button", { name: "Auto Play" }).getAttribute("aria-pressed")).toBe(
+        "false",
+    );
+});
+
+test("a manual move during auto play stops the loop", async () => {
+    let finishSuggest;
+    suggestMove.mockImplementation(
+        () =>
+            new Promise((resolve) => {
+                finishSuggest = resolve;
+            }),
+    );
+    applyMove.mockReturnValue({
+        moved: true,
+        scoreGained: 0,
+        visualTiles: [{ id: 1, row: 0, col: 1, value: 2, fromRow: 0, fromCol: 0, sliding: true }],
+        resolvedTiles: [{ id: 1, row: 0, col: 1, value: 2 }],
+        lost: false,
+    });
+
+    render(<App />);
+    fireEvent.click(screen.getByRole("button", { name: "Auto Play" }));
+    press("ArrowRight");
+
+    expect(applyMove).toHaveBeenCalledTimes(1);
+    expect(screen.getByRole("button", { name: "Auto Play" }).getAttribute("aria-pressed")).toBe(
+        "false",
+    );
+
+    await act(async () => {
+        finishSuggest({
+            move: "left",
+            mode: "llm",
+            source: "llm",
+            reason: null,
+        });
+        await Promise.resolve();
+    });
+
+    await act(async () => {
+        vi.advanceTimersByTime(SETTLE_MS);
+        await Promise.resolve();
+    });
+
+    // The cancelled suggestion must not restart auto-play or apply a second move.
+    expect(applyMove).toHaveBeenCalledTimes(1);
+    expect(suggestMove).toHaveBeenCalledTimes(1);
+});
+
+test("auto play applies a pending suggestion then continues", async () => {
+    const afterPending = [{ id: 1, row: 0, col: 3, value: 2 }];
+    suggestMove
+        .mockResolvedValueOnce({
+            move: "right",
+            mode: "llm",
+            source: "llm",
+            reason: "Opens space on the left.",
+        })
+        .mockResolvedValueOnce({
+            move: "down",
+            mode: "llm",
+            source: "llm",
+            reason: null,
+        });
+    applyMove
+        .mockReturnValueOnce({
+            moved: true,
+            scoreGained: 0,
+            visualTiles: [{ id: 1, row: 0, col: 3, value: 2, fromRow: 0, fromCol: 0, sliding: true }],
+            resolvedTiles: afterPending,
+            lost: false,
+        })
+        .mockReturnValueOnce({
+            moved: true,
+            scoreGained: 0,
+            visualTiles: [{ id: 1, row: 3, col: 3, value: 2, fromRow: 0, fromCol: 3, sliding: true }],
+            resolvedTiles: [{ id: 1, row: 3, col: 3, value: 2 }],
+            lost: false,
+        });
+
+    render(<App />);
+    fireEvent.click(screen.getByRole("button", { name: "AI" }));
+
+    await act(async () => {
+        await Promise.resolve();
+    });
+
+    expect(screen.getByRole("button", { name: "Play Right" })).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Auto Play" }));
+
+    expect(applyMove).toHaveBeenCalledWith(opening, "right");
+    expect(screen.queryByRole("button", { name: /Play / })).toBeNull();
+
+    await act(async () => {
+        vi.advanceTimersByTime(SETTLE_MS);
+        await Promise.resolve();
+    });
+
+    expect(suggestMove).toHaveBeenCalledTimes(2);
+    expect(applyMove).toHaveBeenLastCalledWith(afterPending, "down");
+});
