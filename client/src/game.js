@@ -3,6 +3,9 @@ export const GRID_COUNT = GRID_SIZE * GRID_SIZE;
 export const SLIDE_MS = 140;
 // The merged numbers replace the slide once the transition has painted its last frame.
 export const SETTLE_MS = SLIDE_MS + 20;
+// Pause after settle before the next Auto Play suggestion so the loop is watchable
+// and does not burn the process rate limit as fast as the slide allows.
+export const AUTO_PLAY_GAP_MS = 750;
 
 // One step on the board. Row grows downward, column grows to the right.
 const DIRECTIONS = {

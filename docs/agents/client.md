@@ -45,7 +45,7 @@ Bottom of the page:
 
 - **New Game** starts over and stops Auto Play.
 - **AI** requests a suggestion. While the request is in flight the label is **Thinking…** and the button is disabled. **AI** is also disabled while Auto Play is running.
-- **Auto Play** starts the suggest → apply → settle → suggest loop. While running the label is **Stop** and `aria-pressed` is true. **Stop** is always available during the loop.
+- **Auto Play** starts the suggest → apply → settle → `AUTO_PLAY_GAP_MS` pause → suggest loop. While running the label is **Stop** and `aria-pressed` is true. **Stop** is always available during the loop.
 - **AI mode** radios: **LLM** (default) or **Expectimax**. The fieldset is disabled while a request is in flight or Auto Play is running.
 - A status line under the modes shows the result or an error. During Auto Play the latest hint stays visible through the slide.
 - **Play {Direction}** appears only after a usable suggestion when Auto Play is off. The move is not applied until the player presses it.
@@ -82,7 +82,7 @@ A manual board-changing move while Auto Play is running stops Auto Play.
 5. On HTTP `429`, shows **Too many suggestions. Wait a moment and try again.**, does not offer **Play**, and stops Auto Play.
 6. On other network or HTTP failure, shows the same error line as fallback and stops Auto Play.
 
-After an Auto Play move settles, if Auto Play is still on and the game is not lost, `App` calls `handleSuggest` again. Loss, **Stop**, **New Game**, a manual move, or an unusable suggestion ends the loop.
+After an Auto Play move settles, if Auto Play is still on and the game is not lost, `App` waits `AUTO_PLAY_GAP_MS` (750ms) then calls `handleSuggest` again. Loss, **Stop**, **New Game**, a manual move, or an unusable suggestion ends the loop (including during the gap).
 
 Changing the mode clears a pending suggestion. Choosing the same mode again is a no-op. **Play {Direction}** calls `handleMove` with that direction, so confirm shares the swipe and key path. Starting Auto Play with a pending suggestion applies that move first, then continues the loop after settle.
 
@@ -126,7 +126,7 @@ A swipe starts on pointer down (left button only for a mouse), captures the poin
 - `src/game.test.js` covers the deal, ids, slides, single merges, blocked moves, spawn timing, loss, and `tilesToBoard`.
 - `src/swipe.test.js` covers the threshold and axis choice.
 - `src/api.test.js` covers the default same-origin `/suggest` URL, success body, and `SuggestError` statuses including 429.
-- `src/App.test.jsx` covers score timing, shared swipe and key paths, best score across a new game, a cancelled slide, a lost game ignoring input, suggest-then-confirm, Auto Play apply/loop/stop/fallback/manual takeover, mode selection, fallback / rate-limit / failed requests, and dropping a stale suggestion after a board-changing move.
+- `src/App.test.jsx` covers score timing, shared swipe and key paths, best score across a new game, a cancelled slide, a lost game ignoring input, suggest-then-confirm, Auto Play apply/gap/loop/stop/fallback/manual takeover, mode selection, fallback / rate-limit / failed requests, and dropping a stale suggestion after a board-changing move.
 - `src/components/Board.test.jsx` covers the slide, overlay stacking, and pointer capture.
 - `src/components/ScoreCard.test.jsx` covers opening and closing help.
 

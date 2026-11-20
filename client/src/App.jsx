@@ -3,7 +3,14 @@ import Board from "./components/Board";
 import ScoreCard from "./components/ScoreCard";
 import ActionPanel from "./components/ActionPanel";
 import { suggestMove, SuggestError } from "./api";
-import { applyMove, createInitialTiles, hasMoves, SETTLE_MS, tilesToBoard } from "./game";
+import {
+    applyMove,
+    AUTO_PLAY_GAP_MS,
+    createInitialTiles,
+    hasMoves,
+    SETTLE_MS,
+    tilesToBoard,
+} from "./game";
 import "./App.css";
 
 const KEY_DIRECTIONS = {
@@ -119,8 +126,15 @@ function App() {
                 return;
             }
             if (autoPlayingRef.current) {
-                // Keep busy while the next suggestion request starts.
-                void handleSuggest();
+                // Keep busy through the gap; Stop / New Game clears autoPlaying or bumps the token.
+                window.setTimeout(() => {
+                    if (moveTokenRef.current !== token) return;
+                    if (!autoPlayingRef.current) {
+                        setBusy(false);
+                        return;
+                    }
+                    void handleSuggest();
+                }, AUTO_PLAY_GAP_MS);
                 return;
             }
             setBusy(false);

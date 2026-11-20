@@ -2,7 +2,7 @@ import { act, cleanup, fireEvent, render, screen } from "@testing-library/react"
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
 import App from "./App.jsx";
 import { suggestMove, SuggestError } from "./api";
-import { applyMove, createInitialTiles, SETTLE_MS } from "./game";
+import { applyMove, AUTO_PLAY_GAP_MS, createInitialTiles, SETTLE_MS } from "./game";
 
 // These tests lock input and score timing. The move rules are covered in game.test.js.
 vi.mock("./game", async () => {
@@ -603,6 +603,14 @@ test("auto play requests another suggestion after the slide settles", async () =
         await Promise.resolve();
     });
 
+    // The gap after settle must pass before the next suggestion.
+    expect(suggestMove).toHaveBeenCalledTimes(1);
+
+    await act(async () => {
+        vi.advanceTimersByTime(AUTO_PLAY_GAP_MS);
+        await Promise.resolve();
+    });
+
     expect(suggestMove).toHaveBeenCalledTimes(2);
     expect(applyMove).toHaveBeenCalledTimes(2);
     expect(applyMove).toHaveBeenLastCalledWith(afterFirst, "down");
@@ -636,7 +644,7 @@ test("stopping auto play ends the loop after the current move", async () => {
     );
 
     await act(async () => {
-        vi.advanceTimersByTime(SETTLE_MS);
+        vi.advanceTimersByTime(SETTLE_MS + AUTO_PLAY_GAP_MS);
         await Promise.resolve();
     });
 
@@ -702,7 +710,7 @@ test("a manual move during auto play stops the loop", async () => {
     });
 
     await act(async () => {
-        vi.advanceTimersByTime(SETTLE_MS);
+        vi.advanceTimersByTime(SETTLE_MS + AUTO_PLAY_GAP_MS);
         await Promise.resolve();
     });
 
@@ -756,7 +764,7 @@ test("auto play applies a pending suggestion then continues", async () => {
     expect(screen.queryByRole("button", { name: /Play / })).toBeNull();
 
     await act(async () => {
-        vi.advanceTimersByTime(SETTLE_MS);
+        vi.advanceTimersByTime(SETTLE_MS + AUTO_PLAY_GAP_MS);
         await Promise.resolve();
     });
 
