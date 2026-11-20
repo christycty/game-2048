@@ -61,7 +61,7 @@ AI is unavailable when the game is over, while a move animation is playing, whil
 
 ### Auto Play
 
-1. Player presses **Auto Play**. The control becomes **Stop** (`aria-pressed` true).
+1. Player presses **Auto Play**. The control becomes **Stop** (`aria-pressed` true). If the mode was **LLM**, the client switches to **Expectimax** (higher rate-limit bucket for continuous play) and shows a short status line about the switch.
 2. If a usable suggestion is already pending, Auto Play applies it immediately. Otherwise it requests one.
 3. On a usable suggestion, the client applies the move without waiting for **Play**, keeps the hint visible during the slide, waits a short pause after the slide settles, then requests the next suggestion.
 4. Auto Play stops when the player presses **Stop**, starts **New Game**, loses, takes a manual key/swipe move, or when a suggestion is unusable (fallback, rate limit, or transport failure). Fallback/transport shows **AI could not suggest a move**; rate limit shows **Too many suggestions. Wait a moment and try again.** The board is unchanged for that step.
@@ -89,7 +89,7 @@ A release matches this product when:
 - A new visitor can start a game, move with keys or swipe, see score update, lose, and start over without confusion.
 - Best score survives New Game within the same page load and resets on full reload.
 - The player can request an LLM or Expectimax suggestion, read the reason when one is returned, confirm with **Play**, and see that move applied like any other move.
-- The player can start **Auto Play**, watch usable suggestions apply in a loop, and stop with **Stop**, New Game, a manual move, loss, or a failed suggestion.
+- The player can start **Auto Play** (switching LLM → Expectimax when needed), watch usable suggestions apply in a loop, and stop with **Stop**, New Game, a manual move, loss, or a failed suggestion.
 - A failed or unusable suggestion leaves the board unchanged and shows a clear failure message (including a distinct rate-limit message).
 - Expectimax returns a legal search move with a per-direction score line the player can read.
 

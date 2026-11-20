@@ -45,9 +45,9 @@ Bottom of the page:
 
 - **New Game** starts over and stops Auto Play.
 - **AI** requests a suggestion. While the request is in flight the label is **Thinking…** and the button is disabled. **AI** is also disabled while Auto Play is running.
-- **Auto Play** starts the suggest → apply → settle → `AUTO_PLAY_GAP_MS` pause → suggest loop. While running the label is **Stop** and `aria-pressed` is true. **Stop** is always available during the loop.
+- **Auto Play** starts the suggest → apply → settle → `AUTO_PLAY_GAP_MS` pause → suggest loop. Starting from **LLM** switches the mode to **Expectimax** (and shows a status line) so the loop uses the higher rate-limit bucket. While running the label is **Stop** and `aria-pressed` is true. **Stop** is always available during the loop.
 - **AI mode** radios: **LLM** (default) or **Expectimax**. The fieldset is disabled while a request is in flight or Auto Play is running.
-- A status line under the modes shows the result or an error. During Auto Play the latest hint stays visible through the slide.
+- A status line under the modes shows the result or an error. During Auto Play the latest hint stays visible through the slide and through the next Thinking request.
 - **Play {Direction}** appears only after a usable suggestion when Auto Play is off. The move is not applied until the player presses it.
 
 Best score lives in component state for the page session. A reload clears it. New Game clears the current score and the board, and keeps the best score. It also clears any pending suggestion and stops Auto Play.
@@ -75,7 +75,7 @@ A manual board-changing move while Auto Play is running stops Auto Play.
 
 `handleSuggest`:
 
-1. Clears any previous hint and pending move.
+1. Clears any previous pending move. Clears the hint only when Auto Play is off (Auto Play keeps the last hint through Thinking).
 2. Calls `suggestMove(tilesToBoard(tiles), aiMode)`.
 3. If `source` is `"fallback"`, shows **AI could not suggest a move**, does not offer **Play**, and stops Auto Play. The fixed fallback order is not treated as a model choice.
 4. On a usable body, shows `Suggested: {Move}.` plus the reason when present. If Auto Play is off, sets `pendingMove`. If Auto Play is on, applies the move immediately via `handleMove` (marked as an auto-apply so the loop is not treated as a manual takeover).
@@ -84,7 +84,7 @@ A manual board-changing move while Auto Play is running stops Auto Play.
 
 After an Auto Play move settles, if Auto Play is still on and the game is not lost, `App` waits `AUTO_PLAY_GAP_MS` (750ms) then calls `handleSuggest` again. The gap keeps `busy` true so **AI** stays inactive through the pause; **Stop** clears that hold immediately when nothing else is in flight. Loss, **Stop**, **New Game**, a manual move, a blocked auto-applied move, or an unusable suggestion ends the loop (including during the gap).
 
-Changing the mode clears a pending suggestion. Choosing the same mode again is a no-op. **Play {Direction}** calls `handleMove` with that direction, so confirm shares the swipe and key path. Starting Auto Play with a pending suggestion applies that move first, then continues the loop after settle.
+Changing the mode clears a pending suggestion. Choosing the same mode again is a no-op. **Play {Direction}** calls `handleMove` with that direction, so confirm shares the swipe and key path. Starting Auto Play switches **LLM** → **Expectimax** when needed, applies a pending suggestion first when one exists, then continues the loop after settle.
 
 The UI does not show the response `mode` or `source` fields beyond treating `"fallback"` as failure. Expectimax reasons are the server score line and appear in the same hint as LLM reasons.
 
@@ -126,7 +126,7 @@ A swipe starts on pointer down (left button only for a mouse), captures the poin
 - `src/game.test.js` covers the deal, ids, slides, single merges, blocked moves, spawn timing, loss, and `tilesToBoard`.
 - `src/swipe.test.js` covers the threshold and axis choice.
 - `src/api.test.js` covers the default same-origin `/suggest` URL, success body, and `SuggestError` statuses including 429.
-- `src/App.test.jsx` covers score timing, shared swipe and key paths, best score across a new game, a cancelled slide, a lost game ignoring input, suggest-then-confirm, Auto Play apply/gap/loop/stop (including Stop during the gap re-enabling AI), pending-start blocked move, loss / rate limit / New Game exits, fallback/manual takeover, mode selection, fallback / rate-limit / failed requests, and dropping a stale suggestion after a board-changing move.
+- `src/App.test.jsx` covers score timing, shared swipe and key paths, best score across a new game, a cancelled slide, a lost game ignoring input, suggest-then-confirm, Auto Play apply/gap/loop/stop (including Stop during the gap re-enabling AI), LLM→Expectimax switch, hint kept through the next Thinking step, pending-start and in-loop blocked apply, loss / rate limit / New Game exits, fallback/manual takeover, mode selection, fallback / rate-limit / failed requests, and dropping a stale suggestion after a board-changing move.
 - `src/components/Board.test.jsx` covers the slide, overlay stacking, and pointer capture.
 - `src/components/ScoreCard.test.jsx` covers opening and closing help.
 

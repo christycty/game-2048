@@ -68,6 +68,7 @@ function App() {
         animatingRef.current = false;
         suggestingRef.current = false;
         autoPlayingRef.current = false;
+        autoApplyingRef.current = false;
         tilesRef.current = nextTiles;
         scoreRef.current = 0;
         lostRef.current = false;
@@ -160,7 +161,12 @@ function App() {
         suggestingRef.current = true;
         setSuggesting(true);
         setBusy(true);
-        clearSuggestion();
+        // Auto Play keeps the last hint through Thinking; a fresh AI ask clears both.
+        if (autoPlayingRef.current) {
+            setPendingMove(null);
+        } else {
+            clearSuggestion();
+        }
 
         try {
             const suggestion = await suggestMove(tilesToBoard(tilesRef.current), aiModeRef.current);
@@ -227,6 +233,12 @@ function App() {
 
         autoPlayingRef.current = true;
         setAutoPlaying(true);
+        // LLM is capped for model spend; Expectimax owns the higher Auto Play bucket.
+        if (aiModeRef.current === "llm") {
+            aiModeRef.current = "expectimax";
+            setAiMode("expectimax");
+            setHint("Switched to Expectimax for Auto Play.");
+        }
 
         if (pendingMove) {
             autoApplyingRef.current = true;
