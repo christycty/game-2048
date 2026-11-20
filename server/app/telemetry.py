@@ -43,8 +43,8 @@ SERVICE_NAME = "game-2048-server"
 _LOOPBACK = {"localhost", "127.0.0.1", "::1"}
 # Compose reaches Phoenix on the host at this name.
 _DOCKER_HOST_ALIAS = "host.docker.internal"
-# Keep the Phoenix tree on suggestion work. /metrics is scrape noise.
-_EXCLUDED_URLS = "/health,/metrics,/docs,/openapi.json,/redoc"
+# Keep the Phoenix tree on suggestion work. /metrics and client beacons are scrape noise.
+_EXCLUDED_URLS = "/health,/metrics,/client-events,/docs,/openapi.json,/redoc"
 # Phoenix places TTFT from this OpenInference event name.
 # The call is not streamed; the stamp is load + prompt_eval.
 _FIRST_TOKEN_EVENT = "First Token Stream Event"
@@ -57,10 +57,14 @@ PROM_OPERATION_DURATION = "gen_ai_client_operation_duration_seconds"
 PROM_TOKEN_USAGE = "gen_ai_client_token_usage"
 PROM_REQUEST_COUNT = "gen_ai_client_request_count"
 PROM_SUGGEST_SOURCE = "suggest_source"
+PROM_CLIENT_SUGGEST_OUTCOME = "client_suggest_outcome"
 # Outcome label on request_count (success rate = success / total).
 REQUEST_OUTCOME_SUCCESS = "success"
 REQUEST_OUTCOME_ERROR = "error"
 REQUEST_OUTCOME_TIMEOUT = "timeout"
+# Browser beacon outcomes (fail / rate_limit; cancel deferred until AbortSignal).
+CLIENT_OUTCOME_FAIL = "fail"
+CLIENT_OUTCOME_RATE_LIMIT = "rate_limit"
 
 # OpenInference keys used by tests and callers.
 OPENINFERENCE_SPAN_KIND = SpanAttributes.OPENINFERENCE_SPAN_KIND
@@ -96,6 +100,7 @@ class LlmMetrics:
     token_usage: metrics.Histogram
     request_count: metrics.Counter
     suggest_source: metrics.Counter
+    client_suggest_outcome: metrics.Counter
 
 
 @dataclass(frozen=True)
@@ -229,6 +234,11 @@ def setup_telemetry(
             name="suggest.source",
             unit="{suggestion}",
             description="Suggest responses by source (llm / fallback / expectimax).",
+        ),
+        client_suggest_outcome=meter.create_counter(
+            name="client.suggest.outcome",
+            unit="{event}",
+            description="Browser-reported suggest outcomes (fail / rate_limit).",
         ),
     )
 
@@ -439,6 +449,14 @@ def record_suggest_source(source: str) -> None:
     if instruments is None:
         return
     instruments.suggest_source.add(1, {"suggest.source": source})
+
+
+def record_client_suggest_outcome(outcome: str) -> None:
+    """Count one browser beacon for a suggest fail / rate_limit (not cancel yet)."""
+    instruments = llm_metrics()
+    if instruments is None:
+        return
+    instruments.client_suggest_outcome.add(1, {"outcome": outcome})
 
 
 def mark_span_error(span: Span, error: Exception) -> None:

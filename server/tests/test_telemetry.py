@@ -22,6 +22,7 @@ from app.telemetry import (
     LLM_TOKEN_COUNT_PROMPT,
     OPENINFERENCE_SPAN_KIND,
     OUTPUT_VALUE,
+    PROM_CLIENT_SUGGEST_OUTCOME,
     PROM_OPERATION_DURATION,
     PROM_REQUEST_COUNT,
     PROM_SUGGEST_SOURCE,
@@ -164,6 +165,7 @@ def test_health_and_asgi_noise_are_not_traced() -> None:
     client = TestClient(app)
     assert client.get("/health").status_code == 200
     assert client.get("/metrics").status_code == 200
+    assert client.post("/client-events", json={"outcome": "fail"}).status_code == 204
     assert exporter.get_finished_spans() == ()
 
     response = client.post("/suggest", json={"board": OPEN_BOARD, "mode": "llm"})
@@ -204,6 +206,20 @@ def test_suggest_continues_client_traceparent() -> None:
     root = next(span for span in finished if span.name == "POST /suggest")
     assert root.parent is not None
     assert root.parent.span_id == int(parent_span_hex, 16)
+
+
+def test_client_events_increment_scrape_counter() -> None:
+    app = create_app(isolated_settings(export_traces=False), _QuietLLM())
+    client = TestClient(app)
+    assert client.post("/client-events", json={"outcome": "fail"}).status_code == 204
+    assert client.post("/client-events", json={"outcome": "rate_limit"}).status_code == 204
+    assert client.post("/client-events", json={"outcome": "cancel"}).status_code == 422
+
+    body = client.get("/metrics").text
+    assert PROM_CLIENT_SUGGEST_OUTCOME in body
+    assert _labeled_counter(body, PROM_CLIENT_SUGGEST_OUTCOME, 'outcome="fail"') == 1.0
+    assert _labeled_counter(body, PROM_CLIENT_SUGGEST_OUTCOME, 'outcome="rate_limit"') == 1.0
+    assert _labeled_counter(body, PROM_CLIENT_SUGGEST_OUTCOME, 'outcome="cancel"') == 0.0
 
 
 def test_metrics_exposes_gen_ai_series_after_suggest() -> None:
