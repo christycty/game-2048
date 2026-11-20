@@ -34,7 +34,7 @@ Fill the PR body from [`.github/PULL_REQUEST_TEMPLATE.md`](.github/PULL_REQUEST_
 
 - In the **PR body**, use **repo-root paths** in links (e.g. `docs/agents/writing-docs.md`). Do not use `../…` — those paths are only valid inside files on disk, not in GitHub PR markdown.
 - **Verify is per subsection** (UI / API / docs-only): mark N/A only where it does not apply, with a one-line why; still paste real evidence for what does (screenshots in the summary, `curl` transcripts, script output). Do not invent evidence.
-- Visible UI: full desktop viewport (~800px+); no CDP clip / tiling artifacts; show the **new** state, not only the default board.
+- Screenshots: show the **new** state; ≥~800px of real content; **crop empty letterboxing** before upload. Detail: [docs/agents/writing-docs.md](docs/agents/writing-docs.md#pr-verify-screenshots).
 
 ## Documentation changes
 

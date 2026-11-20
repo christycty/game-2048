@@ -4,7 +4,7 @@ Implementation truth for coding agents and deep readers. Product narrative and d
 
 | Doc | Role |
 |---|---|
-| [writing-docs.md](writing-docs.md) | **How to maintain docs** (trees, length, freshness, CI checks) |
+| [writing-docs.md](writing-docs.md) | **How to maintain docs** (trees, length, freshness, CI checks, PR screenshot quality) |
 | [prd.md](prd.md) | Product behavior, non-goals, success criteria |
 | [client.md](client.md) | Client layout, UX wiring, game rules, tests |
 | [server.md](server.md) | API layout, suggest pipeline, settings, tests |
