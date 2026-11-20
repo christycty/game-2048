@@ -79,7 +79,7 @@ Client owns the playable rules and UI. Server owns suggestion modes, the process
 | API | Python 3.12, FastAPI, Pydantic |
 | Model | Host Ollama (`OLLAMA_MODEL`, default `gemma4:latest`) |
 | Run | Local processes or Docker Compose profiles `dev` / `prod` (+ optional `metrics`) |
-| Observability | Phoenix (OTLP traces on host); `GET /metrics` always; optional Compose Prometheus/Grafana |
+| Observability | Phoenix (OTLP traces); `GET /metrics` + optional Prometheus/Grafana; inventory in [agents/telemetry.md](agents/telemetry.md) |
 | CI | Lint, test, image build, Compose config checks |
 
 ## Deploy profiles

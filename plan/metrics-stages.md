@@ -32,10 +32,11 @@ Phoenix owns LLM forensics (prompts, completions, retries, span trees). Metrics 
 **Do:**
 - Add Prometheus with scrape config pointing at the API `/metrics`.
 - Add Grafana with a provisioned Prometheus datasource.
-- One small dashboard: p95 LLM duration, token usage (by type).
+- Dashboard: API (`/suggest` status, suggest source, latency) + LLM (success rate, outcomes, error types, p95, tokens).
 - Dev/prod Compose profiles and short run notes in the PR or runtime doc.
+- Inventory: `docs/agents/telemetry.md` (Phoenix vs scrape series).
 
-**Do not:** Full Datadog-like alert/auth/retention stack.
+**Do not:** Full Datadog-like alert/auth/retention stack. Prometheus Graph is not a product dashboard (Grafana only).
 
 **Effort:** Mostly YAML and Docker networking; less app design than Phoenix. Worth it for a dashboard demo, not required for the production-practice story once Stage 1 lands.
 

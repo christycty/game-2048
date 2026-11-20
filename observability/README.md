@@ -7,5 +7,7 @@ Compose files for the optional `--profile metrics` stack (Prometheus + Grafana).
 
 ```bash
 docker compose --profile dev --profile metrics up
-# Grafana GenAI ops: http://127.0.0.1:3000/d/game2048-genai
+# Grafana GenAI ops: http://127.0.0.1:${GRAFANA_HOST_PORT:-3000}/d/game2048-genai
 ```
+
+Telemetry inventory (every signal; Phoenix vs Prometheus/Grafana): [docs/agents/telemetry.md](../docs/agents/telemetry.md).

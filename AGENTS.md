@@ -9,7 +9,7 @@
 | **How to write / where to put docs** | [docs/agents/writing-docs.md](docs/agents/writing-docs.md) |
 | Human overview / diagrams | [docs/](docs/README.md) |
 | Product rules | [docs/agents/prd.md](docs/agents/prd.md) |
-| Client / server / runtime detail | [docs/agents/](docs/agents/README.md) |
+| Client / server / runtime / telemetry | [docs/agents/](docs/agents/README.md) |
 | Review heuristics | [docs/agents/review-patterns/](docs/agents/review-patterns/client-anti-patterns.md) |
 
 Human docs are orientation only. **Implementation truth is under `docs/agents/`.** When docs and code disagree, fix the canonical agent page and the code together.

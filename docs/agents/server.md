@@ -37,7 +37,7 @@ Package name: `game-2048-server`. Entry: `app.main:app`. Python ≥ 3.11 (images
 | Method | Path | Success | Notes |
 |---|---|---|---|
 | `GET` | `/health` | `{"status":"ok"}` | Never calls Ollama. |
-| `GET` | `/metrics` | Prometheus text | Always on. Series: `gen_ai_client_operation_duration_seconds`, `gen_ai_client_token_usage`, `gen_ai_client_request_count_total` (`success` / `error` / `timeout`). Not traced. |
+| `GET` | `/metrics` | Prometheus text | Always on. GenAI + FastAPI HTTP series; inventory in [telemetry.md](telemetry.md). Not traced. |
 | `POST` | `/suggest` | `SuggestResponse` | `409` when the board has no legal move. `422` on bad payload. `429` + `Retry-After` when the process rate limit is hit (checked before the model). |
 
 CORS allows `http://localhost:${CLIENT_HOST_PORT}` and `http://127.0.0.1:${CLIENT_HOST_PORT}` (default 5173), methods `GET` and `POST`. Same-origin `/suggest` through Vite or nginx does not need CORS; the allowlist remains for builds that set `VITE_API_BASE_URL` to the API origin.
@@ -115,7 +115,7 @@ Loaded from the environment and optional `server/.env` (Compose does not use tha
 
 ## Observability
 
-Traces (OTLP → Phoenix) own LLM forensics: OpenInference spans, retries, prompt/completion. Metrics (`GET /metrics`) own ops aggregates for scrapers. Histograms record on successful Ollama usage mapping (`gen_ai.client.operation.duration`, `gen_ai.client.token.usage`). Counter `gen_ai.client.request_count` records every chat request with `gen_ai.request.outcome` (`success` / `error` / `timeout`) so Grafana can chart success rate. TTFT / per-token timings stay on span events, not as scrape series. Day-to-day dashboards live in Grafana (Prometheus stores the series; its Graph UI is ad-hoc only). Compose: [runtime.md](runtime.md).
+Phoenix = forensics (spans, prompts, retries, TTFT events). Grafana = ops aggregates from Prometheus scrapes of `GET /metrics`. Prometheus stores the time series; Grafana only queries them. Full inventory (every span, event, series, label, and Phoenix vs Grafana ownership): [telemetry.md](telemetry.md). Compose scrape UI: [runtime.md](runtime.md).
 
 ## Tests
 

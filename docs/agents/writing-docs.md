@@ -48,7 +48,7 @@ If a human section has **no diagram and more than ~15 lines**, it probably belon
 
 **Feel:** precise, path-heavy, checklist-friendly. Current truth only.
 
-**Canonical detail pages:** `prd.md`, `client.md`, `server.md`, `runtime.md`, plus `review-patterns/`.
+**Canonical detail pages:** `prd.md`, `client.md`, `server.md`, `telemetry.md`, `runtime.md`, plus `review-patterns/`.
 
 **Root `AGENTS.md`:** short entrypoint (goals, hard rules, pointers). Keep it scannable; put depth in `docs/agents/`. Always link [writing-docs.md](writing-docs.md) so future agents inherit these conventions.
 
