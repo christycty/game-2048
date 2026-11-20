@@ -8,6 +8,7 @@ from opentelemetry.trace import StatusCode
 from app.config import Settings
 from app.llm import ModelSuggestion, OllamaClient
 from app.main import create_app
+from app.rate_limit import SuggestRateLimiter
 from app.telemetry import (
     INPUT_VALUE,
     LLM_FINISH_REASON,
@@ -21,6 +22,10 @@ from app.telemetry import (
     LLM_TOKEN_COUNT_PROMPT,
     OPENINFERENCE_SPAN_KIND,
     OUTPUT_VALUE,
+    PROM_OPERATION_DURATION,
+    PROM_REQUEST_COUNT,
+    PROM_SUGGEST_SOURCE,
+    PROM_TOKEN_USAGE,
     SERVICE_NAME,
     SPAN_KIND_CHAIN,
     SPAN_KIND_LLM,
@@ -55,6 +60,40 @@ class _QuietLLM:
         cancel=None,
     ) -> ModelSuggestion:
         return ModelSuggestion(legal[0], "ok")
+
+
+def _ollama_chat_json(content: object) -> httpx.Response:
+    return httpx.Response(
+        200,
+        json={
+            "model": "test-model",
+            "message": {"content": content},
+            "done_reason": "stop",
+            "prompt_eval_count": 40,
+            "eval_count": 12,
+            "load_duration": 100_000_000,
+            "prompt_eval_duration": 200_000_000,
+            "eval_duration": 300_000_000,
+            "total_duration": 600_000_000,
+        },
+    )
+
+
+def _suggest_status_count(body: str, status_code: int) -> float:
+    """Count samples for POST /suggest at this HTTP status (Grafana by-status panel)."""
+    marker = f'http_status_code="{status_code}",http_target="/suggest"'
+    for line in body.splitlines():
+        if line.startswith("http_server_duration_milliseconds_count") and marker in line:
+            return float(line.rsplit(" ", 1)[-1])
+    return 0.0
+
+
+def _labeled_counter(body: str, metric: str, label_fragment: str) -> float:
+    prefix = f"{metric}_total{{"
+    for line in body.splitlines():
+        if line.startswith(prefix) and label_fragment in line:
+            return float(line.rsplit(" ", 1)[-1])
+    return 0.0
 
 
 def test_phoenix_base_url_gets_traces_path() -> None:
@@ -125,6 +164,7 @@ def test_health_and_asgi_noise_are_not_traced() -> None:
     )
     client = TestClient(app)
     assert client.get("/health").status_code == 200
+    assert client.get("/metrics").status_code == 200
     assert exporter.get_finished_spans() == ()
 
     response = client.post("/suggest", json={"board": OPEN_BOARD, "mode": "llm"})
@@ -137,6 +177,186 @@ def test_health_and_asgi_noise_are_not_traced() -> None:
     assert root.attributes[OPENINFERENCE_SPAN_KIND] == SPAN_KIND_CHAIN
     assert '"mode": "llm"' in root.attributes[INPUT_VALUE]
     assert '"source": "llm"' in root.attributes[OUTPUT_VALUE]
+
+
+def test_metrics_exposes_gen_ai_series_after_suggest() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            json={
+                "model": "test-model",
+                "message": {"content": '{"move": "right", "reason": "Opens the row."}'},
+                "done_reason": "stop",
+                "prompt_eval_count": 40,
+                "eval_count": 12,
+                "load_duration": 100_000_000,
+                "prompt_eval_duration": 200_000_000,
+                "eval_duration": 300_000_000,
+                "total_duration": 600_000_000,
+            },
+        )
+
+    settings = isolated_settings(export_traces=False, ollama_model="test-model")
+    transport = httpx.MockTransport(handler)
+    with httpx.Client(transport=transport, base_url="http://ollama.test") as http:
+        app = create_app(settings, OllamaClient(settings, client=http))
+        client = TestClient(app)
+        assert client.post("/suggest", json={"board": OPEN_BOARD, "mode": "llm"}).status_code == 200
+        metrics = client.get("/metrics")
+
+    assert metrics.status_code == 200
+    body = metrics.text
+    assert PROM_OPERATION_DURATION in body
+    assert PROM_TOKEN_USAGE in body
+    assert PROM_REQUEST_COUNT in body
+    assert PROM_SUGGEST_SOURCE in body
+    assert 'gen_ai_request_outcome="success"' in body
+    assert 'suggest_source="llm"' in body
+    assert 'gen_ai_token_type="input"' in body
+    assert 'gen_ai_token_type="output"' in body
+    assert "time_to_first_token" not in body
+    assert "time_per_output_token" not in body
+
+
+def test_metrics_counts_failed_llm_requests() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(500, text="boom")
+
+    settings = isolated_settings(export_traces=False, llm_max_attempts=1)
+    transport = httpx.MockTransport(handler)
+    with httpx.Client(transport=transport, base_url="http://ollama.test") as http:
+        app = create_app(settings, OllamaClient(settings, client=http))
+        client = TestClient(app)
+        assert client.post("/suggest", json={"board": OPEN_BOARD, "mode": "llm"}).status_code == 200
+        body = client.get("/metrics").text
+
+    assert PROM_REQUEST_COUNT in body
+    assert 'gen_ai_request_outcome="error"' in body
+    assert 'error_type="request"' in body
+    assert 'suggest_source="fallback"' in body
+
+
+def test_metrics_counts_timed_out_llm_requests() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        raise httpx.ReadTimeout("slow", request=request)
+
+    settings = isolated_settings(export_traces=False, llm_max_attempts=1)
+    transport = httpx.MockTransport(handler)
+    with httpx.Client(transport=transport, base_url="http://ollama.test") as http:
+        app = create_app(settings, OllamaClient(settings, client=http))
+        client = TestClient(app)
+        assert client.post("/suggest", json={"board": OPEN_BOARD, "mode": "llm"}).status_code == 200
+        body = client.get("/metrics").text
+
+    assert PROM_REQUEST_COUNT in body
+    assert 'gen_ai_request_outcome="timeout"' in body
+    assert 'gen_ai_request_outcome="error"' not in body
+    assert 'suggest_source="fallback"' in body
+
+
+def test_metrics_counts_expectimax_suggest_source() -> None:
+    app = create_app(isolated_settings(export_traces=False), _QuietLLM())
+    client = TestClient(app)
+    assert (
+        client.post("/suggest", json={"board": OPEN_BOARD, "mode": "expectimax"}).status_code == 200
+    )
+    body = client.get("/metrics").text
+    assert PROM_SUGGEST_SOURCE in body
+    assert 'suggest_source="expectimax"' in body
+    assert PROM_REQUEST_COUNT not in body or "gen_ai_request_outcome=" not in body
+
+
+def test_metrics_records_suggest_http_status_codes() -> None:
+    """FastAPI scrape series power Grafana 'by status' — assert each dashboarded code."""
+    app = create_app(
+        isolated_settings(export_traces=False, suggest_rate_limit_requests=10),
+        _QuietLLM(),
+    )
+    client = TestClient(app)
+    assert client.post("/suggest", json={"board": OPEN_BOARD, "mode": "llm"}).status_code == 200
+    assert client.post("/suggest", json={"board": [[0, 0, 0, 0]], "mode": "llm"}).status_code == 422
+    assert client.post("/suggest", json={"board": STUCK_BOARD, "mode": "llm"}).status_code == 409
+    body = client.get("/metrics").text
+    assert _suggest_status_count(body, 200) >= 1.0
+    assert _suggest_status_count(body, 422) >= 1.0
+    assert _suggest_status_count(body, 409) >= 1.0
+    # 409 returns no body source; 200 did increment llm.
+    assert 'suggest_source="llm"' in body
+
+    limited = create_app(
+        isolated_settings(export_traces=False),
+        _QuietLLM(),
+        rate_limiters={
+            "llm": SuggestRateLimiter(1, 60),
+            "expectimax": SuggestRateLimiter(30, 60),
+        },
+    )
+    limited_client = TestClient(limited)
+    assert (
+        limited_client.post("/suggest", json={"board": OPEN_BOARD, "mode": "llm"}).status_code
+        == 200
+    )
+    assert (
+        limited_client.post("/suggest", json={"board": OPEN_BOARD, "mode": "llm"}).status_code
+        == 429
+    )
+    limited_body = limited_client.get("/metrics").text
+    assert _suggest_status_count(limited_body, 429) >= 1.0
+    # Rate-limit path must not invent an extra suggest_source beyond the 200.
+    assert _labeled_counter(limited_body, PROM_SUGGEST_SOURCE, 'suggest_source="llm"') == 1.0
+    assert _labeled_counter(limited_body, PROM_SUGGEST_SOURCE, 'suggest_source="fallback"') == 0.0
+
+
+def test_metrics_counts_response_error_type() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json={"model": "test-model"})
+
+    settings = isolated_settings(export_traces=False, llm_max_attempts=1)
+    transport = httpx.MockTransport(handler)
+    with httpx.Client(transport=transport, base_url="http://ollama.test") as http:
+        app = create_app(settings, OllamaClient(settings, client=http))
+        client = TestClient(app)
+        assert client.post("/suggest", json={"board": OPEN_BOARD, "mode": "llm"}).status_code == 200
+        body = client.get("/metrics").text
+
+    assert 'gen_ai_request_outcome="error"' in body
+    assert 'error_type="response"' in body
+    assert 'suggest_source="fallback"' in body
+
+
+def test_metrics_counts_parse_error_type() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        return _ollama_chat_json("not-json")
+
+    settings = isolated_settings(export_traces=False, llm_max_attempts=1)
+    transport = httpx.MockTransport(handler)
+    with httpx.Client(transport=transport, base_url="http://ollama.test") as http:
+        app = create_app(settings, OllamaClient(settings, client=http))
+        client = TestClient(app)
+        assert client.post("/suggest", json={"board": OPEN_BOARD, "mode": "llm"}).status_code == 200
+        body = client.get("/metrics").text
+
+    assert 'gen_ai_request_outcome="error"' in body
+    assert 'error_type="parse"' in body
+    assert 'suggest_source="fallback"' in body
+
+
+def test_metrics_counts_illegal_move_error_type() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        # left is illegal on OPEN_BOARD (tile only slides right/down).
+        return _ollama_chat_json('{"move": "left", "reason": "Bad direction."}')
+
+    settings = isolated_settings(export_traces=False, llm_max_attempts=1)
+    transport = httpx.MockTransport(handler)
+    with httpx.Client(transport=transport, base_url="http://ollama.test") as http:
+        app = create_app(settings, OllamaClient(settings, client=http))
+        client = TestClient(app)
+        assert client.post("/suggest", json={"board": OPEN_BOARD, "mode": "llm"}).status_code == 200
+        body = client.get("/metrics").text
+
+    assert 'gen_ai_request_outcome="error"' in body
+    assert 'error_type="illegal_move"' in body
+    assert 'suggest_source="fallback"' in body
 
 
 def test_suggest_nests_llm_under_suggest_chain() -> None:

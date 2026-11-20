@@ -13,7 +13,8 @@ Paste evidence here so reviewers do not have to re-run everything. **N/A is per 
 ### UI (when the page or controls change)
 
 - [ ] Screenshot(s) attached **in this summary** (not only as a separate comment)
-- Capture: full desktop viewport (~800px+ wide); no CDP clip / tiling artifacts; show the **new** state (e.g. mode + suggestion + Play), not only the default board
+- Capture: ≥~800px of real content; crop letterboxing / empty margins; no CDP clip / tiling artifacts; show the **new** state (e.g. mode + suggestion + Play, or Grafana panels with data), not only the default / empty view
+- Quality bar: `docs/agents/writing-docs.md` → **PR Verify screenshots**
 - [ ] UI N/A — why:
 
 <!-- Drag images below, or: gh pr edit --attach … -->

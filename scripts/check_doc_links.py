@@ -16,7 +16,6 @@ ROOT_FILE_NAMES = (
     "README.md",
     "AGENTS.md",
     "client/README.md",
-    "doc/README.md",
 )
 
 LINK_RE = re.compile(r"(?<!!)\[[^\]]*\]\(([^)]+)\)")

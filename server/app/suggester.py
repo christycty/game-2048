@@ -19,6 +19,7 @@ def _record_result(span, result: SuggestResponse, failures: list[str]) -> Sugges
     if failures:
         payload = {**payload, "failures": failures}
     tel.set_json_io(span, output_payload=payload)
+    tel.record_suggest_source(result.source)
     return result
 
 

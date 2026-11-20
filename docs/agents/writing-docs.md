@@ -48,7 +48,7 @@ If a human section has **no diagram and more than ~15 lines**, it probably belon
 
 **Feel:** precise, path-heavy, checklist-friendly. Current truth only.
 
-**Canonical detail pages:** `prd.md`, `client.md`, `server.md`, `runtime.md`, plus `review-patterns/`.
+**Canonical detail pages:** `prd.md`, `client.md`, `server.md`, `telemetry.md`, `runtime.md`, plus `review-patterns/`.
 
 **Root `AGENTS.md`:** short entrypoint (goals, hard rules, pointers). Keep it scannable; put depth in `docs/agents/`. Always link [writing-docs.md](writing-docs.md) so future agents inherit these conventions.
 
@@ -62,7 +62,7 @@ If a human section has **no diagram and more than ~15 lines**, it probably belon
 **Avoid:**
 
 - Mixing *plan* with *truth* (put staged plans under `plan/` or mark clearly as non-canonical)
-- Conflicting copies of the same fact across packages or old `doc/` paths
+- Conflicting copies of the same fact across packages
 - Essay-length narrative that duplicates human overview
 
 ## Truth vs intent vs plan
@@ -94,6 +94,20 @@ If behavior, API shapes, env names, ports, Compose, or product non-goals change,
 
 PR authors fill the Docs section in [`.github/PULL_REQUEST_TEMPLATE.md`](../../.github/PULL_REQUEST_TEMPLATE.md). Mark **Docs N/A** only for changes that do not affect users, runtime, or product rules (and say why).
 
+### PR Verify screenshots
+
+Evidence goes **in the PR summary**, not only as a separate comment. Apply to client UI **and** ops UIs (Grafana, Prometheus, `/metrics` text).
+
+| Do | Don't |
+|---|---|
+| Frame the **new** state (mode + suggestion + Play; GenAI series; dashboard with data) | Default board / empty panels “because the page loads” |
+| Width ≥ ~800px of real content | Phone-narrow strips |
+| Crop to the useful region (autocrop letterboxing / huge empty dark margins) | Tall square captures with the UI in a thin band at the top |
+| Prefer a focused view when the full page is mostly noise (e.g. GenAI lines from `/metrics`, Grafana panels) | Paste an entire raw `/metrics` dump dominated by unrelated HTTP series |
+| Attach via `gh pr edit --attach` (one file at a time) and embed the image markdown **under Verify → UI** | Leave screenshots only in a comment |
+
+Browser automation often pads to a large canvas. **Inspect the PNG before upload**: if most of the image is empty, crop or re-shoot. Avoid CDP `clip` / `captureBeyondViewport` crops that tile or duplicate UI.
+
 ### Freshness by doc kind
 
 | Kind | Bar | How |
@@ -115,7 +129,7 @@ PR authors fill the Docs section in [`.github/PULL_REQUEST_TEMPLATE.md`](../../.
 
 | Check | What it does |
 |---|---|
-| `scripts/check_doc_links.py` | Fails CI if relative Markdown links under docs entrypoints are broken |
+| `scripts/check_doc_links.py` | Fails CI if relative Markdown links are broken in root `README.md`, `AGENTS.md`, `client/README.md`, and all `docs/**/*.md` |
 | `scripts/check_docs_freshness.py` | **Warns** (does not fail) when `client/`, `server/`, Compose, env example, or workflows change without `docs/agents/` or `AGENTS.md` |
 | `scripts/test_*.py` | Pinned unit tests for the scripts above (stdlib `unittest`, no extra deps) |
 
@@ -133,7 +147,7 @@ python scripts/check_docs_freshness.py
 2. Canonical file under `docs/agents/` updated (or Docs N/A noted on the PR)
 3. Human page updated only if the story/diagram would lie
 4. No second copy of the same fact
-5. `python3 scripts/check_doc_links.py` passes
+5. Same commands as the CI `docs` job (script unit tests + `check_doc_links.py`; run freshness locally too)
 
 ### Agents maintaining docs
 

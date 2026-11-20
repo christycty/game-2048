@@ -1,14 +1,15 @@
 # Every service is behind a profile. `docker compose up` starts nothing
-# unless you pass --profile dev or --profile prod.
+# unless you pass --profile dev, --profile prod, and/or --profile metrics.
 # Published ports are loopback-only. localhost is ::1 on some machines,
 # so each port is published on 127.0.0.1 and ::1.
 # The prod API has no host port. The page calls /suggest on the client
 # origin, and nginx forwards it to the prod service.
-# API_HOST_PORT / CLIENT_HOST_PORT and COMPOSE_PROJECT_NAME in .env let each
-# worktree keep its own stack without fighting for 8000/5173.
+# API_HOST_PORT / CLIENT_HOST_PORT / PROMETHEUS_HOST_PORT / GRAFANA_HOST_PORT
+# and COMPOSE_PROJECT_NAME in .env let each worktree keep its own stack.
 # host-gateway makes host.docker.internal resolve on Linux Docker Engine.
 # Docker Desktop can reach an Ollama bound to 127.0.0.1 at that name.
 # Linux Docker Engine cannot: start Ollama with OLLAMA_HOST=0.0.0.0.
+# Prometheus scrapes Compose DNS `api:8000` (alias on both API services).
 
 services:
   dev:
@@ -18,6 +19,10 @@ services:
     ports:
       - "127.0.0.1:${API_HOST_PORT:-8000}:8000"
       - "[::1]:${API_HOST_PORT:-8000}:8000"
+    networks:
+      default:
+        aliases:
+          - api
     extra_hosts:
       - "host.docker.internal:host-gateway"
     environment:
@@ -26,6 +31,7 @@ services:
       # server/.env that points at localhost must not replace this.
       OLLAMA_BASE_URL: ${COMPOSE_OLLAMA_BASE_URL:-http://host.docker.internal:11434}
       OLLAMA_MODEL: ${OLLAMA_MODEL:-gemma4:latest}
+      OLLAMA_STRUCTURED_OUTPUT: ${OLLAMA_STRUCTURED_OUTPUT:-true}
       LLM_MAX_ATTEMPTS: ${LLM_MAX_ATTEMPTS:-3}
       LLM_ATTEMPT_TIMEOUT_SECONDS: ${LLM_ATTEMPT_TIMEOUT_SECONDS:-20}
       LLM_SUGGEST_BUDGET_SECONDS: ${LLM_SUGGEST_BUDGET_SECONDS:-40}
@@ -66,12 +72,17 @@ services:
     profiles: ["prod"]
     build:
       context: ./server
+    networks:
+      default:
+        aliases:
+          - api
     extra_hosts:
       - "host.docker.internal:host-gateway"
     environment:
       APP_ENV: prod
       OLLAMA_BASE_URL: ${COMPOSE_OLLAMA_BASE_URL:-http://host.docker.internal:11434}
       OLLAMA_MODEL: ${OLLAMA_MODEL:-gemma4:latest}
+      OLLAMA_STRUCTURED_OUTPUT: ${OLLAMA_STRUCTURED_OUTPUT:-true}
       LLM_MAX_ATTEMPTS: ${LLM_MAX_ATTEMPTS:-3}
       LLM_ATTEMPT_TIMEOUT_SECONDS: ${LLM_ATTEMPT_TIMEOUT_SECONDS:-20}
       LLM_SUGGEST_BUDGET_SECONDS: ${LLM_SUGGEST_BUDGET_SECONDS:-40}
@@ -98,5 +109,42 @@ services:
       - "127.0.0.1:${CLIENT_HOST_PORT:-5173}:80"
       - "[::1]:${CLIENT_HOST_PORT:-5173}:80"
 
+  # Optional ops UI. Pair with an API profile:
+  #   docker compose --profile dev --profile metrics up
+  prometheus:
+    profiles: ["metrics"]
+    image: prom/prometheus:v2.55.1
+    ports:
+      - "127.0.0.1:${PROMETHEUS_HOST_PORT:-9090}:9090"
+      - "[::1]:${PROMETHEUS_HOST_PORT:-9090}:9090"
+    volumes:
+      - ./observability/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus-data:/prometheus
+    command:
+      - --config.file=/etc/prometheus/prometheus.yml
+      - --storage.tsdb.path=/prometheus
+      - --web.enable-lifecycle
+
+  grafana:
+    profiles: ["metrics"]
+    image: grafana/grafana:11.3.1
+    ports:
+      - "127.0.0.1:${GRAFANA_HOST_PORT:-3000}:3000"
+      - "[::1]:${GRAFANA_HOST_PORT:-3000}:3000"
+    environment:
+      GF_AUTH_ANONYMOUS_ENABLED: "true"
+      GF_AUTH_ANONYMOUS_ORG_ROLE: Viewer
+      GF_AUTH_BASIC_ENABLED: "false"
+      GF_USERS_ALLOW_SIGN_UP: "false"
+      GF_DASHBOARDS_DEFAULT_HOME_DASHBOARD_PATH: /var/lib/grafana/dashboards/genai.json
+    volumes:
+      - ./observability/grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./observability/grafana/dashboards:/var/lib/grafana/dashboards:ro
+      - grafana-data:/var/lib/grafana
+    depends_on:
+      - prometheus
+
 volumes:
   client-node-modules:
+  prometheus-data:
+  grafana-data:
