@@ -2,7 +2,7 @@
   "annotations": { "list": [] },
   "editable": true,
   "fiscalYearStartMonth": 0,
-  "graphTooltip": 0,
+  "graphTooltip": 1,
   "id": null,
   "links": [],
   "panels": [
@@ -16,15 +16,16 @@
     },
     {
       "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "description": "All status codes on one chart. Unstacked lines — each series Y is absolute req/s (429 is not stacked on top of 200).",
       "fieldConfig": {
         "defaults": {
           "unit": "reqps",
           "custom": {
             "drawStyle": "line",
             "lineInterpolation": "smooth",
-            "fillOpacity": 15,
+            "fillOpacity": 10,
             "showPoints": "never",
-            "stacking": { "mode": "normal", "group": "A" },
+            "stacking": { "mode": "none", "group": "A" },
             "spanNulls": false
           }
         },
@@ -40,7 +41,7 @@
           "refId": "A"
         }
       ],
-      "title": "POST /suggest by status code",
+      "title": "POST /suggest by status",
       "type": "timeseries",
       "options": {
         "legend": {
@@ -54,15 +55,16 @@
     },
     {
       "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "description": "API response source (not HTTP status). Unstacked.",
       "fieldConfig": {
         "defaults": {
           "unit": "reqps",
           "custom": {
             "drawStyle": "line",
             "lineInterpolation": "smooth",
-            "fillOpacity": 15,
+            "fillOpacity": 10,
             "showPoints": "never",
-            "stacking": { "mode": "normal", "group": "A" },
+            "stacking": { "mode": "none", "group": "A" },
             "spanNulls": false
           }
         },
@@ -92,6 +94,7 @@
     },
     {
       "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "description": "p50 / p95 wall time for /suggest.",
       "fieldConfig": {
         "defaults": {
           "unit": "ms",
@@ -100,6 +103,7 @@
             "lineInterpolation": "smooth",
             "fillOpacity": 10,
             "showPoints": "never",
+            "stacking": { "mode": "none", "group": "A" },
             "spanNulls": false
           }
         },
@@ -143,6 +147,7 @@
     },
     {
       "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "description": "Empty when idle (no request rate). Real 0% only when attempts exist and all fail.",
       "fieldConfig": {
         "defaults": {
           "unit": "percentunit",
@@ -182,15 +187,17 @@
     },
     {
       "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "description": "Per-attempt outcomes. Unstacked so Y = that outcome's rate.",
       "fieldConfig": {
         "defaults": {
           "unit": "ops",
           "custom": {
             "drawStyle": "line",
             "lineInterpolation": "smooth",
-            "fillOpacity": 15,
+            "fillOpacity": 10,
             "showPoints": "never",
-            "stacking": { "mode": "normal", "group": "A" }
+            "stacking": { "mode": "none", "group": "A" },
+            "spanNulls": false
           }
         },
         "overrides": []
@@ -219,15 +226,16 @@
     },
     {
       "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "description": "Error outcomes only, broken down by error_type. Unstacked.",
       "fieldConfig": {
         "defaults": {
           "unit": "ops",
           "custom": {
             "drawStyle": "line",
             "lineInterpolation": "smooth",
-            "fillOpacity": 15,
+            "fillOpacity": 10,
             "showPoints": "never",
-            "stacking": { "mode": "normal", "group": "A" },
+            "stacking": { "mode": "none", "group": "A" },
             "spanNulls": false
           }
         },
@@ -264,7 +272,9 @@
             "drawStyle": "line",
             "lineInterpolation": "smooth",
             "fillOpacity": 10,
-            "showPoints": "never"
+            "showPoints": "never",
+            "stacking": { "mode": "none", "group": "A" },
+            "spanNulls": false
           }
         },
         "overrides": []
@@ -293,6 +303,7 @@
     },
     {
       "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "description": "Input vs output token rates. Unstacked for direct comparison.",
       "fieldConfig": {
         "defaults": {
           "unit": "short",
@@ -301,7 +312,8 @@
             "lineInterpolation": "smooth",
             "fillOpacity": 10,
             "showPoints": "never",
-            "stacking": { "mode": "normal", "group": "A" }
+            "stacking": { "mode": "none", "group": "A" },
+            "spanNulls": false
           }
         },
         "overrides": []
@@ -325,7 +337,7 @@
           "showLegend": true,
           "calcs": ["lastNotNull"]
         },
-        "tooltip": { "mode": "single", "sort": "none" }
+        "tooltip": { "mode": "multi", "sort": "desc" }
       }
     }
   ],

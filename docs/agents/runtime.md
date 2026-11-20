@@ -65,7 +65,7 @@ The API caps suggestions for the **whole process** (default 5 requests per 60 se
 `GET /metrics` on the API is always on (Prometheus text). Pair `--profile metrics` with `dev` or `prod` to scrape it:
 
 - Prometheus scrapes Compose DNS `api:8000` (`dev` and `prod` both publish that alias).
-- Grafana **GenAI ops** (`/d/game2048-genai`): API row (`/suggest` by status, suggest by source, latency p50/p95) and LLM row (success rate, outcomes, duration, tokens). Full signal inventory and scrape-series notes: [telemetry.md](telemetry.md).
+- Grafana **GenAI ops** (`/d/game2048-genai`): API row (`/suggest` by status, suggest by source, latency) and LLM row (success rate, outcomes, error types, p95, tokens). Unstacked rate lines. Inventory: [telemetry.md](telemetry.md).
 - Anonymous Viewer access on loopback; no Alertmanager or retention stack. Prometheus Graph is ad-hoc only.
 
 Config lives under `observability/` (`prometheus.yml`, Grafana provisioning).

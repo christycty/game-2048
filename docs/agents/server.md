@@ -122,7 +122,7 @@ Phoenix = forensics (spans, prompts, retries, TTFT events). Grafana = ops aggreg
 - `tests/test_helpers.py` asserts `isolated_settings` pins every `Settings` field and ignores hostile `SUGGEST_RATE_LIMIT_*` env.
 - `tests/test_suggest.py` covers health, CORS, rate limit before the model (including the **default** 5-call cap on a shared app), LLM success and reason, illegal-move retry, exhausted fallback, expectimax stub, stuck-board 409, bad payload 422, Ollama HTTP failures, prod schema omission, attempt bounds, and the time budget stop.
 - `tests/test_moves.py` covers the slide and merge rules used for legality.
-- `tests/test_telemetry.py` covers Phoenix URL/header rules, per-app exporters, excluded `/health` and `/metrics`, span nesting, and GenAI series on `/metrics` after a suggest.
+- `tests/test_telemetry.py` covers Phoenix URL/header rules, per-app exporters, excluded `/health` and `/metrics`, span nesting, GenAI series on `/metrics` after a suggest (success / request / response / parse / illegal_move / timeout + suggest sources), and HTTP scrape status codes for `/suggest` (200 / 422 / 409 / 429).
 - `tests/test_suggest_e2e.py` is marked `e2e`. It talks to a real Ollama under `APP_ENV=prod`, sizes `SUGGEST_RATE_LIMIT_REQUESTS` from its parametrized call volume, and asserts `source == "llm"` with a short reason.
 
 ## Not built yet

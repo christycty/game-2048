@@ -15,7 +15,7 @@ Phoenix owns LLM forensics (prompts, completions, retries, span trees). Metrics 
   - `gen_ai.client.operation.duration` (wall seconds per chat call)
   - `gen_ai.client.token.usage` (input/output tokens)
 - Optionally keep TTFT / time-per-output-token histograms only if they stay scraped; otherwise drop them when wiring export (they already live on span events).
-- Tests: `/metrics` text includes the series after a suggest.
+- Tests: `/metrics` text includes GenAI series after a suggest (success + failure outcomes / `error_type`s + suggest sources) and HTTP status labels for `/suggest` (`200` / `422` / `409` / `429`).
 - Docs/PR: Grafana or Datadog can scrape the same endpoint; Phoenix stays on OTLP traces.
 - CI: metrics endpoint can stay on; no external Prometheus required.
 
@@ -32,9 +32,9 @@ Phoenix owns LLM forensics (prompts, completions, retries, span trees). Metrics 
 **Do:**
 - Add Prometheus with scrape config pointing at the API `/metrics`.
 - Add Grafana with a provisioned Prometheus datasource.
-- Dashboard: API (`/suggest` status, suggest source, latency) + LLM (success rate, outcomes, error types, p95, tokens).
+- Dashboard: API (`/suggest` by status unstacked, suggest source, latency) + LLM (success rate, outcomes, error types, p95, tokens).
 - Dev/prod Compose profiles and short run notes in the PR or runtime doc.
-- Inventory: `docs/agents/telemetry.md` (Phoenix vs scrape series).
+- Inventory + scrape-contract tests: `docs/agents/telemetry.md` (Phoenix vs scrape series; `/metrics` asserts, not Grafana UI).
 
 **Do not:** Full Datadog-like alert/auth/retention stack. Prometheus Graph is not a product dashboard (Grafana only).
 

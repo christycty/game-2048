@@ -29,6 +29,11 @@ A **scrape series** is a metric the process exposes on `GET /metrics` in Prometh
 
 We intentionally **do not** scrape TTFT / time-per-output-token / prompt text: those stay Phoenix span events/attributes so `/metrics` stays cheap and dashboards stay readable.
 
+**Grafana charting:**
+- **API row:** `/suggest` by status (all codes), Suggest by source, Latency (p50/p95).
+- **LLM row:** success rate, outcomes, error types, duration, tokens.
+- Multi-series **rate** panels use **unstacked** lines (each series Y is absolute). Stacked areas make a smaller series look “above” a larger one.
+
 Excluded from tracing: `/health`, `/metrics`, `/docs`, `/openapi.json`, `/redoc`.
 
 ## Where each concern belongs
@@ -92,7 +97,7 @@ Always on. Names below are the **Prometheus text** forms (OTel dots → undersco
 
 | Series | Kind | Source | Labels (useful) | Grafana (GenAI ops) |
 |---|---|---|---|---|
-| `http_server_duration_milliseconds_*` | Histogram | FastAPI instrumentor | `http_target`, `http_status_code` | `/suggest` by status; `/suggest` latency p50/p95 |
+| `http_server_duration_milliseconds_*` | Histogram | FastAPI instrumentor | `http_target`, `http_status_code` | `/suggest` by status; latency p50/p95 |
 | `suggest_source_total` | Counter | App (`suggest.source`) | `suggest_source` = `llm` \| `fallback` \| `expectimax-stub` | Suggest by source |
 | `gen_ai_client_request_count_total` | Counter | App (`gen_ai.client.request_count`) | `gen_ai_request_outcome` = `success` \| `error` \| `timeout`; optional `error_type` (`request` / `response` / `parse` / `illegal_move`); model / provider | LLM success rate (empty when idle); requests by outcome; errors by type |
 | `gen_ai_client_operation_duration_seconds_*` | Histogram | App (`gen_ai.client.operation.duration`) | model / provider / operation | LLM call duration p95 — recorded on Ollama **body** path (includes later parse/illegal failures; excludes timeout/request failures) |
@@ -129,6 +134,17 @@ Not incremented on 429 (rate limit) or 409 (no legal move).
 | `timeout` | `httpx.TimeoutException` on the Ollama call |
 
 Histograms for duration/tokens record only when usage mapping runs (successful Ollama body path), including attempts that later fail parse/illegal — those attempts still get `request_count` `error`.
+
+### Tests (scrape contract)
+
+`tests/test_telemetry.py` asserts **`GET /metrics` text**, not Grafana UI. That is the durable contract Prometheus scrapes and Grafana charts.
+
+| Coverage | Labels / series asserted |
+|---|---|
+| LLM success path | `gen_ai_request_outcome=success`, duration + token histograms, `suggest_source=llm` |
+| LLM failures | `error` + `error_type` = `request` \| `response` \| `parse` \| `illegal_move`; `timeout`; `suggest_source=fallback` |
+| Suggest sources | `llm` / `fallback` / `expectimax-stub` (expectimax does not open Ollama) |
+| HTTP `/suggest` | `http_server_duration_milliseconds_count` for status `200` / `422` / `409` / `429` (429 does not bump `suggest_source`) |
 
 ---
 

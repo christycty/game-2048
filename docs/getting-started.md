@@ -46,7 +46,7 @@ docker compose --profile dev --profile metrics up
 ## It worked if…
 
 - Path A / Compose **dev**: `GET http://127.0.0.1:${API_HOST_PORT:-8000}/health` returns `{"status":"ok"}` (even if Ollama is down).
-- After a successful LLM suggest, `GET …/metrics` includes `gen_ai_client_operation_duration_seconds` and `gen_ai_client_request_count_total`.
+- After a successful LLM suggest, `GET …/metrics` includes `gen_ai_client_operation_duration_seconds`, `gen_ai_client_request_count_total` (`success`), and `suggest_source_total`. Full scrape inventory + test contract: [agents/telemetry.md](agents/telemetry.md).
 - Compose **prod**: the board loads at the client host port and **AI** still returns a suggestion (nginx proxies `/suggest`).
 - The board loads; arrow keys or swipe move tiles and update score.
 - **AI** (LLM) returns a suggestion when Ollama and the model are up; **Play** applies that move.
