@@ -13,7 +13,9 @@ def test_isolated_settings_ignores_hostile_rate_limit_env(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setenv("SUGGEST_RATE_LIMIT_REQUESTS", "1")
+    monkeypatch.setenv("SUGGEST_RATE_LIMIT_EXPECTIMAX_REQUESTS", "1")
     monkeypatch.setenv("SUGGEST_RATE_LIMIT_WINDOW_SECONDS", "1")
     settings = isolated_settings()
     assert settings.suggest_rate_limit_requests == 5
+    assert settings.suggest_rate_limit_expectimax_requests == 30
     assert settings.suggest_rate_limit_window_seconds == 60

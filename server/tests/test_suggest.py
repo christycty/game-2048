@@ -87,7 +87,13 @@ def test_suggest_rate_limit_stops_before_the_model() -> None:
     llm = FakeLLM(["right", "right", "right"])
     clock = _Clock()
     limiter = SuggestRateLimiter(2, 60, clock)
-    client = TestClient(create_app(isolated_settings(), llm, rate_limiter=limiter))
+    client = TestClient(
+        create_app(
+            isolated_settings(),
+            llm,
+            rate_limiters={"llm": limiter, "expectimax": SuggestRateLimiter(30, 60, clock)},
+        )
+    )
     assert _suggest(client).status_code == 200
     assert _suggest(client).status_code == 200
 
@@ -115,8 +121,8 @@ def test_suggest_rate_limit_uses_settings() -> None:
     assert llm.calls == 1
 
 
-def test_default_rate_limit_blocks_the_sixth_shared_call() -> None:
-    """Defaults are part of the contract: one app allows 5 suggests, then 429.
+def test_default_llm_rate_limit_blocks_the_sixth_call() -> None:
+    """Defaults are part of the contract: one app allows 5 llm suggests, then 429.
 
     Opt-in e2e shares one module-scoped client across more posts than that.
     Suites that need more room must raise SUGGEST_RATE_LIMIT_REQUESTS.
@@ -125,6 +131,7 @@ def test_default_rate_limit_blocks_the_sixth_shared_call() -> None:
 
     # Field default, not Settings() — that still reads the process env / .env.
     assert Settings.model_fields["suggest_rate_limit_requests"].default == 5
+    assert Settings.model_fields["suggest_rate_limit_expectimax_requests"].default == 30
     assert E2E_SUGGEST_CALLS == E2E_BOARD_COUNT * E2E_RUN_COUNT
     assert E2E_SUGGEST_CALLS > 5
 
@@ -136,6 +143,26 @@ def test_default_rate_limit_blocks_the_sixth_shared_call() -> None:
     assert blocked.status_code == 429
     assert blocked.headers["retry-after"]
     assert llm.calls == 5
+
+
+def test_expectimax_rate_limit_is_separate_from_llm() -> None:
+    """Expectimax has its own higher cap so Auto Play does not spend the LLM budget."""
+    llm = FakeLLM(["right"] * 5)
+    settings = isolated_settings(
+        suggest_rate_limit_requests=1,
+        suggest_rate_limit_expectimax_requests=3,
+    )
+    client = TestClient(create_app(settings, llm))
+    assert _suggest(client).status_code == 200
+    assert _suggest(client).status_code == 429
+    assert llm.calls == 1
+
+    for _ in range(3):
+        response = client.post("/suggest", json={"board": OPEN_BOARD, "mode": "expectimax"})
+        assert response.status_code == 200
+    blocked = client.post("/suggest", json={"board": OPEN_BOARD, "mode": "expectimax"})
+    assert blocked.status_code == 429
+    assert llm.calls == 1
 
 
 def test_e2e_rate_limit_covers_parametrized_volume() -> None:

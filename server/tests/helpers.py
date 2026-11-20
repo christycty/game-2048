@@ -17,6 +17,7 @@ ISOLATED_SETTINGS_DEFAULTS: dict[str, object] = {
     "llm_attempt_timeout_seconds": 10,
     "llm_suggest_budget_seconds": 20,
     "suggest_rate_limit_requests": 5,
+    "suggest_rate_limit_expectimax_requests": 30,
     "suggest_rate_limit_window_seconds": 60,
     "client_host_port": 5173,
     "phoenix_collector_endpoint": "http://phoenix.test",

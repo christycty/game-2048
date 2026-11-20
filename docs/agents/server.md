@@ -37,7 +37,7 @@ Package name: `game-2048-server`. Entry: `app.main:app`. Python ≥ 3.11 (images
 | Method | Path | Success | Notes |
 |---|---|---|---|
 | `GET` | `/health` | `{"status":"ok"}` | Never calls Ollama. |
-| `POST` | `/suggest` | `SuggestResponse` | `409` when the board has no legal move. `422` on bad payload. `429` + `Retry-After` when the process rate limit is hit (checked before the model). |
+| `POST` | `/suggest` | `SuggestResponse` | `409` when the board has no legal move. `422` on bad payload. `429` + `Retry-After` when that mode’s process rate limit is hit (checked before the model). |
 
 CORS allows `http://localhost:${CLIENT_HOST_PORT}` and `http://127.0.0.1:${CLIENT_HOST_PORT}` (default 5173), methods `GET` and `POST`. Same-origin `/suggest` through Vite or nginx does not need CORS; the allowlist remains for builds that set `VITE_API_BASE_URL` to the API origin.
 
@@ -105,14 +105,15 @@ Loaded from the environment and optional `server/.env` (Compose does not use tha
 | `LLM_MAX_ATTEMPTS` | `3` | 1–5 |
 | `LLM_ATTEMPT_TIMEOUT_SECONDS` | `10` | >0, ≤10 |
 | `LLM_SUGGEST_BUDGET_SECONDS` | `20` | >0, ≤20 |
-| `SUGGEST_RATE_LIMIT_REQUESTS` | `5` | 1–30; process-wide |
-| `SUGGEST_RATE_LIMIT_WINDOW_SECONDS` | `60` | 1–3600 |
+| `SUGGEST_RATE_LIMIT_REQUESTS` | `5` | 1–30; LLM bucket (process-wide) |
+| `SUGGEST_RATE_LIMIT_EXPECTIMAX_REQUESTS` | `30` | 1–120; Expectimax bucket (process-wide) |
+| `SUGGEST_RATE_LIMIT_WINDOW_SECONDS` | `60` | 1–3600; shared window for both modes |
 | `CLIENT_HOST_PORT` | `5173` | 1–65535; CORS allowlist |
 
 ## Tests
 
 - `tests/test_helpers.py` asserts `isolated_settings` pins every `Settings` field and ignores hostile `SUGGEST_RATE_LIMIT_*` env.
-- `tests/test_suggest.py` covers health, CORS, rate limit before the model (including the **default** 5-call cap on a shared app), LLM success and reason, illegal-move retry, exhausted fallback, expectimax stub, stuck-board 409, bad payload 422, Ollama HTTP failures, prod schema omission, attempt bounds, and the time budget stop.
+- `tests/test_suggest.py` covers health, CORS, per-mode rate limits before the model (including the **default** 5-call LLM cap and a separate Expectimax bucket), LLM success and reason, illegal-move retry, exhausted fallback, expectimax stub, stuck-board 409, bad payload 422, Ollama HTTP failures, prod schema omission, attempt bounds, and the time budget stop.
 - `tests/test_moves.py` covers the slide and merge rules used for legality.
 - `tests/test_suggest_e2e.py` is marked `e2e`. It talks to a real Ollama under `APP_ENV=prod`, sizes `SUGGEST_RATE_LIMIT_REQUESTS` from its parametrized call volume, and asserts `source == "llm"` with a short reason.
 
