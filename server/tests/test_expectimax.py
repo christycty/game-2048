@@ -1,6 +1,8 @@
+import time
+
 import pytest
 
-from app.expectimax import _chance_value, _freeze, choose_move
+from app.expectimax import _BUDGET_SECONDS, _chance_value, _freeze, choose_move
 from app.moves import first_legal_move, legal_moves
 from helpers import COLUMN_PAIR, SORTED_ROW
 
@@ -159,6 +161,23 @@ def test_choice_is_always_legal() -> None:
     ]
     move = choose_move(board, depth=2)
     assert move in legal_moves(board)
+
+
+def test_production_path_stays_near_the_budget() -> None:
+    # Seven empties take depth 2. The budget must cut the search before a
+    # multi-second stall; leave headroom for a slow CI host.
+    board = [
+        [8, 0, 8, 0],
+        [16, 0, 8, 512],
+        [0, 0, 0, 16],
+        [0, 16, 32, 64],
+    ]
+    assert sum(cell == 0 for row in board for cell in row) == 7
+    started = time.perf_counter()
+    move = choose_move(board)
+    elapsed = time.perf_counter() - started
+    assert move in legal_moves(board)
+    assert elapsed < _BUDGET_SECONDS + 0.5
 
 
 def test_chance_node_rejects_a_full_board() -> None:
