@@ -22,6 +22,8 @@ from app.telemetry import (
     OPENINFERENCE_SPAN_KIND,
     OUTPUT_VALUE,
     PROM_OPERATION_DURATION,
+    PROM_REQUEST_COUNT,
+    PROM_SUGGEST_SOURCE,
     PROM_TOKEN_USAGE,
     SERVICE_NAME,
     SPAN_KIND_CHAIN,
@@ -170,10 +172,60 @@ def test_metrics_exposes_gen_ai_series_after_suggest() -> None:
     body = metrics.text
     assert PROM_OPERATION_DURATION in body
     assert PROM_TOKEN_USAGE in body
+    assert PROM_REQUEST_COUNT in body
+    assert PROM_SUGGEST_SOURCE in body
+    assert 'gen_ai_request_outcome="success"' in body
+    assert 'suggest_source="llm"' in body
     assert 'gen_ai_token_type="input"' in body
     assert 'gen_ai_token_type="output"' in body
     assert "time_to_first_token" not in body
     assert "time_per_output_token" not in body
+
+
+def test_metrics_counts_failed_llm_requests() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(500, text="boom")
+
+    settings = isolated_settings(export_traces=False, llm_max_attempts=1)
+    transport = httpx.MockTransport(handler)
+    with httpx.Client(transport=transport, base_url="http://ollama.test") as http:
+        app = create_app(settings, OllamaClient(settings, client=http))
+        client = TestClient(app)
+        assert client.post("/suggest", json={"board": OPEN_BOARD, "mode": "llm"}).status_code == 200
+        body = client.get("/metrics").text
+
+    assert PROM_REQUEST_COUNT in body
+    assert 'gen_ai_request_outcome="error"' in body
+    assert 'error_type="request"' in body
+    assert 'suggest_source="fallback"' in body
+
+
+def test_metrics_counts_timed_out_llm_requests() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        raise httpx.ReadTimeout("slow", request=request)
+
+    settings = isolated_settings(export_traces=False, llm_max_attempts=1)
+    transport = httpx.MockTransport(handler)
+    with httpx.Client(transport=transport, base_url="http://ollama.test") as http:
+        app = create_app(settings, OllamaClient(settings, client=http))
+        client = TestClient(app)
+        assert client.post("/suggest", json={"board": OPEN_BOARD, "mode": "llm"}).status_code == 200
+        body = client.get("/metrics").text
+
+    assert PROM_REQUEST_COUNT in body
+    assert 'gen_ai_request_outcome="timeout"' in body
+    assert 'gen_ai_request_outcome="error"' not in body
+    assert 'suggest_source="fallback"' in body
+
+
+def test_metrics_counts_expectimax_suggest_source() -> None:
+    app = create_app(isolated_settings(export_traces=False), _QuietLLM())
+    client = TestClient(app)
+    assert client.post("/suggest", json={"board": OPEN_BOARD, "mode": "expectimax"}).status_code == 200
+    body = client.get("/metrics").text
+    assert PROM_SUGGEST_SOURCE in body
+    assert 'suggest_source="expectimax-stub"' in body
+    assert PROM_REQUEST_COUNT not in body or 'gen_ai_request_outcome=' not in body
 
 
 def test_suggest_nests_llm_under_suggest_chain() -> None:

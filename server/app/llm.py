@@ -90,20 +90,43 @@ class OllamaClient:
                 )
                 response.raise_for_status()
                 body = response.json()
+            except httpx.TimeoutException as exc:
+                error = LlmError(f"ollama request failed: {exc}")
+                tel.mark_span_error(span, error)
+                tel.record_llm_request_count(
+                    self._model,
+                    outcome=tel.REQUEST_OUTCOME_TIMEOUT,
+                )
+                raise error from exc
             except (httpx.HTTPError, ValueError) as exc:
                 error = LlmError(f"ollama request failed: {exc}")
                 tel.mark_span_error(span, error)
+                tel.record_llm_request_count(
+                    self._model,
+                    outcome=tel.REQUEST_OUTCOME_ERROR,
+                    error_type="request",
+                )
                 raise error from exc
 
             wall_seconds = time.perf_counter() - wall_start
             if not isinstance(body, dict):
                 error = LlmError("ollama response is not an object")
                 tel.mark_span_error(span, error)
+                tel.record_llm_request_count(
+                    self._model,
+                    outcome=tel.REQUEST_OUTCOME_ERROR,
+                    error_type="response",
+                )
                 raise error
             message = body.get("message")
             if not isinstance(message, dict):
                 error = LlmError("ollama response has no message")
                 tel.mark_span_error(span, error)
+                tel.record_llm_request_count(
+                    self._model,
+                    outcome=tel.REQUEST_OUTCOME_ERROR,
+                    error_type="response",
+                )
                 raise error
 
             raw_content = message.get("content", "")
@@ -130,9 +153,24 @@ class OllamaClient:
                 parsed = parse_move(raw_content)
             except LlmError as exc:
                 tel.mark_span_error(span, exc)
+                tel.record_llm_request_count(
+                    self._model,
+                    outcome=tel.REQUEST_OUTCOME_ERROR,
+                    error_type="parse",
+                )
                 raise
             if parsed.move not in legal:
                 tel.mark_span_error(span, LlmError(f"illegal move {parsed.move}"))
+                tel.record_llm_request_count(
+                    self._model,
+                    outcome=tel.REQUEST_OUTCOME_ERROR,
+                    error_type="illegal_move",
+                )
+            else:
+                tel.record_llm_request_count(
+                    self._model,
+                    outcome=tel.REQUEST_OUTCOME_SUCCESS,
+                )
             return parsed
 
     def close(self) -> None:

@@ -51,10 +51,16 @@ _FIRST_TOKEN_EVENT = "First Token Stream Event"
 _GENERATION_DONE_EVENT = "Generation Done"
 _DURATION_BUCKETS = (0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5, 10, 20)
 _TOKEN_BUCKETS = (1, 4, 16, 64, 256, 1024, 4096, 16384)
-# Prometheus text names for the two primary GenAI series (dots → underscores;
-# unit "s" becomes a `_seconds` suffix).
+# Prometheus text names for GenAI series (dots → underscores; unit "s"
+# becomes a `_seconds` suffix; Counter → `_total`).
 PROM_OPERATION_DURATION = "gen_ai_client_operation_duration_seconds"
 PROM_TOKEN_USAGE = "gen_ai_client_token_usage"
+PROM_REQUEST_COUNT = "gen_ai_client_request_count"
+PROM_SUGGEST_SOURCE = "suggest_source"
+# Outcome label on request_count (success rate = success / total).
+REQUEST_OUTCOME_SUCCESS = "success"
+REQUEST_OUTCOME_ERROR = "error"
+REQUEST_OUTCOME_TIMEOUT = "timeout"
 
 # OpenInference keys used by tests and callers.
 OPENINFERENCE_SPAN_KIND = SpanAttributes.OPENINFERENCE_SPAN_KIND
@@ -85,9 +91,11 @@ SPAN_KIND_CHAIN = OpenInferenceSpanKindValues.CHAIN.value
 
 @dataclass(frozen=True)
 class LlmMetrics:
-    # Primary scrape series. TTFT / per-token timings stay on span events.
+    # Scrape series. TTFT / per-token timings stay on span events.
     operation_duration: metrics.Histogram
     token_usage: metrics.Histogram
+    request_count: metrics.Counter
+    suggest_source: metrics.Counter
 
 
 @dataclass(frozen=True)
@@ -211,6 +219,16 @@ def setup_telemetry(
             unit="{token}",
             description="Tokens consumed by an LLM call.",
             explicit_bucket_boundaries_advisory=_TOKEN_BUCKETS,
+        ),
+        request_count=meter.create_counter(
+            name="gen_ai.client.request_count",
+            unit="{request}",
+            description="LLM chat requests by outcome (success / error / timeout).",
+        ),
+        suggest_source=meter.create_counter(
+            name="suggest.source",
+            unit="{suggestion}",
+            description="Suggest responses by source (llm / fallback / expectimax-stub).",
         ),
     )
 
@@ -386,11 +404,7 @@ def record_llm_usage(
     if done_attrs:
         span.add_event(_GENERATION_DONE_EVENT, attributes=done_attrs)
 
-    metric_attrs = {
-        "gen_ai.operation.name": "chat",
-        "gen_ai.provider.name": "ollama",
-        "gen_ai.request.model": model,
-    }
+    metric_attrs = _operation_metric_attrs(model)
     instruments = llm_metrics()
     if instruments is None:
         return
@@ -405,9 +419,39 @@ def record_llm_usage(
         )
 
 
+def record_llm_request_count(model: str, *, outcome: str, error_type: str | None = None) -> None:
+    """Count one LLM chat request. Histograms stay on successful usage mapping only."""
+    instruments = llm_metrics()
+    if instruments is None:
+        return
+    attrs = {
+        **_operation_metric_attrs(model),
+        "gen_ai.request.outcome": outcome,
+    }
+    if error_type:
+        attrs["error.type"] = error_type
+    instruments.request_count.add(1, attrs)
+
+
+def record_suggest_source(source: str) -> None:
+    """Count one completed suggest response by API `source` (not HTTP status)."""
+    instruments = llm_metrics()
+    if instruments is None:
+        return
+    instruments.suggest_source.add(1, {"suggest.source": source})
+
+
 def mark_span_error(span: Span, error: Exception) -> None:
     span.record_exception(error)
     span.set_status(Status(StatusCode.ERROR, str(error)))
+
+
+def _operation_metric_attrs(model: str) -> dict[str, str]:
+    return {
+        "gen_ai.operation.name": "chat",
+        "gen_ai.provider.name": "ollama",
+        "gen_ai.request.model": model,
+    }
 
 
 def _timestamp_inside_span(span: Span, started_ns: int, offset_seconds: float) -> int:
