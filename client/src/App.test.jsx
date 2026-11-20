@@ -342,7 +342,7 @@ test("expectimax mode is sent to the suggestion API", async () => {
     suggestMove.mockResolvedValue({
         move: "up",
         mode: "expectimax",
-        source: "expectimax-stub",
+        source: "expectimax",
         reason: null,
     });
 
@@ -471,7 +471,7 @@ test("a blocked move during an AI request keeps the suggestion", async () => {
         finishSuggest({
             move: "right",
             mode: "expectimax",
-            source: "expectimax-stub",
+            source: "expectimax",
             reason: null,
         });
         await Promise.resolve();
