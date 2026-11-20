@@ -86,9 +86,7 @@ def choose_move(
         for current in range(limit + 1):
             if cancel is not None and cancel.is_set():
                 raise SuggestCancelled()
-            best, scores = _best_at_depth(
-                root, legal, current, deadline, now, cancel=cancel
-            )
+            best, scores = _best_at_depth(root, legal, current, deadline, now, cancel=cancel)
     except (_TimeUp, _SearchBroken):
         # Budget or an unreachable state mid-depth: keep the last finished depth.
         pass
@@ -127,9 +125,7 @@ def _best_at_depth(
     best_score = -math.inf
     for direction in legal:
         _check(deadline, clock, cancel)
-        score = _chance_value(
-            _apply(root, direction), depth, cache, deadline, clock, cancel=cancel
-        )
+        score = _chance_value(_apply(root, direction), depth, cache, deadline, clock, cancel=cancel)
         scores[direction] = score
         if score > best_score:
             best_score = score
@@ -171,8 +167,8 @@ def _chance_value(
     for row, col in empties:
         for tile, prob in ((2, _TWO_PROB), (4, _FOUR_PROB)):
             spawned = _place(board, row, col, tile)
-            total += weight * prob * _max_value(
-                spawned, depth, cache, deadline, clock, cancel=cancel
+            total += (
+                weight * prob * _max_value(spawned, depth, cache, deadline, clock, cancel=cancel)
             )
     cache[key] = total
     return total
@@ -204,9 +200,7 @@ def _max_value(
         return value
 
     value = max(
-        _chance_value(
-            _apply(board, direction), depth - 1, cache, deadline, clock, cancel=cancel
-        )
+        _chance_value(_apply(board, direction), depth - 1, cache, deadline, clock, cancel=cancel)
         for direction in legal
     )
     cache[key] = value

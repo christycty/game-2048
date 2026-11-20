@@ -53,6 +53,4 @@ class SuggestRateLimiter:
     def release(self, token: object) -> None:
         """Drop this request's hit after a client cancel so Stop does not burn the cap."""
         with self._lock:
-            self._hits = deque(
-                (stamp, hit) for stamp, hit in self._hits if hit is not token
-            )
+            self._hits = deque((stamp, hit) for stamp, hit in self._hits if hit is not token)
