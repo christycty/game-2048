@@ -4,6 +4,25 @@ on:
   pull_request:
 
 jobs:
+  docs:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Pin script behavior with unit tests
+        working-directory: scripts
+        run: python -m unittest discover -v -s . -p 'test_*.py'
+      - name: Check relative Markdown links
+        run: python scripts/check_doc_links.py
+      - name: Nudge when code changes without agent docs
+        env:
+          DOCS_BASE_REF: ${{ github.base_ref }}
+        run: python scripts/check_docs_freshness.py
+
   lint-test:
     runs-on: ubuntu-latest
     defaults:
