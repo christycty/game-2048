@@ -10,3 +10,5 @@ Building or changing code? Start at [../AGENTS.md](../AGENTS.md) and [agents/](a
 | [architecture.md](architecture.md) | How the pieces fit (topology, request path, stack) |
 | [getting-started.md](getting-started.md) | Run locally or with Compose |
 | [agents/](agents/README.md) | Agent rules, deep detail, review patterns, **how to write docs** |
+
+CI runs `scripts/check_doc_links.py` on PRs and nudges when code changes without `docs/agents/`. Details: [agents/writing-docs.md](agents/writing-docs.md).

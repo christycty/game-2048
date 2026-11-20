@@ -86,6 +86,61 @@ When behavior changes, update the **canonical agent page first**, then trim the 
 
 Short anti-pattern notes under `docs/agents/review-patterns/` are encouraged. Prefer concrete “prefer X over Y” bullets over philosophy.
 
+## Keeping docs high quality and up to date
+
+### Same PR as the code
+
+If behavior, API shapes, env names, ports, Compose, or product non-goals change, update the **canonical agent page in the same PR**. Touch human pages only when a newcomer’s story or diagram would otherwise lie.
+
+PR authors fill the Docs section in [`.github/PULL_REQUEST_TEMPLATE.md`](../../.github/PULL_REQUEST_TEMPLATE.md). Mark **Docs N/A** only for changes that do not affect users, runtime, or product rules (and say why).
+
+### Freshness by doc kind
+
+| Kind | Bar | How |
+|---|---|---|
+| Truth (`runtime`, `client`, `server`) | Match `main` | Same PR as code |
+| Intent (`prd`, overview) | Match product decisions | Update when goals/non-goals change |
+| How-to (getting-started) | Commands work | “It worked if…”; occasional smoke |
+| Diagrams (architecture) | Topology/API shape | Update on structural change |
+| Plan (`plan/`) | May rot | Never treat as truth; date or mark draft |
+
+### Prefer executable truth
+
+- API request/response → Pydantic / OpenAPI; `server.md` summarizes
+- Env names → `.env.example`; `runtime.md` explains why
+- Ports / profiles → Compose + CI; docs state intent
+- Product rules that matter → tests; PRD states success criteria
+
+### Automation in this repo
+
+| Check | What it does |
+|---|---|
+| `scripts/check_doc_links.py` | Fails CI if relative Markdown links under docs entrypoints are broken |
+| `scripts/check_docs_freshness.py` | **Warns** (does not fail) when `client/`, `server/`, Compose, env example, or workflows change without `docs/agents/` or `AGENTS.md` |
+| `scripts/test_*.py` | Pinned unit tests for the scripts above (stdlib `unittest`, no extra deps) |
+
+The `docs` CI job (Python **3.12**) runs the unit tests first, then the two scripts. Locally:
+
+```bash
+cd scripts && python -m unittest discover -v -s . -p 'test_*.py'
+python scripts/check_doc_links.py
+python scripts/check_docs_freshness.py
+```
+
+### Definition of done (feature / behavior change)
+
+1. Code + tests match the new behavior
+2. Canonical file under `docs/agents/` updated (or Docs N/A noted on the PR)
+3. Human page updated only if the story/diagram would lie
+4. No second copy of the same fact
+5. `python3 scripts/check_doc_links.py` passes
+
+### Agents maintaining docs
+
+- After a feature change: diff against `docs/agents/{prd,client,server,runtime}.md` and patch only what changed
+- Do **not** regenerate all docs from scratch—that wipes careful constraints
+- Prefer deleting duplicate facts over expanding human pages past the length budget
+
 ## Checklist before merging doc changes
 
 1. Is this page in the right tree (human vs agent)?
@@ -93,3 +148,4 @@ Short anti-pattern notes under `docs/agents/review-patterns/` are encouraged. Pr
 3. Human page still within length budget and diagram-led?
 4. Agent page states current truth, not a wish?
 5. Links from `docs/README.md` / `docs/agents/README.md` / root `AGENTS.md` still work?
+6. Link check script passes?
