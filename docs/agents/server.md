@@ -11,7 +11,7 @@ From `server/`:
 ```bash
 # copy server/.env.example if you want local overrides
 uv sync --extra dev          # or: pip install -e ".[dev]"
-uvicorn app.main:app --reload --host 127.0.0.1 --port 8000
+uvicorn app.main:app --reload --host 127.0.0.1 --port "${API_HOST_PORT:-8000}"
 pytest                       # unit tests; skips e2e
 pytest --e2e                 # needs a local Ollama and the configured model
 ruff format --check . && ruff check .
@@ -23,23 +23,24 @@ Package name: `game-2048-server`. Entry: `app.main:app`. Python ≥ 3.11 (images
 
 | Path | Role |
 |---|---|
-| `app/main.py` | App factory, CORS, telemetry setup, `/health`, `/suggest`. |
+| `app/main.py` | App factory, CORS, rate limit gate, `/health`, `/suggest`. |
 | `app/schemas.py` | Request and response models. Tile and mode validation. |
 | `app/suggester.py` | Mode dispatch, LLM retries, fallback, expectimax search. |
 | `app/expectimax.py` | Depth-limited expectimax with spawn chance nodes. |
 | `app/moves.py` | Slide/merge rules for legal moves and the fallback order. |
 | `app/llm.py` | Ollama chat client, prompt, JSON parse. |
-| `app/telemetry.py` | OpenTelemetry / Phoenix span helpers. |
+| `app/rate_limit.py` | Process-wide sliding-window cap for `/suggest`. |
 | `app/config.py` | Env-backed settings. |
+| `app/telemetry.py` | Phoenix / OpenInference tracing setup. |
 
 ## HTTP
 
 | Method | Path | Success | Notes |
 |---|---|---|---|
 | `GET` | `/health` | `{"status":"ok"}` | Never calls Ollama. |
-| `POST` | `/suggest` | `SuggestResponse` | `409` when the board has no legal move. `422` on bad payload. |
+| `POST` | `/suggest` | `SuggestResponse` | `409` when the board has no legal move. `422` on bad payload. `429` + `Retry-After` when the process rate limit is hit (checked before the model). |
 
-CORS allows `http://localhost:5173` and `http://127.0.0.1:5173`, methods `GET` and `POST`. Other page origins cannot call the API from a browser.
+CORS allows `http://localhost:${CLIENT_HOST_PORT}` and `http://127.0.0.1:${CLIENT_HOST_PORT}` (default 5173), methods `GET` and `POST`. Same-origin `/suggest` through Vite or nginx does not need CORS; the allowlist remains for builds that set `VITE_API_BASE_URL` to the API origin.
 
 In `APP_ENV=dev`, `/docs` and `/openapi.json` are open. In `prod` they return 404. Redoc is always off. Title: `2048 suggestions`.
 
@@ -113,18 +114,22 @@ Loaded from the environment and optional `server/.env` (Compose does not use tha
 | `LLM_MAX_ATTEMPTS` | `3` | 1–5 |
 | `LLM_ATTEMPT_TIMEOUT_SECONDS` | `20` | >0, ≤20 |
 | `LLM_SUGGEST_BUDGET_SECONDS` | `40` | >0, ≤40; raised to 2× attempt timeout when lower |
+| `SUGGEST_RATE_LIMIT_REQUESTS` | `5` | 1–30; process-wide |
+| `SUGGEST_RATE_LIMIT_WINDOW_SECONDS` | `60` | 1–3600 |
+| `CLIENT_HOST_PORT` | `5173` | 1–65535; CORS allowlist |
 | `EXPORT_TRACES` | `true` | CI sets `false` |
 | `PHOENIX_COLLECTOR_ENDPOINT` | `http://localhost:6006` | Host process default |
 | `PHOENIX_API_KEY` | unset | Optional |
 
 ## Tests
 
-- `tests/test_suggest.py` covers health, CORS, LLM success and reason, illegal-move retry, exhausted fallback, expectimax search + score reason, illegal-search fallback, stuck-board 409, bad payload 422, Ollama HTTP failures, prod schema omission, attempt bounds, and the time budget stop.
+- `tests/test_helpers.py` asserts `isolated_settings` pins every `Settings` field and ignores hostile `SUGGEST_RATE_LIMIT_*` env.
+- `tests/test_suggest.py` covers health, CORS, rate limit before the model (including the **default** 5-call cap on a shared app), LLM success and reason, illegal-move retry, exhausted fallback, expectimax search + score reason, illegal-search fallback, stuck-board 409, bad payload 422, Ollama HTTP failures, prod schema omission, attempt bounds, and the time budget stop.
 - `tests/test_expectimax.py` covers legality, spawn odds, depth/budget cutoffs, and the reason format.
 - `tests/test_moves.py` covers the slide and merge rules used for legality.
 - `tests/test_telemetry.py` covers span wiring for suggest.
-- `tests/test_suggest_e2e.py` is marked `e2e` for real Ollama under `APP_ENV=prod`. It also includes a non-e2e expectimax HTTP smoke that does not need Ollama.
+- `tests/test_suggest_e2e.py` is marked `e2e` for real Ollama under `APP_ENV=prod`. It sizes `SUGGEST_RATE_LIMIT_REQUESTS` from its parametrized call volume, asserts `source == "llm"` with a short reason, and includes a non-e2e expectimax HTTP smoke that does not need Ollama.
 
 ## Not built yet
 
-There is no rate limit, auth, or per-player quota. The API does not persist games. Expectimax depth stays shallow for latency, not tournament strength.
+There is no auth or per-player quota (the suggestion cap is process-wide). The API does not persist games. Expectimax depth stays shallow for latency, not tournament strength.

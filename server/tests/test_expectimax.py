@@ -4,9 +4,9 @@ import pytest
 
 from app.expectimax import (
     _BUDGET_SECONDS,
-    _SearchBroken,
     _chance_value,
     _freeze,
+    _SearchBroken,
     choose_move,
 )
 from app.moves import first_legal_move, legal_moves

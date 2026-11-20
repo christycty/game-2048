@@ -6,7 +6,13 @@ from fastapi.testclient import TestClient
 
 from app.main import create_app
 from app.moves import legal_moves
-from helpers import SORTED_ROW, isolated_settings
+from helpers import (
+    E2E_BOARD_COUNT,
+    E2E_RUN_COUNT,
+    E2E_SUGGEST_CALLS,
+    SORTED_ROW,
+    isolated_settings,
+)
 
 MERGE_BOARD = [
     [2, 2, 4, 8],
@@ -21,6 +27,14 @@ CORNER_BOARD = [
     [0, 0, 0, 0],
     [0, 0, 0, 0],
 ]
+
+# One module-scoped app serves every parametrized case. Size the rate limit
+# from this list so adding a board or run cannot silently hit the default cap.
+E2E_BOARDS = [MERGE_BOARD, CORNER_BOARD]
+E2E_RUN_IDS = [1, 2, 3]
+assert len(E2E_BOARDS) == E2E_BOARD_COUNT
+assert len(E2E_RUN_IDS) == E2E_RUN_COUNT
+assert len(E2E_BOARDS) * len(E2E_RUN_IDS) == E2E_SUGGEST_CALLS
 
 
 def _unavailable(base_url: str, model: str) -> str | None:
@@ -47,6 +61,9 @@ def suggest_client() -> TestClient:
         ollama_model=model,
         ollama_base_url=base_url,
         llm_max_attempts=3,
+        # Default process cap is 5; this suite shares one app for more posts.
+        suggest_rate_limit_requests=E2E_SUGGEST_CALLS,
+        suggest_rate_limit_window_seconds=60,
     )
     # Prod parses the prompt's JSON. The schema format stays off.
     assert settings.ollama_structured_output is False
@@ -54,8 +71,8 @@ def suggest_client() -> TestClient:
 
 
 @pytest.mark.e2e
-@pytest.mark.parametrize("board", [MERGE_BOARD, CORNER_BOARD], ids=["merge", "corner"])
-@pytest.mark.parametrize("run", [1, 2, 3])
+@pytest.mark.parametrize("board", E2E_BOARDS, ids=["merge", "corner"])
+@pytest.mark.parametrize("run", E2E_RUN_IDS)
 def test_gemma_returns_a_legal_move_and_a_short_reason(
     suggest_client: TestClient,
     board: list[list[int]],

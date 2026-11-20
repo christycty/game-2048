@@ -24,7 +24,7 @@ test("suggestMove posts the board and mode, then returns the body", async () => 
     const body = await suggestMove(BOARD, "llm", { fetch: fetchImpl });
 
     assert.equal(calls.length, 1);
-    assert.equal(calls[0].url, "http://localhost:8000/suggest");
+    assert.equal(calls[0].url, "/suggest");
     assert.equal(calls[0].options.method, "POST");
     assert.equal(calls[0].options.headers["Content-Type"], "application/json");
     assert.deepEqual(JSON.parse(calls[0].options.body), { board: BOARD, mode: "llm" });
@@ -37,6 +37,15 @@ test("suggestMove rejects a failed HTTP response", async () => {
     await assert.rejects(
         () => suggestMove(BOARD, "llm", { fetch: fetchImpl }),
         (error) => error instanceof SuggestError && error.status === 409,
+    );
+});
+
+test("suggestMove reports a rate limit as status 429", async () => {
+    const fetchImpl = async () => ({ ok: false, status: 429, async json() { return {}; } });
+
+    await assert.rejects(
+        () => suggestMove(BOARD, "llm", { fetch: fetchImpl }),
+        (error) => error instanceof SuggestError && error.status === 429,
     );
 });
 

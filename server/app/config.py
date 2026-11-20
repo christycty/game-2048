@@ -17,6 +17,12 @@ class Settings(BaseSettings):
     llm_attempt_timeout_seconds: float = Field(default=20, gt=0, le=20)
     # Budget covers at least two attempt timeouts so a slow first call can still retry.
     llm_suggest_budget_seconds: float = Field(default=40, gt=0, le=40)
+    # The whole process, not each caller. Nginx is the only prod caller.
+    suggest_rate_limit_requests: int = Field(default=5, ge=1, le=30)
+    suggest_rate_limit_window_seconds: float = Field(default=60, ge=1, le=3600)
+    # Host port the page is published on (Compose / local Vite). CORS allowlist
+    # follows this so a worktree can move off 5173 without editing code.
+    client_host_port: int = Field(default=5173, ge=1, le=65535)
     phoenix_collector_endpoint: str = "http://localhost:6006"
     phoenix_api_key: str | None = None
     # Dev and prod export. CI sets EXPORT_TRACES=false.
@@ -35,3 +41,8 @@ class Settings(BaseSettings):
         if self.llm_suggest_budget_seconds < needed:
             self.llm_suggest_budget_seconds = needed
         return self
+
+    @property
+    def cors_origins(self) -> list[str]:
+        port = self.client_host_port
+        return [f"http://localhost:{port}", f"http://127.0.0.1:{port}"]

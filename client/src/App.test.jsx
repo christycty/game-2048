@@ -1,7 +1,7 @@
 import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
 import App from "./App.jsx";
-import { suggestMove } from "./api";
+import { suggestMove, SuggestError } from "./api";
 import { applyMove, createInitialTiles, SETTLE_MS } from "./game";
 
 // These tests lock input and score timing. The move rules are covered in game.test.js.
@@ -14,9 +14,13 @@ vi.mock("./game", async () => {
     };
 });
 
-vi.mock("./api", () => ({
-    suggestMove: vi.fn(),
-}));
+vi.mock("./api", async () => {
+    const actual = await vi.importActual("./api");
+    return {
+        ...actual,
+        suggestMove: vi.fn(),
+    };
+});
 
 // The board before any move, and the board a new game deals.
 const opening = [{ id: 1, row: 0, col: 0, value: 2 }];
@@ -385,6 +389,24 @@ test("a fallback response reports the miss and offers no move", async () => {
     // The fixed order is not a suggestion, so the player is asked to try again.
     expect(applyMove).not.toHaveBeenCalled();
     expect(screen.getByRole("status").textContent).toBe("AI could not suggest a move");
+    expect(screen.queryByRole("button", { name: /Play / })).toBeNull();
+    expect(screen.getByRole("button", { name: "AI" }).disabled).toBe(false);
+});
+
+test("a rate-limited suggestion tells the player to wait", async () => {
+    suggestMove.mockRejectedValue(new SuggestError("suggestion rate limit", { status: 429 }));
+
+    render(<App />);
+    fireEvent.click(screen.getByRole("button", { name: "AI" }));
+
+    await act(async () => {
+        await Promise.resolve();
+    });
+
+    expect(applyMove).not.toHaveBeenCalled();
+    expect(screen.getByRole("status").textContent).toBe(
+        "Too many suggestions. Wait a moment and try again.",
+    );
     expect(screen.queryByRole("button", { name: /Play / })).toBeNull();
     expect(screen.getByRole("button", { name: "AI" }).disabled).toBe(false);
 });

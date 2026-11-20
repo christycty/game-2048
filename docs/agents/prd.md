@@ -55,6 +55,7 @@ The player can switch modes before asking. Changing mode drops any suggestion th
 3. On success, the page shows the suggested direction and, when available, a short reason. A **Play {Direction}** control appears.
 4. Nothing moves until the player presses **Play**, or until they ignore the suggestion and move themselves (keys/swipe). Taking their own move clears the pending suggestion.
 5. If the suggestion cannot be used (service failure, or a fallback that is not treated as a real recommendation), the page says **AI could not suggest a move** and does not offer **Play**.
+6. If the API rate-limits the request, the page says **Too many suggestions. Wait a moment and try again.** and does not offer **Play**.
 
 AI is unavailable when the game is over, while a move animation is playing, while a request is already in flight, or when the board has no legal move.
 
@@ -82,11 +83,11 @@ A release matches this product when:
 - A new visitor can start a game, move with keys or swipe, see score update, lose, and start over without confusion.
 - Best score survives New Game within the same page load and resets on full reload.
 - The player can request an LLM or Expectimax suggestion, read the reason when one is returned, confirm with **Play**, and see that move applied like any other move.
-- A failed or unusable suggestion leaves the board unchanged and shows a clear failure message.
+- A failed or unusable suggestion leaves the board unchanged and shows a clear failure message (including a distinct rate-limit message).
 - Expectimax returns a legal search move with a per-direction score line the player can read.
 
 ## Open product decisions
 
 - Whether expectimax should search deeper (or expose more of the heuristic) for stronger play.
 - Whether best score should persist across reloads.
-- Whether a future host should add rate limits, auth, or a public demo URL—none of that is part of the current product surface.
+- Whether a future host should add auth or a public demo URL—rate limiting already bounds model spend; auth and a public URL are still out of scope.
