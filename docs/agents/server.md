@@ -24,6 +24,7 @@ Package name: `game-2048-server`. Entry: `app.main:app`. Python ≥ 3.11 (images
 | Path | Role |
 |---|---|
 | `app/main.py` | App factory, CORS, `/health`, `/suggest`. |
+| `app/telemetry.py` | Phoenix OTLP traces + Prometheus `/metrics` (GenAI histograms). |
 | `app/schemas.py` | Request and response models. Tile and mode validation. |
 | `app/suggester.py` | Mode dispatch, LLM retries, fallback, expectimax stub. |
 | `app/moves.py` | Slide/merge rules for legal moves and the fallback order. |
@@ -35,6 +36,7 @@ Package name: `game-2048-server`. Entry: `app.main:app`. Python ≥ 3.11 (images
 | Method | Path | Success | Notes |
 |---|---|---|---|
 | `GET` | `/health` | `{"status":"ok"}` | Never calls Ollama. |
+| `GET` | `/metrics` | Prometheus text | Always on. Primary series: `gen_ai_client_operation_duration_seconds`, `gen_ai_client_token_usage`. Not traced. |
 | `POST` | `/suggest` | `SuggestResponse` | `409` when the board has no legal move. `422` on bad payload. |
 
 CORS allows `http://localhost:5173` and `http://127.0.0.1:5173`, methods `GET` and `POST`. Other page origins cannot call the API from a browser.
@@ -103,13 +105,21 @@ Loaded from the environment and optional `server/.env` (Compose does not use tha
 | `LLM_MAX_ATTEMPTS` | `3` | 1–5 |
 | `LLM_ATTEMPT_TIMEOUT_SECONDS` | `10` | >0, ≤10 |
 | `LLM_SUGGEST_BUDGET_SECONDS` | `20` | >0, ≤20 |
+| `EXPORT_TRACES` | `true` | CI sets `false`. Metrics stay on regardless. |
+| `PHOENIX_COLLECTOR_ENDPOINT` | `http://localhost:6006` | Host process; Compose uses `COMPOSE_PHOENIX_COLLECTOR_ENDPOINT` |
+| `PHOENIX_API_KEY` | unset | Sent only over HTTPS or to a local collector |
+
+## Observability
+
+Traces (OTLP → Phoenix) own LLM forensics: OpenInference spans, retries, prompt/completion. Metrics (`GET /metrics`) own ops aggregates for scrapers. Histograms record on successful Ollama usage mapping (`gen_ai.client.operation.duration`, `gen_ai.client.token.usage`). TTFT / per-token timings stay on span events, not as scrape series. Compose Prometheus/Grafana: [runtime.md](runtime.md).
 
 ## Tests
 
 - `tests/test_suggest.py` covers health, CORS, LLM success and reason, illegal-move retry, exhausted fallback, expectimax stub, stuck-board 409, bad payload 422, Ollama HTTP failures, prod schema omission, attempt bounds, and the time budget stop.
 - `tests/test_moves.py` covers the slide and merge rules used for legality.
+- `tests/test_telemetry.py` covers Phoenix URL/header rules, per-app exporters, excluded `/health` and `/metrics`, span nesting, and GenAI series on `/metrics` after a suggest.
 - `tests/test_suggest_e2e.py` is marked `e2e`. It talks to a real Ollama under `APP_ENV=prod` and asserts `source == "llm"` with a short reason.
 
 ## Not built yet
 
-Expectimax is not a search. There is no rate limit, auth, or per-player quota. OpenTelemetry is not wired. The API does not persist games.
+Expectimax is not a search. There is no rate limit, auth, or per-player quota. The API does not persist games.

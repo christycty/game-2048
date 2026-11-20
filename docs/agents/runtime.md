@@ -19,25 +19,40 @@ Host API env comes from `server/.env` or the shell. Copy `server/.env.example` f
 From the repo root:
 
 ```bash
-cp .env.example .env   # optional; see COMPOSE_OLLAMA_BASE_URL notes below
+cp .env.example .env   # optional; see COMPOSE_* notes below
 docker compose --profile dev up
 docker compose --profile prod up
+# optional scrapers alongside either API profile:
+docker compose --profile dev --profile metrics up
 ```
 
 | Profile | Services | Ports (loopback only) |
 |---|---|---|
 | `dev` | `dev` (API with reload), `client-dev` (Vite) | API `8000`, client `5173` |
 | `prod` | `prod` (API), `client` (nginx static) | API `8000`, client `5173`→container `80` |
+| `metrics` | `prometheus`, `grafana` (pair with `dev` or `prod`) | Prometheus `9090`, Grafana `3000` |
 
 Published ports bind `127.0.0.1` and `::1` so a LAN peer cannot reach them. The prod client stays on host port 5173 so the page origin still matches the CORS allowlist.
 
 Ollama stays on the host. Inside the API container the default URL is `http://host.docker.internal:11434`. Set `COMPOSE_OLLAMA_BASE_URL` in the root `.env` to override that. Do not set `OLLAMA_BASE_URL` in the root `.env`: that name is for a host uvicorn process (`server/.env.example` uses localhost), and Compose must not replace the container URL with it.
+
+Phoenix (OTLP traces) also stays on the host by default (`http://host.docker.internal:6006`). Override with `COMPOSE_PHOENIX_COLLECTOR_ENDPOINT`. Do not set `PHOENIX_COLLECTOR_ENDPOINT` in the root `.env` for the same reason as Ollama. Dev and prod export traces (`EXPORT_TRACES=true`); CI sets `EXPORT_TRACES=false` on the API image.
 
 `host.docker.internal` is added via `host-gateway` so Linux Docker Engine can resolve it. Docker Desktop can reach an Ollama bound to `127.0.0.1` at that name. Linux Docker Engine cannot: start that Ollama with `OLLAMA_HOST=0.0.0.0`.
 
 Dev client mounts `./client` and keeps Linux `node_modules` in a named volume. `CHOKIDAR_USEPOLLING=true` keeps Vite watching under Docker. The entrypoint reinstalls modules when `package-lock.json` changes.
 
 Neither the Vite image nor the nginx image proxies `/suggest`. The page talks to the API origin directly.
+
+### Metrics profile
+
+`GET /metrics` on the API is always on (Prometheus text). Pair `--profile metrics` with `dev` or `prod` to scrape it:
+
+- Prometheus scrapes Compose DNS `api:8000` (`dev` and `prod` both publish that alias).
+- Grafana is provisioned with a Prometheus datasource and the **GenAI ops** dashboard (`/d/game2048-genai`): p95 LLM duration and token usage rate by type.
+- Anonymous Viewer access on loopback; no Alertmanager or retention stack.
+
+Config lives under `observability/` (`prometheus.yml`, Grafana provisioning). Run notes that only repeat ports belong here, not a second env matrix.
 
 ## Images
 
@@ -54,8 +69,8 @@ Server image: `python:3.12-slim`, `pip install -e .`, uvicorn on `0.0.0.0:8000`.
 
 - Server: install, `ruff format --check`, `ruff check`, `pytest` (e2e off).
 - Client: install, lint, test, build.
-- Docker: build both images, curl `/health` on the server image without Ollama, check Compose config for the default Ollama URL and loopback port bindings.
+- Docker: build both images, curl `/health` on the server image without Ollama, check Compose config for the default Ollama/Phoenix URLs, loopback ports, the `api` alias, and metrics-profile ports.
 
 ## Not in this layout
 
-There is no TLS terminator, no nginx reverse proxy for `/suggest`, and no suggestion rate limit. A later host would push the images CI already builds, pin tags, terminate TLS, and keep the model on a private network.
+There is no TLS terminator, no nginx reverse proxy for `/suggest`, and no suggestion rate limit. Metrics Compose has no Alertmanager or long retention. A later host would push the images CI already builds, pin tags, terminate TLS, and keep the model on a private network.

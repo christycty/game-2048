@@ -72,7 +72,8 @@ Client owns the playable rules and UI. Server owns suggestion modes, legality ch
 | Client | React 19, Vite, plain JavaScript |
 | API | Python 3.12, FastAPI, Pydantic |
 | Model | Host Ollama (`OLLAMA_MODEL`, default `gemma4:latest`) |
-| Run | Local processes or Docker Compose profiles `dev` / `prod` |
+| Run | Local processes or Docker Compose profiles `dev` / `prod` (+ optional `metrics`) |
+| Observability | Phoenix (OTLP traces on host); `GET /metrics` always; optional Compose Prometheus/Grafana |
 | CI | Lint, test, image build, Compose config checks |
 
 ## Deploy profiles
@@ -81,7 +82,8 @@ Client owns the playable rules and UI. Server owns suggestion modes, legality ch
 |---|---|
 | `dev` | API with reload + Vite client |
 | `prod` | API + nginx static client (still on host port 5173 for CORS) |
+| `metrics` | Prometheus + Grafana (pair with `dev` or `prod`) |
 
-Ollama always stays on the host. Compose reaches it via `host.docker.internal` (override with `COMPOSE_OLLAMA_BASE_URL`).
+Ollama and Phoenix stay on the host. Compose reaches them via `host.docker.internal` (override with `COMPOSE_OLLAMA_BASE_URL` / `COMPOSE_PHOENIX_COLLECTOR_ENDPOINT`).
 
 More runtime edge cases: [agents/runtime.md](agents/runtime.md).

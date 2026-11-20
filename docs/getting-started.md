@@ -35,13 +35,16 @@ cp .env.example .env   # optional; see notes in that file
 docker compose --profile dev up    # API + Vite
 # or
 docker compose --profile prod up   # API + nginx static client
+# optional scrapers:
+docker compose --profile dev --profile metrics up
 ```
 
-`docker compose up` with no profile starts nothing. Published ports are loopback-only (`8000` API, `5173` client).
+`docker compose up` with no profile starts nothing. Published ports are loopback-only (`8000` API, `5173` client; with `metrics`, also `9090` / `3000`).
 
 ## It worked if…
 
 - `GET http://127.0.0.1:8000/health` returns `{"status":"ok"}` (even if Ollama is down).
+- After a successful LLM suggest, `GET http://127.0.0.1:8000/metrics` includes `gen_ai_client_operation_duration_seconds`.
 - The board loads; arrow keys or swipe move tiles and update score.
 - **AI** (LLM) returns a suggestion when Ollama and the model are up; **Play** applies that move.
 

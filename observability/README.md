@@ -1,23 +1,11 @@
-# Observability (Stage 2 metrics)
+# Observability configs
 
-Phoenix (host, OTLP) owns LLM forensics. Prometheus + Grafana own scrape aggregates from `GET /metrics`.
+Compose files for the optional `--profile metrics` stack (Prometheus + Grafana).
 
-## Run
-
-With the API (and optional client):
+**Canonical run notes, ports, and env pitfalls:** [docs/agents/runtime.md](../docs/agents/runtime.md).  
+**API series and settings:** [docs/agents/server.md](../docs/agents/server.md).
 
 ```bash
-# from repo root
 docker compose --profile dev --profile metrics up
-# or: docker compose --profile prod --profile metrics up
+# Grafana GenAI ops: http://127.0.0.1:3000/d/game2048-genai
 ```
-
-| UI | URL (loopback) |
-| --- | --- |
-| API `/metrics` | http://127.0.0.1:8000/metrics |
-| Prometheus | http://127.0.0.1:9090 |
-| Grafana (GenAI ops dashboard) | http://127.0.0.1:3000/d/game2048-genai |
-
-Grafana allows anonymous Viewer access on loopback. No Alertmanager or retention stack.
-
-Prometheus scrapes Compose DNS name `api:8000` (`dev` and `prod` both use that alias). Generate traffic with `/suggest` (needs host Ollama), then refresh the dashboard.
