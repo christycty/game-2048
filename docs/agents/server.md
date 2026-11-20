@@ -38,7 +38,7 @@ Package name: `game-2048-server`. Entry: `app.main:app`. Python ≥ 3.11 (images
 | Method | Path | Success | Notes |
 |---|---|---|---|
 | `GET` | `/health` | `{"status":"ok"}` | Never calls Ollama. |
-| `POST` | `/suggest` | `SuggestResponse` | Handler order: Pydantic `422` (before the rate-limit gate; does not consume the cap) → process rate limit `429` + `Retry-After` + `detail: "too many suggestions"` (before suggester / any mode) → `409` when no legal move → `200` with `SuggestResponse`. |
+| `POST` | `/suggest` | `SuggestResponse` | Handler order: Pydantic `422` (before the rate-limit gate; does not consume either mode’s cap) → that mode’s process rate limit `429` + `Retry-After` + `detail: "too many suggestions"` (before suggester / any mode) → `409` when no legal move → `200` with `SuggestResponse`. |
 
 CORS allows `http://localhost:${CLIENT_HOST_PORT}` and `http://127.0.0.1:${CLIENT_HOST_PORT}` (default 5173), methods `GET` and `POST`. Same-origin `/suggest` through Vite or nginx does not need CORS; the allowlist remains for builds that set `VITE_API_BASE_URL` to the API origin.
 
@@ -114,8 +114,9 @@ Loaded from the environment and optional `server/.env` (Compose does not use tha
 | `LLM_MAX_ATTEMPTS` | `3` | 1–5 |
 | `LLM_ATTEMPT_TIMEOUT_SECONDS` | `20` | >0, ≤20 |
 | `LLM_SUGGEST_BUDGET_SECONDS` | `40` | >0, ≤40; raised to 2× attempt timeout when lower |
-| `SUGGEST_RATE_LIMIT_REQUESTS` | `5` | 1–30; process-wide |
-| `SUGGEST_RATE_LIMIT_WINDOW_SECONDS` | `60` | 1–3600 |
+| `SUGGEST_RATE_LIMIT_REQUESTS` | `5` | 1–30; LLM bucket (process-wide) |
+| `SUGGEST_RATE_LIMIT_EXPECTIMAX_REQUESTS` | `30` | 1–120; Expectimax bucket (process-wide) |
+| `SUGGEST_RATE_LIMIT_WINDOW_SECONDS` | `60` | 1–3600; shared window for both modes |
 | `CLIENT_HOST_PORT` | `5173` | 1–65535; CORS allowlist |
 | `EXPORT_TRACES` | `true` | Gates **OTLP export** only (instrumentation still loads when `false`). Host uvicorn / one-off image runs honor this env; CI pytest and smoke `docker run` set `false`. Compose `dev`/`prod` hardcode `true` (see [runtime.md](runtime.md)) |
 | `PHOENIX_COLLECTOR_ENDPOINT` | `http://localhost:6006` | Host process default; exporter posts to `{endpoint}/v1/traces` (or a full traces URL) |
@@ -131,7 +132,7 @@ Loaded from the environment and optional `server/.env` (Compose does not use tha
 ## Tests
 
 - `tests/test_helpers.py` asserts `isolated_settings` pins every `Settings` field and ignores hostile `SUGGEST_RATE_LIMIT_*` env.
-- `tests/test_suggest.py` covers health, CORS, rate limit before the suggester (including the **default** 5-call cap on a shared app), LLM success and reason, illegal-move retry, exhausted fallback, expectimax search + score reason, illegal-search fallback, stuck-board 409, bad payload 422, Ollama HTTP failures, prod schema omission, attempt bounds, and the time budget stop.
+- `tests/test_suggest.py` covers health, CORS, per-mode rate limits before the suggester (including the **default** 5-call LLM cap and a separate Expectimax bucket), LLM success and reason, illegal-move retry, exhausted fallback, expectimax search + score reason, illegal-search fallback, stuck-board 409, bad payload 422, Ollama HTTP failures, prod schema omission, attempt bounds, and the time budget stop.
 - `tests/test_expectimax.py` covers legality, spawn odds, depth/budget cutoffs, and the reason format.
 - `tests/test_moves.py` covers the slide and merge rules used for legality.
 - `tests/test_telemetry.py` covers export URL, API-key policy, nesting, retries, errors, health exclusion, and stuck-board span shape.

@@ -44,9 +44,9 @@ flowchart TD
   H --> J
 ```
 
-Validation (`422`) runs before the rate-limit gate; invalid bodies do not consume the process cap.
+Validation (`422`) runs before the rate-limit gate; invalid bodies do not consume either mode’s cap.
 
-The API stays healthy when Ollama is down (`GET /health` never calls the model). Expectimax never calls Ollama. The client only offers **Play** when the suggestion is usable—not on fallback, rate limit, or transport errors.
+The API stays healthy when Ollama is down (`GET /health` never calls the model). Expectimax never calls Ollama. The client only offers **Play** (or auto-applies under **Auto Play**) when the suggestion is usable—not on fallback, rate limit, or transport errors. Auto Play is entirely client-side: it loops suggest → apply → settle without changing the API.
 
 ## Coarse module map
 
@@ -82,7 +82,7 @@ flowchart LR
   Telemetry -.->|OTLP when EXPORT_TRACES| Phoenix[Phoenix]
 ```
 
-Client owns the playable rules and UI. Server owns suggestion modes, the process-wide rate limit, legality checks for the coach, expectimax search, the Ollama client, and Phoenix OTLP tracing when `EXPORT_TRACES` is on (default; collector optional—traces only, no scrape metrics on mainline). Both sides implement the same slide/merge rules so “legal” means the same thing.
+Client owns the playable rules and UI. Server owns suggestion modes, per-mode process-wide rate limits, legality checks for the coach, expectimax search, the Ollama client, and Phoenix OTLP tracing when `EXPORT_TRACES` is on (default; collector optional—traces only, no scrape metrics on mainline). Both sides implement the same slide/merge rules so “legal” means the same thing.
 
 ## Stack
 

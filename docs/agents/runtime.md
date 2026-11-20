@@ -55,7 +55,14 @@ Dev client mounts `./client` and keeps Linux `node_modules` in a named volume. `
 
 ### Suggestion rate limit
 
-The API caps suggestions for the **whole process** (default 5 requests per 60 seconds via `SUGGEST_RATE_LIMIT_REQUESTS` / `SUGGEST_RATE_LIMIT_WINDOW_SECONDS`). Over the limit returns `429` with `Retry-After`. The cap is not per browser: in prod the only caller is nginx, and the limit exists to bound model time.
+The API caps suggestions **per mode** for the whole process (shared window via `SUGGEST_RATE_LIMIT_WINDOW_SECONDS`, default 60s):
+
+| Mode | Env | Default |
+|---|---|---|
+| LLM | `SUGGEST_RATE_LIMIT_REQUESTS` | 5 |
+| Expectimax | `SUGGEST_RATE_LIMIT_EXPECTIMAX_REQUESTS` | 30 |
+
+Over the limit returns `429` with `Retry-After`. The cap is not per browser: in prod the only caller is nginx. The LLM bucket bounds model time; Expectimax is higher so Auto Play can run without spending the LLM quota.
 
 ## Images
 

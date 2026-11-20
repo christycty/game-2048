@@ -25,3 +25,15 @@ Indentation, semicolons, and quotes should match the files next to the change. D
 ## Gesture state belongs to one pointer
 
 Clear a swipe only when the pointer that started it ends. A release from another pointer must leave the active gesture alone.
+
+## Stopping a timed loop must release the busy hold it owned
+
+A pause between Auto Play steps can keep `busy` true so AI stays inactive through the gap. **Stop** (and any other path that clears `autoPlaying` without starting a slide or request) must drop that hold when nothing else is in flight. Prefer clearing busy inside the stop helper when `!animating && !suggesting`, not only inside the gap timer’s “already stopped” branch. A test that clicks **Stop** during the gap and asserts **AI** / **Auto Play** are enabled *before* the gap elapses locks this in.
+
+## Every loop entry must share the failed-apply exit
+
+Auto Play can start from a fresh suggest or from a pending **Play** move. If one path stops the loop when `handleMove` returns false and the other ignores the return value, the UI can sit on **Stop** with no further suggest. Treat “apply failed” the same on every entry: hint, stop Auto Play, release busy. Cover the pending-start failure in a test, not only the in-loop suggest failure.
+
+## Cover each loop exit that re-enables controls
+
+Happy-path loop tests are not enough. For an async suggest → apply → settle → gap cycle, assert the control-enabling state after every exit the product promises: **Stop** (including during the gap), **New Game**, loss, fallback, rate limit / transport failure, and manual takeover. Prefer checking `aria-pressed`, disabled **AI**, and that no further `suggestMove` / `applyMove` runs after the exit.

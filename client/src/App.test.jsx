@@ -2,7 +2,7 @@ import { act, cleanup, fireEvent, render, screen } from "@testing-library/react"
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
 import App from "./App.jsx";
 import { suggestMove, SuggestError } from "./api";
-import { applyMove, createInitialTiles, SETTLE_MS } from "./game";
+import { applyMove, AUTO_PLAY_GAP_MS, createInitialTiles, SETTLE_MS } from "./game";
 
 // These tests lock input and score timing. The move rules are covered in game.test.js.
 vi.mock("./game", async () => {
@@ -528,4 +528,535 @@ test("changing AI mode clears the pending suggestion", async () => {
     expect(screen.getByRole("radio", { name: "Expectimax" }).checked).toBe(true);
     expect(screen.queryByRole("status")).toBeNull();
     expect(screen.queryByRole("button", { name: "Play Right" })).toBeNull();
+});
+
+test("auto play applies a suggestion without waiting for Play", async () => {
+    suggestMove.mockResolvedValue({
+        move: "right",
+        mode: "expectimax",
+        source: "expectimax",
+        reason: "Opens space on the left.",
+    });
+    applyMove.mockReturnValue({
+        moved: true,
+        scoreGained: 0,
+        visualTiles: [{ id: 1, row: 0, col: 3, value: 2, fromRow: 0, fromCol: 0, sliding: true }],
+        resolvedTiles: [{ id: 1, row: 0, col: 3, value: 2 }],
+        lost: false,
+    });
+
+    render(<App />);
+    fireEvent.click(screen.getByRole("button", { name: "Auto Play" }));
+
+    await act(async () => {
+        await Promise.resolve();
+    });
+
+    expect(suggestMove).toHaveBeenCalledTimes(1);
+    expect(suggestMove).toHaveBeenCalledWith(
+        [
+            [2, 0, 0, 0],
+            [0, 0, 0, 0],
+            [0, 0, 0, 0],
+            [0, 0, 0, 0],
+        ],
+        "expectimax",
+    );
+    expect(applyMove).toHaveBeenCalledWith(opening, "right");
+    expect(screen.queryByRole("button", { name: /Play / })).toBeNull();
+    expect(screen.getByRole("button", { name: "Stop" }).getAttribute("aria-pressed")).toBe("true");
+    expect(screen.getByRole("radio", { name: "Expectimax" }).checked).toBe(true);
+    expect(screen.getByRole("status").textContent).toBe(
+        "Suggested: Right. Opens space on the left.",
+    );
+});
+
+test("auto play switches from LLM to Expectimax before the first request", async () => {
+    let finishSuggest;
+    suggestMove.mockImplementation(
+        () =>
+            new Promise((resolve) => {
+                finishSuggest = resolve;
+            }),
+    );
+    applyMove.mockReturnValue({
+        moved: true,
+        scoreGained: 0,
+        visualTiles: [{ id: 1, row: 0, col: 3, value: 2, fromRow: 0, fromCol: 0, sliding: true }],
+        resolvedTiles: [{ id: 1, row: 0, col: 3, value: 2 }],
+        lost: false,
+    });
+
+    render(<App />);
+    expect(screen.getByRole("radio", { name: "LLM" }).checked).toBe(true);
+    fireEvent.click(screen.getByRole("button", { name: "Auto Play" }));
+
+    expect(screen.getByRole("radio", { name: "Expectimax" }).checked).toBe(true);
+    expect(screen.getByRole("status").textContent).toBe("Switched to Expectimax for Auto Play.");
+
+    await act(async () => {
+        finishSuggest({
+            move: "right",
+            mode: "expectimax",
+            source: "expectimax",
+            reason: null,
+        });
+        await Promise.resolve();
+    });
+
+    expect(suggestMove).toHaveBeenCalledWith(
+        [
+            [2, 0, 0, 0],
+            [0, 0, 0, 0],
+            [0, 0, 0, 0],
+            [0, 0, 0, 0],
+        ],
+        "expectimax",
+    );
+    expect(screen.getByRole("status").textContent).toBe("Suggested: Right.");
+});
+
+test("auto play requests another suggestion after the slide settles", async () => {
+    const afterFirst = [{ id: 1, row: 0, col: 3, value: 2 }];
+    let finishSecondSuggest;
+    suggestMove
+        .mockResolvedValueOnce({
+            move: "right",
+            mode: "expectimax",
+            source: "expectimax",
+            reason: null,
+        })
+        .mockImplementationOnce(
+            () =>
+                new Promise((resolve) => {
+                    finishSecondSuggest = resolve;
+                }),
+        );
+    applyMove
+        .mockReturnValueOnce({
+            moved: true,
+            scoreGained: 0,
+            visualTiles: [{ id: 1, row: 0, col: 3, value: 2, fromRow: 0, fromCol: 0, sliding: true }],
+            resolvedTiles: afterFirst,
+            lost: false,
+        })
+        .mockReturnValueOnce({
+            moved: true,
+            scoreGained: 0,
+            visualTiles: [{ id: 1, row: 3, col: 3, value: 2, fromRow: 0, fromCol: 3, sliding: true }],
+            resolvedTiles: [{ id: 1, row: 3, col: 3, value: 2 }],
+            lost: false,
+        });
+
+    render(<App />);
+    fireEvent.click(screen.getByRole("button", { name: "Auto Play" }));
+
+    await act(async () => {
+        await Promise.resolve();
+    });
+
+    expect(suggestMove).toHaveBeenCalledTimes(1);
+    expect(applyMove).toHaveBeenCalledTimes(1);
+    expect(screen.getByRole("status").textContent).toBe("Suggested: Right.");
+
+    await act(async () => {
+        vi.advanceTimersByTime(SETTLE_MS);
+        await Promise.resolve();
+    });
+
+    // The gap after settle must pass before the next suggestion.
+    expect(suggestMove).toHaveBeenCalledTimes(1);
+
+    await act(async () => {
+        vi.advanceTimersByTime(AUTO_PLAY_GAP_MS);
+        await Promise.resolve();
+    });
+
+    // Hint from the previous step stays visible while the next request is in flight.
+    expect(suggestMove).toHaveBeenCalledTimes(2);
+    expect(screen.getByRole("status").textContent).toBe("Suggested: Right.");
+
+    await act(async () => {
+        finishSecondSuggest({
+            move: "down",
+            mode: "expectimax",
+            source: "expectimax",
+            reason: null,
+        });
+        await Promise.resolve();
+    });
+
+    expect(applyMove).toHaveBeenCalledTimes(2);
+    expect(applyMove).toHaveBeenLastCalledWith(afterFirst, "down");
+    expect(screen.getByRole("status").textContent).toBe("Suggested: Down.");
+});
+
+test("stopping auto play ends the loop after the current move", async () => {
+    suggestMove.mockResolvedValue({
+        move: "right",
+        mode: "expectimax",
+        source: "expectimax",
+        reason: null,
+    });
+    applyMove.mockReturnValue({
+        moved: true,
+        scoreGained: 0,
+        visualTiles: [{ id: 1, row: 0, col: 3, value: 2, fromRow: 0, fromCol: 0, sliding: true }],
+        resolvedTiles: [{ id: 1, row: 0, col: 3, value: 2 }],
+        lost: false,
+    });
+
+    render(<App />);
+    fireEvent.click(screen.getByRole("button", { name: "Auto Play" }));
+
+    await act(async () => {
+        await Promise.resolve();
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: "Stop" }));
+    expect(screen.getByRole("button", { name: "Auto Play" }).getAttribute("aria-pressed")).toBe(
+        "false",
+    );
+
+    await act(async () => {
+        vi.advanceTimersByTime(SETTLE_MS + AUTO_PLAY_GAP_MS);
+        await Promise.resolve();
+    });
+
+    expect(suggestMove).toHaveBeenCalledTimes(1);
+    expect(applyMove).toHaveBeenCalledTimes(1);
+});
+
+test("stopping auto play during the gap re-enables AI without waiting out the pause", async () => {
+    suggestMove.mockResolvedValue({
+        move: "right",
+        mode: "expectimax",
+        source: "expectimax",
+        reason: null,
+    });
+    applyMove.mockReturnValue({
+        moved: true,
+        scoreGained: 0,
+        visualTiles: [{ id: 1, row: 0, col: 3, value: 2, fromRow: 0, fromCol: 0, sliding: true }],
+        resolvedTiles: [{ id: 1, row: 0, col: 3, value: 2 }],
+        lost: false,
+    });
+
+    render(<App />);
+    fireEvent.click(screen.getByRole("button", { name: "Auto Play" }));
+
+    await act(async () => {
+        await Promise.resolve();
+    });
+
+    await act(async () => {
+        vi.advanceTimersByTime(SETTLE_MS);
+        await Promise.resolve();
+    });
+
+    // Still inside the post-settle gap; busy is held for the pause.
+    expect(screen.getByRole("button", { name: "AI" }).disabled).toBe(true);
+    fireEvent.click(screen.getByRole("button", { name: "Stop" }));
+
+    expect(screen.getByRole("button", { name: "Auto Play" }).getAttribute("aria-pressed")).toBe(
+        "false",
+    );
+    expect(screen.getByRole("button", { name: "AI" }).disabled).toBe(false);
+    expect(screen.getByRole("button", { name: "Auto Play" }).disabled).toBe(false);
+
+    await act(async () => {
+        vi.advanceTimersByTime(AUTO_PLAY_GAP_MS);
+        await Promise.resolve();
+    });
+
+    expect(suggestMove).toHaveBeenCalledTimes(1);
+    expect(applyMove).toHaveBeenCalledTimes(1);
+});
+
+test("a fallback during auto play stops the loop", async () => {
+    suggestMove.mockResolvedValue({
+        move: "left",
+        mode: "expectimax",
+        source: "fallback",
+        reason: null,
+    });
+
+    render(<App />);
+    fireEvent.click(screen.getByRole("button", { name: "Auto Play" }));
+
+    await act(async () => {
+        await Promise.resolve();
+    });
+
+    expect(applyMove).not.toHaveBeenCalled();
+    expect(screen.getByRole("status").textContent).toBe("AI could not suggest a move");
+    expect(screen.getByRole("button", { name: "Auto Play" }).getAttribute("aria-pressed")).toBe(
+        "false",
+    );
+});
+
+test("a manual move during auto play stops the loop", async () => {
+    let finishSuggest;
+    suggestMove.mockImplementation(
+        () =>
+            new Promise((resolve) => {
+                finishSuggest = resolve;
+            }),
+    );
+    applyMove.mockReturnValue({
+        moved: true,
+        scoreGained: 0,
+        visualTiles: [{ id: 1, row: 0, col: 1, value: 2, fromRow: 0, fromCol: 0, sliding: true }],
+        resolvedTiles: [{ id: 1, row: 0, col: 1, value: 2 }],
+        lost: false,
+    });
+
+    render(<App />);
+    fireEvent.click(screen.getByRole("button", { name: "Auto Play" }));
+    press("ArrowRight");
+
+    expect(applyMove).toHaveBeenCalledTimes(1);
+    expect(screen.getByRole("button", { name: "Auto Play" }).getAttribute("aria-pressed")).toBe(
+        "false",
+    );
+
+    await act(async () => {
+        finishSuggest({
+            move: "left",
+            mode: "expectimax",
+            source: "expectimax",
+            reason: null,
+        });
+        await Promise.resolve();
+    });
+
+    await act(async () => {
+        vi.advanceTimersByTime(SETTLE_MS + AUTO_PLAY_GAP_MS);
+        await Promise.resolve();
+    });
+
+    // The cancelled suggestion must not restart auto-play or apply a second move.
+    expect(applyMove).toHaveBeenCalledTimes(1);
+    expect(suggestMove).toHaveBeenCalledTimes(1);
+});
+
+test("auto play applies a pending suggestion then continues", async () => {
+    const afterPending = [{ id: 1, row: 0, col: 3, value: 2 }];
+    suggestMove
+        .mockResolvedValueOnce({
+            move: "right",
+            mode: "llm",
+            source: "llm",
+            reason: "Opens space on the left.",
+        })
+        .mockResolvedValueOnce({
+            move: "down",
+            mode: "expectimax",
+            source: "expectimax",
+            reason: null,
+        });
+    applyMove
+        .mockReturnValueOnce({
+            moved: true,
+            scoreGained: 0,
+            visualTiles: [{ id: 1, row: 0, col: 3, value: 2, fromRow: 0, fromCol: 0, sliding: true }],
+            resolvedTiles: afterPending,
+            lost: false,
+        })
+        .mockReturnValueOnce({
+            moved: true,
+            scoreGained: 0,
+            visualTiles: [{ id: 1, row: 3, col: 3, value: 2, fromRow: 0, fromCol: 3, sliding: true }],
+            resolvedTiles: [{ id: 1, row: 3, col: 3, value: 2 }],
+            lost: false,
+        });
+
+    render(<App />);
+    fireEvent.click(screen.getByRole("button", { name: "AI" }));
+
+    await act(async () => {
+        await Promise.resolve();
+    });
+
+    expect(screen.getByRole("button", { name: "Play Right" })).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Auto Play" }));
+
+    expect(applyMove).toHaveBeenCalledWith(opening, "right");
+    expect(screen.getByRole("radio", { name: "Expectimax" }).checked).toBe(true);
+    expect(screen.queryByRole("button", { name: /Play / })).toBeNull();
+
+    await act(async () => {
+        vi.advanceTimersByTime(SETTLE_MS + AUTO_PLAY_GAP_MS);
+        await Promise.resolve();
+    });
+
+    expect(suggestMove).toHaveBeenCalledTimes(2);
+    expect(suggestMove).toHaveBeenLastCalledWith(
+        [
+            [0, 0, 0, 2],
+            [0, 0, 0, 0],
+            [0, 0, 0, 0],
+            [0, 0, 0, 0],
+        ],
+        "expectimax",
+    );
+    expect(applyMove).toHaveBeenLastCalledWith(afterPending, "down");
+});
+
+test("a blocked pending move when starting auto play stops the loop", async () => {
+    suggestMove.mockResolvedValue({
+        move: "right",
+        mode: "llm",
+        source: "llm",
+        reason: "Opens space on the left.",
+    });
+    applyMove.mockReturnValue({
+        moved: false,
+        scoreGained: 0,
+        visualTiles: opening,
+        resolvedTiles: opening,
+        lost: false,
+    });
+
+    render(<App />);
+    fireEvent.click(screen.getByRole("button", { name: "AI" }));
+
+    await act(async () => {
+        await Promise.resolve();
+    });
+
+    expect(screen.getByRole("button", { name: "Play Right" })).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Auto Play" }));
+
+    expect(applyMove).toHaveBeenCalledWith(opening, "right");
+    expect(screen.getByRole("status").textContent).toBe("AI could not suggest a move");
+    expect(screen.queryByRole("button", { name: /Play / })).toBeNull();
+    expect(screen.getByRole("button", { name: "Auto Play" }).getAttribute("aria-pressed")).toBe(
+        "false",
+    );
+    expect(screen.getByRole("button", { name: "AI" }).disabled).toBe(false);
+});
+
+test("a blocked auto-applied suggestion stops the loop", async () => {
+    suggestMove.mockResolvedValue({
+        move: "right",
+        mode: "expectimax",
+        source: "expectimax",
+        reason: null,
+    });
+    applyMove.mockReturnValue({
+        moved: false,
+        scoreGained: 0,
+        visualTiles: opening,
+        resolvedTiles: opening,
+        lost: false,
+    });
+
+    render(<App />);
+    fireEvent.click(screen.getByRole("button", { name: "Auto Play" }));
+
+    await act(async () => {
+        await Promise.resolve();
+    });
+
+    expect(applyMove).toHaveBeenCalledWith(opening, "right");
+    expect(screen.getByRole("status").textContent).toBe("AI could not suggest a move");
+    expect(screen.getByRole("button", { name: "Auto Play" }).getAttribute("aria-pressed")).toBe(
+        "false",
+    );
+    expect(screen.getByRole("button", { name: "AI" }).disabled).toBe(false);
+});
+
+test("a loss during auto play stops the loop", async () => {
+    suggestMove.mockResolvedValue({
+        move: "right",
+        mode: "expectimax",
+        source: "expectimax",
+        reason: null,
+    });
+    applyMove.mockReturnValue({
+        moved: true,
+        scoreGained: 4,
+        visualTiles: [{ id: 1, row: 0, col: 3, value: 2, fromRow: 0, fromCol: 0, sliding: true }],
+        resolvedTiles: [{ id: 1, row: 0, col: 3, value: 2 }],
+        lost: true,
+    });
+
+    render(<App />);
+    fireEvent.click(screen.getByRole("button", { name: "Auto Play" }));
+
+    await act(async () => {
+        await Promise.resolve();
+    });
+
+    await act(async () => {
+        vi.advanceTimersByTime(SETTLE_MS + AUTO_PLAY_GAP_MS);
+        await Promise.resolve();
+    });
+
+    expect(screen.getByText("Game over")).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Auto Play" }).getAttribute("aria-pressed")).toBe(
+        "false",
+    );
+    expect(suggestMove).toHaveBeenCalledTimes(1);
+    expect(applyMove).toHaveBeenCalledTimes(1);
+});
+
+test("a rate limit during auto play stops the loop", async () => {
+    suggestMove.mockRejectedValue(new SuggestError("suggestion rate limit", { status: 429 }));
+
+    render(<App />);
+    fireEvent.click(screen.getByRole("button", { name: "Auto Play" }));
+
+    await act(async () => {
+        await Promise.resolve();
+    });
+
+    expect(applyMove).not.toHaveBeenCalled();
+    expect(screen.getByRole("status").textContent).toBe(
+        "Too many suggestions. Wait a moment and try again.",
+    );
+    expect(screen.getByRole("button", { name: "Auto Play" }).getAttribute("aria-pressed")).toBe(
+        "false",
+    );
+    expect(screen.getByRole("button", { name: "AI" }).disabled).toBe(false);
+});
+
+test("a new game during auto play cancels the next suggestion", async () => {
+    createInitialTiles.mockReset();
+    createInitialTiles.mockReturnValueOnce(opening).mockReturnValueOnce(restarted);
+    suggestMove.mockResolvedValue({
+        move: "right",
+        mode: "expectimax",
+        source: "expectimax",
+        reason: null,
+    });
+    applyMove.mockReturnValue({
+        moved: true,
+        scoreGained: 0,
+        visualTiles: [{ id: 1, row: 0, col: 3, value: 2, fromRow: 0, fromCol: 0, sliding: true }],
+        resolvedTiles: [{ id: 1, row: 0, col: 3, value: 2 }],
+        lost: false,
+    });
+
+    render(<App />);
+    fireEvent.click(screen.getByRole("button", { name: "Auto Play" }));
+
+    await act(async () => {
+        await Promise.resolve();
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: "New Game" }));
+    expect(screen.getByRole("button", { name: "Auto Play" }).getAttribute("aria-pressed")).toBe(
+        "false",
+    );
+
+    await act(async () => {
+        vi.advanceTimersByTime(SETTLE_MS + AUTO_PLAY_GAP_MS);
+        await Promise.resolve();
+    });
+
+    expect(suggestMove).toHaveBeenCalledTimes(1);
+    expect(applyMove).toHaveBeenCalledTimes(1);
+    expect(screen.getByRole("button", { name: "AI" }).disabled).toBe(false);
 });

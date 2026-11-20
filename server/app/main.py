@@ -23,15 +23,19 @@ def create_app(
     settings: Settings | None = None,
     llm_client: LlmClient | None = None,
     span_processor: SpanProcessor | None = None,
-    rate_limiter: SuggestRateLimiter | None = None,
+    rate_limiters: dict[str, SuggestRateLimiter] | None = None,
 ) -> FastAPI:
     settings = settings or Settings()
     owns_llm = llm_client is None
     llm = llm_client or OllamaClient(settings)
-    limiter = rate_limiter or SuggestRateLimiter(
-        settings.suggest_rate_limit_requests,
-        settings.suggest_rate_limit_window_seconds,
-    )
+    window = settings.suggest_rate_limit_window_seconds
+    limiters = rate_limiters or {
+        "llm": SuggestRateLimiter(settings.suggest_rate_limit_requests, window),
+        "expectimax": SuggestRateLimiter(
+            settings.suggest_rate_limit_expectimax_requests,
+            window,
+        ),
+    }
     suggester = MoveSuggester(
         llm,
         max_attempts=settings.llm_max_attempts,
@@ -74,7 +78,7 @@ def create_app(
 
     @app.post("/suggest", response_model=SuggestResponse)
     def suggest(body: SuggestRequest) -> SuggestResponse:
-        retry_after = limiter.allow()
+        retry_after = limiters[body.mode].allow()
         if retry_after is not None:
             raise HTTPException(
                 status_code=429,
