@@ -433,9 +433,11 @@ test("a failed AI suggestion leaves the board alone and reports the miss", async
 
 test("a player move during an AI request drops the late suggestion", async () => {
     let finishSuggest;
+    let seenSignal;
     suggestMove.mockImplementation(
-        () =>
+        (_board, _mode, options = {}) =>
             new Promise((resolve) => {
+                seenSignal = options.signal;
                 finishSuggest = resolve;
             }),
     );
@@ -449,8 +451,12 @@ test("a player move during an AI request drops the late suggestion", async () =>
 
     render(<App />);
     fireEvent.click(screen.getByRole("button", { name: "AI" }));
+    expect(seenSignal).toBeInstanceOf(AbortSignal);
+    expect(seenSignal.aborted).toBe(false);
+
     press("ArrowRight");
 
+    expect(seenSignal.aborted).toBe(true);
     expect(applyMove).toHaveBeenCalledTimes(1);
     expect(applyMove).toHaveBeenCalledWith(opening, "right");
 
@@ -1107,4 +1113,54 @@ test("a new game during auto play cancels the next suggestion", async () => {
     expect(suggestMove).toHaveBeenCalledTimes(1);
     expect(applyMove).toHaveBeenCalledTimes(1);
     expect(screen.getByRole("button", { name: "AI" }).disabled).toBe(false);
+});
+
+test("a new game during Thinking aborts the in-flight suggest", async () => {
+    let seenSignal;
+    suggestMove.mockImplementation(
+        (_board, _mode, options = {}) =>
+            new Promise((_resolve, reject) => {
+                seenSignal = options.signal;
+                options.signal?.addEventListener("abort", () => {
+                    reject(new DOMException("Aborted", "AbortError"));
+                });
+            }),
+    );
+
+    render(<App />);
+    fireEvent.click(screen.getByRole("button", { name: "AI" }));
+    expect(seenSignal).toBeInstanceOf(AbortSignal);
+    expect(seenSignal.aborted).toBe(false);
+
+    fireEvent.click(screen.getByRole("button", { name: "New Game" }));
+
+    expect(seenSignal.aborted).toBe(true);
+    expect(screen.getByRole("button", { name: "AI" }).disabled).toBe(false);
+    expect(screen.queryByRole("button", { name: /Play / })).toBeNull();
+
+    await act(async () => {
+        await Promise.resolve();
+    });
+});
+
+test("unmount aborts an in-flight suggest", async () => {
+    let seenSignal;
+    suggestMove.mockImplementation(
+        (_board, _mode, options = {}) =>
+            new Promise((_resolve, reject) => {
+                seenSignal = options.signal;
+                options.signal?.addEventListener("abort", () => {
+                    reject(new DOMException("Aborted", "AbortError"));
+                });
+            }),
+    );
+
+    const { unmount } = render(<App />);
+    fireEvent.click(screen.getByRole("button", { name: "AI" }));
+    expect(seenSignal).toBeInstanceOf(AbortSignal);
+    expect(seenSignal.aborted).toBe(false);
+
+    unmount();
+
+    expect(seenSignal.aborted).toBe(true);
 });

@@ -298,6 +298,8 @@ function App() {
             window.removeEventListener("keydown", onKeyDown);
             suggestAbortRef.current?.abort();
             suggestAbortRef.current = null;
+            // Match Stop/move/New Game: drop the token so a late resolve cannot land.
+            suggestTokenRef.current += 1;
         };
     }, []);
 
