@@ -16,6 +16,9 @@ class Settings(BaseSettings):
     llm_max_attempts: int = Field(default=3, ge=1, le=5)
     llm_attempt_timeout_seconds: float = Field(default=10, gt=0, le=10)
     llm_suggest_budget_seconds: float = Field(default=20, gt=0, le=20)
+    # The whole process, not each caller. Nginx is the only prod caller.
+    suggest_rate_limit_requests: int = Field(default=5, ge=1, le=30)
+    suggest_rate_limit_window_seconds: float = Field(default=60, ge=1, le=3600)
 
     @model_validator(mode="after")
     def prod_uses_plain_json(self) -> "Settings":

@@ -8,6 +8,7 @@ from pydantic import ValidationError
 
 from app.llm import LlmError, ModelSuggestion, OllamaClient, _prompt, parse_move
 from app.main import create_app
+from app.rate_limit import SuggestRateLimiter
 from app.schemas import MAX_TILE
 from app.suggester import MoveSuggester
 from helpers import isolated_settings
@@ -68,6 +69,50 @@ def test_health() -> None:
     response = _client(FakeLLM([])).get("/health")
     assert response.status_code == 200
     assert response.json() == {"status": "ok"}
+
+
+class _Clock:
+    def __init__(self) -> None:
+        self.now = 0.0
+
+    def __call__(self) -> float:
+        return self.now
+
+
+def _suggest(client: TestClient) -> httpx.Response:
+    return client.post("/suggest", json={"board": OPEN_BOARD, "mode": "llm"})
+
+
+def test_suggest_rate_limit_stops_before_the_model() -> None:
+    llm = FakeLLM(["right", "right", "right"])
+    clock = _Clock()
+    limiter = SuggestRateLimiter(2, 60, clock)
+    client = TestClient(create_app(isolated_settings(), llm, limiter))
+    assert _suggest(client).status_code == 200
+    assert _suggest(client).status_code == 200
+
+    blocked = _suggest(client)
+    assert blocked.status_code == 429
+    assert blocked.json()["detail"] == "too many suggestions"
+    assert blocked.headers["retry-after"] == "60"
+    assert llm.calls == 2
+
+    clock.now = 60
+    assert _suggest(client).status_code == 200
+    assert llm.calls == 3
+
+
+def test_suggest_rate_limit_uses_settings() -> None:
+    llm = FakeLLM(["right", "right"])
+    settings = isolated_settings(
+        suggest_rate_limit_requests=1,
+        suggest_rate_limit_window_seconds=60,
+    )
+    client = TestClient(create_app(settings, llm))
+    assert _suggest(client).status_code == 200
+    blocked = _suggest(client)
+    assert blocked.status_code == 429
+    assert llm.calls == 1
 
 
 def test_health_stays_ok_when_ollama_is_down() -> None:
