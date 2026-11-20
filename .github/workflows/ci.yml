@@ -161,8 +161,13 @@ jobs:
           phoenix_override = env_value(override, "dev", "PHOENIX_COLLECTOR_ENDPOINT")
           if phoenix_override != "http://phoenix.example:6006":
               raise SystemExit(f"COMPOSE_PHOENIX_COLLECTOR_ENDPOINT did not apply: {phoenix_override!r}")
+          def expect_unpublished(service):
+              ports = data["services"][service].get("ports") or []
+              if ports:
+                  raise SystemExit(f"{service} publishes {ports}")
+
           expect(data, "dev", 8000, 8000)
-          expect(data, "prod", 8000, 8000)
+          expect_unpublished("prod")
           expect(data, "client-dev", 5173, 5173)
           expect(data, "client", 5173, 80)
           expect(metrics, "prometheus", 9090, 9090)
@@ -177,5 +182,50 @@ jobs:
               )
               if "api" not in aliases:
                   raise SystemExit(f"{service} missing network alias 'api', have {aliases}")
+
+          import os
+          import subprocess
+
+          moved = subprocess.check_output(
+              [
+                  "docker",
+                  "compose",
+                  "--profile",
+                  "dev",
+                  "--profile",
+                  "prod",
+                  "--profile",
+                  "metrics",
+                  "config",
+                  "--format",
+                  "json",
+              ],
+              env={
+                  **os.environ,
+                  "API_HOST_PORT": "18000",
+                  "CLIENT_HOST_PORT": "15173",
+                  "PROMETHEUS_HOST_PORT": "19090",
+                  "GRAFANA_HOST_PORT": "13000",
+              },
+              text=True,
+          )
+          moved_data = json.loads(moved)
+
+          def moved_bindings(service):
+              found = []
+              for port in moved_data["services"][service].get("ports") or []:
+                  found.append((int(port["published"]), int(port["target"])))
+              return found
+
+          if (18000, 8000) not in moved_bindings("dev"):
+              raise SystemExit(f"API_HOST_PORT did not apply: {moved_bindings('dev')}")
+          if (15173, 5173) not in moved_bindings("client-dev"):
+              raise SystemExit(f"CLIENT_HOST_PORT did not apply to client-dev: {moved_bindings('client-dev')}")
+          if (15173, 80) not in moved_bindings("client"):
+              raise SystemExit(f"CLIENT_HOST_PORT did not apply to client: {moved_bindings('client')}")
+          if (19090, 9090) not in moved_bindings("prometheus"):
+              raise SystemExit(f"PROMETHEUS_HOST_PORT did not apply: {moved_bindings('prometheus')}")
+          if (13000, 3000) not in moved_bindings("grafana"):
+              raise SystemExit(f"GRAFANA_HOST_PORT did not apply: {moved_bindings('grafana')}")
           print("compose service DNS ok")
           PY
