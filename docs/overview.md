@@ -21,8 +21,12 @@ sequenceDiagram
   UI->>UI: merge, score, spawn
   Player->>UI: choose mode, press AI or Auto Play
   UI->>API: board + mode
-  API->>Model: chat (LLM mode)
-  Model-->>API: move + reason
+  alt LLM mode
+    API->>Model: chat
+    Model-->>API: move + reason
+  else Expectimax
+    API->>API: depth-limited search (no Ollama)
+  end
   API-->>UI: suggestion
   alt confirm
     Player->>UI: Play direction — or move themselves

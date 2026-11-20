@@ -26,7 +26,7 @@ Human docs are orientation only. **Implementation truth is under `docs/agents/`.
 
 ## Server
 
-- Python FastAPI + Pydantic. Prefer clear types, solid tests, and (when adding observability) OpenTelemetry. Keep a proper client abstraction for the model.
+- Python FastAPI + Pydantic. Prefer clear types and solid tests. Tracing is wired (Phoenix / OpenInference OTLP via `app/telemetry.py`; traces only—no scrape `/metrics` on mainline; see [docs/agents/server.md](docs/agents/server.md)). Keep a proper client abstraction for the model.
 
 ## Pull requests
 
@@ -44,6 +44,6 @@ Behavior/runtime changes belong in the **same PR** as the canonical agent doc up
 
 ```bash
 cd scripts && python -m unittest discover -v -s . -p 'test_*.py'
-python scripts/check_doc_links.py
-python scripts/check_docs_freshness.py   # warns only; still fix or mark Docs N/A
+python scripts/check_doc_links.py        # fails CI on broken relative links
+python scripts/check_docs_freshness.py   # warns only; satisfy with docs/agents/ or AGENTS.md (human docs/*.md alone is not enough)
 ```
