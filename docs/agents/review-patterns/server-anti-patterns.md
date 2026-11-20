@@ -33,3 +33,7 @@ The operation and its parameters have different names. A binding has fields, not
 ## Defaults must meet every multi-call suite
 
 A new process-wide control (rate limit, budget, shared client) is not done when a unit test passes with an injected override. Suites that share one app across many cases—especially opt-in e2e—still run on **defaults** unless they say otherwise. Prefer: one test on the real default that exhausts the cap, and any shared-client suite that needs more room raises the setting from the call volume it already declares.
+
+## Isolation helpers must pin every env-backed field
+
+`Settings(**partial)` still fills omitted fields from the process env and `.env`. A helper that claims isolation must pass **every** model field as an init kwarg, and a test must poison the env (or assert the pinned key set equals `Settings.model_fields`) so a new setting cannot land unpinned.

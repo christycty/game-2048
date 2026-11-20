@@ -123,7 +123,8 @@ def test_default_rate_limit_blocks_the_sixth_shared_call() -> None:
     """
     from app.config import Settings
 
-    assert Settings().suggest_rate_limit_requests == 5
+    # Field default, not Settings() — that still reads the process env / .env.
+    assert Settings.model_fields["suggest_rate_limit_requests"].default == 5
     assert E2E_SUGGEST_CALLS == E2E_BOARD_COUNT * E2E_RUN_COUNT
     assert E2E_SUGGEST_CALLS > 5
 
