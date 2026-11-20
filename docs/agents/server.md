@@ -23,7 +23,7 @@ Package name: `game-2048-server`. Entry: `app.main:app`. Python ≥ 3.11 (images
 
 | Path | Role |
 |---|---|
-| `app/main.py` | App factory, CORS, rate limit gate, `/health`, `/suggest` (async; disconnect → cancel). |
+| `app/main.py` | App factory, CORS, disconnect-cancel middleware, `/health`, `/suggest` (async). |
 | `app/schemas.py` | Request and response models. Tile and mode validation. |
 | `app/suggester.py` | Mode dispatch, LLM retries, fallback, expectimax search; honors per-request cancel. |
 | `app/expectimax.py` | Depth-limited expectimax with spawn chance nodes; checks cancel between depths. |
@@ -41,7 +41,7 @@ Package name: `game-2048-server`. Entry: `app.main:app`. Python ≥ 3.11 (images
 | `GET` | `/health` | `{"status":"ok"}` | Never calls Ollama. |
 | `POST` | `/suggest` | `SuggestResponse` | `409` when the board has no legal move. `422` on bad payload. `429` + `Retry-After` when that mode’s process rate limit is hit (checked before the model). `499` when the client disconnects / cancels mid-run (best-effort if already gone). |
 
-Concurrent clients share one process (FastAPI threadpool + process-wide rate limiters). Cancel is **per request**: a disconnect sets that request’s `threading.Event` only. The shared Ollama `httpx.Client` stays open; cancel closes that response stream so a sibling suggest keeps running.
+Concurrent clients share one process (FastAPI threadpool + process-wide rate limiters). Cancel is **per request**: `DisconnectCancelMiddleware` tees ASGI receive for `/suggest` and sets that request’s `threading.Event` on `http.disconnect`. The shared Ollama `httpx.Client` stays open; cancel closes that response stream so a sibling suggest keeps running.
 
 CORS allows `http://localhost:${CLIENT_HOST_PORT}` and `http://127.0.0.1:${CLIENT_HOST_PORT}` (default 5173), methods `GET` and `POST`. Same-origin `/suggest` through Vite or nginx does not need CORS; the allowlist remains for builds that set `VITE_API_BASE_URL` to the API origin.
 
@@ -129,7 +129,7 @@ Loaded from the environment and optional `server/.env` (Compose does not use tha
 
 - `tests/test_helpers.py` asserts `isolated_settings` pins every `Settings` field and ignores hostile `SUGGEST_RATE_LIMIT_*` env.
 - `tests/test_suggest.py` covers health, CORS, per-mode rate limits before the model (including the **default** 5-call LLM cap and a separate Expectimax bucket), LLM success and reason, illegal-move retry, exhausted fallback, expectimax search + score reason, illegal-search fallback, stuck-board 409, bad payload 422, Ollama HTTP failures, prod schema omission, attempt bounds, and the time budget stop.
-- `tests/test_cancel.py` covers per-request cancel through suggester / expectimax / Ollama client, concurrent isolation (cancel A, B still completes), endpoint `499` mapping, disconnect watcher, and the endpoint wiring that turns a disconnect watch into a cancelled LLM call.
+- `tests/test_cancel.py` covers per-request cancel through suggester / expectimax / Ollama client, concurrent isolation (cancel A, B still completes), endpoint `499` mapping, disconnect middleware, and ASGI disconnect cancelling a blocking LLM while a sibling completes.
 - `tests/test_expectimax.py` covers legality, spawn odds, depth/budget cutoffs, and the reason format.
 - `tests/test_moves.py` covers the slide and merge rules used for legality.
 - `tests/test_telemetry.py` covers span wiring for suggest.

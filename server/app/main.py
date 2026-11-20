@@ -7,6 +7,7 @@ from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from opentelemetry import trace
 from opentelemetry.sdk.trace.export import SpanProcessor
+from starlette.types import ASGIApp, Receive, Scope, Send
 
 from app.cancel import SuggestCancelled
 from app.config import Settings
@@ -22,17 +23,53 @@ from app.telemetry import (
     shutdown_telemetry,
 )
 
-# Poll interval for ASGI disconnect while a suggest runs in a worker thread.
-_DISCONNECT_POLL_SECONDS = 0.05
 
+class DisconnectCancelMiddleware:
+    """Tee ASGI receive so a client disconnect sets a per-request cancel Event.
 
-async def watch_disconnect(request: Request, cancel: threading.Event) -> None:
-    """Set cancel when the client drops; exit when cancel is set elsewhere."""
-    while not cancel.is_set():
-        if await request.is_disconnected():
-            cancel.set()
+    ``request.is_disconnected()`` only peeks; a lone ``request.receive()`` after
+    the body is read can still miss disconnects under instrumentation. One pump
+    task owns the raw receive channel, forwards messages to the app, and sets
+    ``request.state.suggest_cancel`` on ``http.disconnect``.
+    """
+
+    def __init__(self, app: ASGIApp) -> None:
+        self.app = app
+
+    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+        if scope["type"] != "http" or scope.get("path") != "/suggest":
+            await self.app(scope, receive, send)
             return
-        await asyncio.sleep(_DISCONNECT_POLL_SECONDS)
+
+        cancel = threading.Event()
+        scope.setdefault("state", {})
+        scope["state"]["suggest_cancel"] = cancel
+        bridge: asyncio.Queue[dict] = asyncio.Queue()
+
+        async def pump() -> None:
+            try:
+                while True:
+                    message = await receive()
+                    if message.get("type") == "http.disconnect":
+                        cancel.set()
+                    await bridge.put(message)
+                    if message.get("type") == "http.disconnect":
+                        return
+            except Exception:
+                cancel.set()
+                await bridge.put({"type": "http.disconnect"})
+
+        async def bridged_receive() -> dict:
+            return await bridge.get()
+
+        pump_task = asyncio.create_task(pump())
+        try:
+            await self.app(scope, bridged_receive, send)
+        finally:
+            cancel.set()
+            pump_task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await pump_task
 
 
 def create_app(
@@ -85,6 +122,8 @@ def create_app(
         allow_headers=["*"],
     )
     setup_telemetry(app, settings, span_processor)
+    # Outermost: last added runs first so the pump sees uvicorn's disconnect.
+    app.add_middleware(DisconnectCancelMiddleware)
 
     # The process is up even when Ollama is not. Expectimax never calls the
     # model, and an llm failure still returns a legal move.
@@ -103,9 +142,8 @@ def create_app(
             )
         span = trace.get_current_span()
         set_json_io(span, input_payload={"board": body.board, "mode": body.mode})
-        # Per-request cancel: concurrent suggests share the process but not this Event.
-        cancel = threading.Event()
-        watcher = asyncio.create_task(watch_disconnect(request, cancel))
+        # Middleware installs a per-request Event; fall back for non-HTTP callers.
+        cancel = getattr(request.state, "suggest_cancel", None) or threading.Event()
         try:
             result = await asyncio.to_thread(suggester.suggest, body.board, body.mode, cancel)
         except SuggestCancelled as exc:
@@ -117,10 +155,6 @@ def create_app(
             mark_span_error(span, exc)
             set_json_io(span, output_payload={"detail": "no legal move"})
             raise HTTPException(status_code=409, detail="no legal move") from None
-        finally:
-            watcher.cancel()
-            with contextlib.suppress(asyncio.CancelledError):
-                await watcher
         mark_chain_io(
             span,
             input_payload={"board": body.board, "mode": body.mode},

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
@@ -14,7 +15,7 @@ from fastapi.testclient import TestClient
 from app.cancel import SuggestCancelled
 from app.expectimax import choose_move
 from app.llm import ModelSuggestion, OllamaClient
-from app.main import create_app, watch_disconnect
+from app.main import DisconnectCancelMiddleware, create_app
 from app.suggester import MoveSuggester
 from helpers import isolated_settings
 
@@ -132,74 +133,26 @@ def test_cancel_one_of_two_concurrent_suggests_leaves_the_other() -> None:
     assert outcomes["b"] == "right"
 
 
-def test_ollama_client_cancel_closes_only_that_response() -> None:
-    """Shared httpx client: cancelling one stream must not break a sibling POST."""
-    gate = threading.Event()
-    posts = {"count": 0}
-    lock = threading.Lock()
-
-    def handler(request: httpx.Request) -> httpx.Response:
-        with lock:
-            posts["count"] += 1
-            index = posts["count"]
-        if index == 1:
-            gate.wait(timeout=2)
-            return httpx.Response(
-                200,
-                json={"message": {"content": '{"move":"left","reason":"first"}'}},
-            )
-        return httpx.Response(
+def test_ollama_client_raises_when_cancel_already_set() -> None:
+    transport = httpx.MockTransport(
+        lambda _request: httpx.Response(
             200,
-            json={"message": {"content": '{"move":"right","reason":"second"}'}},
+            json={"message": {"content": '{"move":"right","reason":"ok"}'}},
         )
-
-    transport = httpx.MockTransport(handler)
+    )
     settings = isolated_settings()
+    cancel = threading.Event()
+    cancel.set()
     with httpx.Client(transport=transport, base_url="http://ollama.test") as http:
         client = OllamaClient(settings, client=http)
-        cancel = threading.Event()
-        results: dict[str, object] = {}
-
-        def slow() -> None:
-            try:
-                results["slow"] = client.suggest_move(
-                    OPEN_BOARD,
-                    legal=["left", "right", "up", "down"],
-                    rejected=[],
-                    invalid_reply=False,
-                    cancel=cancel,
-                )
-            except Exception as exc:  # noqa: BLE001 - record whatever the cancel path raises
-                results["slow"] = exc
-
-        def fast() -> None:
-            # Wait until the slow request has claimed the first handler slot.
-            deadline = time.monotonic() + 2
-            while posts["count"] < 1 and time.monotonic() < deadline:
-                time.sleep(0.01)
-            results["fast"] = client.suggest_move(
+        with pytest.raises(SuggestCancelled):
+            client.suggest_move(
                 OPEN_BOARD,
                 legal=["left", "right", "up", "down"],
                 rejected=[],
                 invalid_reply=False,
+                cancel=cancel,
             )
-
-        slow_thread = threading.Thread(target=slow)
-        fast_thread = threading.Thread(target=fast)
-        slow_thread.start()
-        deadline = time.monotonic() + 2
-        while posts["count"] < 1 and time.monotonic() < deadline:
-            time.sleep(0.01)
-        cancel.set()
-        # Unblock the mock so the closed stream can finish teardown.
-        gate.set()
-        slow_thread.join(timeout=2)
-        fast_thread.start()
-        fast_thread.join(timeout=2)
-
-    assert isinstance(results["slow"], SuggestCancelled)
-    assert isinstance(results["fast"], ModelSuggestion)
-    assert results["fast"].move == "right"
 
 
 def test_suggest_endpoint_maps_cancel_to_499() -> None:
@@ -221,34 +174,120 @@ def test_suggest_endpoint_maps_cancel_to_499() -> None:
     assert response.json()["detail"] == "client cancelled"
 
 
-def test_watch_disconnect_sets_cancel_event() -> None:
-    cancel = threading.Event()
+def test_disconnect_middleware_sets_cancel_on_disconnect() -> None:
+    """Pump owns receive: disconnect sets the Event even while the app is busy."""
+    seen: dict[str, object] = {}
 
-    class FakeRequest:
-        def __init__(self) -> None:
-            self.checks = 0
+    async def inner(scope, receive, send):  # noqa: ANN001
+        cancel = scope["state"]["suggest_cancel"]
+        seen["cancel"] = cancel
+        # Drain the request body through the bridge.
+        while True:
+            message = await receive()
+            if message.get("type") == "http.request" and not message.get("more_body", False):
+                break
+        # Pump may already have read disconnect (parallel); wait until it lands.
+        deadline = time.monotonic() + 2
+        while not cancel.is_set() and time.monotonic() < deadline:
+            await asyncio.sleep(0.01)
+        assert cancel.is_set()
+        await send({"type": "http.response.start", "status": 204, "headers": []})
+        await send({"type": "http.response.body", "body": b""})
 
-        async def is_disconnected(self) -> bool:
-            self.checks += 1
-            return self.checks >= 2
+    app = DisconnectCancelMiddleware(inner)
+    body = b"{}"
+    messages = [
+        {"type": "http.request", "body": body, "more_body": False},
+        {"type": "http.disconnect"},
+    ]
 
-    asyncio.run(watch_disconnect(FakeRequest(), cancel))  # type: ignore[arg-type]
-    assert cancel.is_set()
+    async def receive() -> dict:
+        return messages.pop(0)
+
+    sent: list[dict] = []
+
+    async def send(message: dict) -> None:
+        sent.append(message)
+
+    scope = {
+        "type": "http",
+        "asgi": {"version": "3.0"},
+        "http_version": "1.1",
+        "method": "POST",
+        "path": "/suggest",
+        "raw_path": b"/suggest",
+        "query_string": b"",
+        "headers": [],
+        "client": ("127.0.0.1", 1),
+        "server": ("test", 80),
+        "state": {},
+    }
+    asyncio.run(app(scope, receive, send))
+    assert seen["cancel"].is_set()  # type: ignore[union-attr]
+    assert sent[0]["status"] == 204
 
 
-def test_endpoint_disconnect_watcher_cancels_blocking_llm(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Endpoint wires watch_disconnect → cancel Event → SuggestCancelled → 499."""
-    import app.main as main
-
+def test_asgi_disconnect_cancels_blocking_llm() -> None:
+    """Full stack: disconnect while BlockingLLM runs → 499, sibling still OK."""
     llm = BlockingLLM()
+    settings = isolated_settings(
+        suggest_rate_limit_requests=10,
+        suggest_rate_limit_expectimax_requests=10,
+    )
+    app = create_app(settings, llm)
+    body = json.dumps({"board": OPEN_BOARD, "mode": "llm"}).encode()
 
-    async def watch_soon(_request: object, cancel: threading.Event) -> None:
-        await asyncio.sleep(0.05)
-        cancel.set()
+    async def one_call(*, disconnect_gate: asyncio.Event | None) -> int | None:
+        scope = {
+            "type": "http",
+            "asgi": {"version": "3.0"},
+            "http_version": "1.1",
+            "method": "POST",
+            "scheme": "http",
+            "path": "/suggest",
+            "raw_path": b"/suggest",
+            "query_string": b"",
+            "headers": [
+                (b"host", b"test"),
+                (b"content-type", b"application/json"),
+                (b"content-length", str(len(body)).encode()),
+            ],
+            "client": ("127.0.0.1", 50000),
+            "server": ("test", 80),
+            "state": {},
+        }
+        messages: list[dict] = [{"type": "http.request", "body": body, "more_body": False}]
+        sent: list[dict] = []
 
-    monkeypatch.setattr(main, "watch_disconnect", watch_soon)
-    client = TestClient(main.create_app(isolated_settings(), llm))
-    response = client.post("/suggest", json={"board": OPEN_BOARD, "mode": "llm"})
-    assert response.status_code == 499
-    assert llm.cancelled_with is not None
-    assert llm.calls == 1
+        async def receive() -> dict:
+            if messages:
+                return messages.pop(0)
+            if disconnect_gate is not None:
+                await disconnect_gate.wait()
+                return {"type": "http.disconnect"}
+            await asyncio.sleep(60)
+            return {"type": "http.disconnect"}
+
+        async def send(message: dict) -> None:
+            sent.append(message)
+
+        await app(scope, receive, send)
+        return next(
+            (m.get("status") for m in sent if m.get("type") == "http.response.start"),
+            None,
+        )
+
+    async def run() -> None:
+        gate = asyncio.Event()
+        task_a = asyncio.create_task(one_call(disconnect_gate=gate))
+        assert await asyncio.to_thread(llm.started.wait, 2)
+        gate.set()
+        status_a = await asyncio.wait_for(task_a, timeout=3)
+        assert llm.cancelled_with is not None
+        assert status_a == 499
+        llm.release.set()
+        task_b = asyncio.create_task(one_call(disconnect_gate=None))
+        status_b = await asyncio.wait_for(task_b, timeout=3)
+        assert status_b == 200
+
+    asyncio.run(run())

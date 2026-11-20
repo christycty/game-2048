@@ -144,46 +144,59 @@ class OllamaClient:
         payload: dict[str, object],
         cancel: threading.Event | None,
     ) -> dict:
-        """POST /api/chat; close only this response if cancel fires (shared client stays up)."""
-        request = self._client.build_request(
-            "POST",
-            "/api/chat",
-            json=payload,
-            timeout=self._attempt_timeout,
-        )
-        response = self._client.send(request, stream=True)
+        """POST /api/chat; abort this call only if cancel fires (siblings keep going).
+
+        A per-attempt client owns its connections so ``client.close()`` can interrupt
+        ``post`` while it is still waiting on response headers. Injected test clients
+        keep their transport via a non-closing wrapper so cancel does not break them.
+        """
+        if cancel is not None and cancel.is_set():
+            raise SuggestCancelled()
+
+        base_url = str(self._client.base_url)
+        timeout = self._attempt_timeout
         stop_watch = threading.Event()
         watcher: threading.Thread | None = None
-        if cancel is not None:
-
-            def _watch_cancel() -> None:
-                while not stop_watch.is_set():
-                    if cancel.is_set():
-                        response.close()
-                        return
-                    stop_watch.wait(0.05)
-
-            watcher = threading.Thread(target=_watch_cancel, daemon=True)
-            watcher.start()
+        if self._owns_client:
+            client = httpx.Client(base_url=base_url, timeout=timeout)
+        else:
+            client = httpx.Client(
+                base_url=base_url,
+                timeout=timeout,
+                transport=_NonClosingTransport(self._client._transport),
+            )
         try:
-            raw = response.read()
-            if cancel is not None and cancel.is_set():
-                raise SuggestCancelled()
-            response.raise_for_status()
-            body = json.loads(raw)
-        except SuggestCancelled:
-            raise
-        except (httpx.HTTPError, ValueError, json.JSONDecodeError) as exc:
-            if cancel is not None and cancel.is_set():
-                raise SuggestCancelled() from exc
-            if isinstance(exc, json.JSONDecodeError):
-                raise ValueError("ollama response is not json") from exc
-            raise
+            if cancel is not None:
+
+                def _watch_cancel() -> None:
+                    while not stop_watch.is_set():
+                        if cancel.is_set():
+                            client.close()
+                            return
+                        stop_watch.wait(0.05)
+
+                watcher = threading.Thread(target=_watch_cancel, daemon=True)
+                watcher.start()
+            try:
+                response = client.post("/api/chat", json=payload, timeout=timeout)
+                if cancel is not None and cancel.is_set():
+                    raise SuggestCancelled()
+                response.raise_for_status()
+                body = response.json()
+            except SuggestCancelled:
+                raise
+            except (httpx.HTTPError, httpx.StreamError, ValueError, json.JSONDecodeError) as exc:
+                if cancel is not None and cancel.is_set():
+                    raise SuggestCancelled() from exc
+                if isinstance(exc, json.JSONDecodeError):
+                    raise ValueError("ollama response is not json") from exc
+                raise
+            finally:
+                stop_watch.set()
+                if watcher is not None:
+                    watcher.join(timeout=1)
         finally:
-            stop_watch.set()
-            response.close()
-            if watcher is not None:
-                watcher.join(timeout=1)
+            client.close()
         if not isinstance(body, dict):
             raise ValueError("ollama response is not an object")
         return body
@@ -192,6 +205,19 @@ class OllamaClient:
         if self._owns_client and not self._closed:
             self._closed = True
             self._client.close()
+
+
+class _NonClosingTransport(httpx.BaseTransport):
+    """Wrap an injected transport so attempt-client close does not tear it down."""
+
+    def __init__(self, inner: httpx.BaseTransport) -> None:
+        self._inner = inner
+
+    def handle_request(self, request: httpx.Request) -> httpx.Response:
+        return self._inner.handle_request(request)
+
+    def close(self) -> None:
+        return None
 
 
 def parse_move(content: str | dict) -> ModelSuggestion:
