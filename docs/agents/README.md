@@ -9,6 +9,6 @@ Implementation truth for coding agents and deep readers. Product narrative and d
 | [client.md](client.md) | Client layout, UX wiring, game rules, tests |
 | [server.md](server.md) | API layout, suggest pipeline, settings, tests |
 | [runtime.md](runtime.md) | Local run, Compose, images, CI |
-| [review-patterns/](review-patterns/client-anti-patterns.md) | Review heuristics / anti-patterns |
+| [review-patterns/](review-patterns/client-anti-patterns.md) | Review heuristics / anti-patterns ([server](review-patterns/server-anti-patterns.md)) |
 
 Repo entrypoint for agents: [../../AGENTS.md](../../AGENTS.md).

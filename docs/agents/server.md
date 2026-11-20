@@ -11,7 +11,7 @@ From `server/`:
 ```bash
 # copy server/.env.example if you want local overrides
 uv sync --extra dev          # or: pip install -e ".[dev]"
-uvicorn app.main:app --reload --host 127.0.0.1 --port 8000
+uvicorn app.main:app --reload --host 127.0.0.1 --port "${API_HOST_PORT:-8000}"
 pytest                       # unit tests; skips e2e
 pytest --e2e                 # needs a local Ollama and the configured model
 ruff format --check . && ruff check .
@@ -23,21 +23,23 @@ Package name: `game-2048-server`. Entry: `app.main:app`. Python ≥ 3.11 (images
 
 | Path | Role |
 |---|---|
-| `app/main.py` | App factory, CORS, `/health`, `/suggest`. |
+| `app/main.py` | App factory, CORS, rate limit gate, `/health`, `/suggest`. |
 | `app/schemas.py` | Request and response models. Tile and mode validation. |
 | `app/suggester.py` | Mode dispatch, LLM retries, fallback, expectimax stub. |
 | `app/moves.py` | Slide/merge rules for legal moves and the fallback order. |
 | `app/llm.py` | Ollama chat client, prompt, JSON parse. |
+| `app/rate_limit.py` | Process-wide sliding-window cap for `/suggest`. |
 | `app/config.py` | Env-backed settings. |
+| `app/telemetry.py` | Phoenix / OpenInference tracing setup. |
 
 ## HTTP
 
 | Method | Path | Success | Notes |
 |---|---|---|---|
 | `GET` | `/health` | `{"status":"ok"}` | Never calls Ollama. |
-| `POST` | `/suggest` | `SuggestResponse` | `409` when the board has no legal move. `422` on bad payload. |
+| `POST` | `/suggest` | `SuggestResponse` | `409` when the board has no legal move. `422` on bad payload. `429` + `Retry-After` when the process rate limit is hit (checked before the model). |
 
-CORS allows `http://localhost:5173` and `http://127.0.0.1:5173`, methods `GET` and `POST`. Other page origins cannot call the API from a browser.
+CORS allows `http://localhost:${CLIENT_HOST_PORT}` and `http://127.0.0.1:${CLIENT_HOST_PORT}` (default 5173), methods `GET` and `POST`. Same-origin `/suggest` through Vite or nginx does not need CORS; the allowlist remains for builds that set `VITE_API_BASE_URL` to the API origin.
 
 In `APP_ENV=dev`, `/docs` and `/openapi.json` are open. In `prod` they return 404. Redoc is always off. Title: `2048 suggestions`.
 
@@ -103,13 +105,17 @@ Loaded from the environment and optional `server/.env` (Compose does not use tha
 | `LLM_MAX_ATTEMPTS` | `3` | 1–5 |
 | `LLM_ATTEMPT_TIMEOUT_SECONDS` | `10` | >0, ≤10 |
 | `LLM_SUGGEST_BUDGET_SECONDS` | `20` | >0, ≤20 |
+| `SUGGEST_RATE_LIMIT_REQUESTS` | `5` | 1–30; process-wide |
+| `SUGGEST_RATE_LIMIT_WINDOW_SECONDS` | `60` | 1–3600 |
+| `CLIENT_HOST_PORT` | `5173` | 1–65535; CORS allowlist |
 
 ## Tests
 
-- `tests/test_suggest.py` covers health, CORS, LLM success and reason, illegal-move retry, exhausted fallback, expectimax stub, stuck-board 409, bad payload 422, Ollama HTTP failures, prod schema omission, attempt bounds, and the time budget stop.
+- `tests/test_helpers.py` asserts `isolated_settings` pins every `Settings` field and ignores hostile `SUGGEST_RATE_LIMIT_*` env.
+- `tests/test_suggest.py` covers health, CORS, rate limit before the model (including the **default** 5-call cap on a shared app), LLM success and reason, illegal-move retry, exhausted fallback, expectimax stub, stuck-board 409, bad payload 422, Ollama HTTP failures, prod schema omission, attempt bounds, and the time budget stop.
 - `tests/test_moves.py` covers the slide and merge rules used for legality.
-- `tests/test_suggest_e2e.py` is marked `e2e`. It talks to a real Ollama under `APP_ENV=prod` and asserts `source == "llm"` with a short reason.
+- `tests/test_suggest_e2e.py` is marked `e2e`. It talks to a real Ollama under `APP_ENV=prod`, sizes `SUGGEST_RATE_LIMIT_REQUESTS` from its parametrized call volume, and asserts `source == "llm"` with a short reason.
 
 ## Not built yet
 
-Expectimax is not a search. There is no rate limit, auth, or per-player quota. OpenTelemetry is not wired. The API does not persist games.
+Expectimax is not a search. There is no auth or per-player quota (the suggestion cap is process-wide). The API does not persist games.

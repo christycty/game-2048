@@ -7,6 +7,7 @@ from opentelemetry.sdk.trace.export import SpanProcessor
 
 from app.config import Settings
 from app.llm import LlmClient, OllamaClient
+from app.rate_limit import SuggestRateLimiter
 from app.schemas import HealthResponse, SuggestRequest, SuggestResponse
 from app.suggester import MoveSuggester, NoLegalMove
 from app.telemetry import (
@@ -22,10 +23,15 @@ def create_app(
     settings: Settings | None = None,
     llm_client: LlmClient | None = None,
     span_processor: SpanProcessor | None = None,
+    rate_limiter: SuggestRateLimiter | None = None,
 ) -> FastAPI:
     settings = settings or Settings()
     owns_llm = llm_client is None
     llm = llm_client or OllamaClient(settings)
+    limiter = rate_limiter or SuggestRateLimiter(
+        settings.suggest_rate_limit_requests,
+        settings.suggest_rate_limit_window_seconds,
+    )
     suggester = MoveSuggester(
         llm,
         max_attempts=settings.llm_max_attempts,
@@ -49,11 +55,12 @@ def create_app(
         redoc_url=None,
         lifespan=lifespan,
     )
-    # localhost and 127.0.0.1 are different browser origins. The prod client
-    # is published on 5173 so either way of opening the page can call the API.
+    # The page calls same-origin /suggest. This list is for a build that sets
+    # VITE_API_BASE_URL to the API origin. localhost and 127.0.0.1 differ.
+    # CLIENT_HOST_PORT moves with the worktree when 5173 is taken.
     app.add_middleware(
         CORSMiddleware,
-        allow_origins=["http://localhost:5173", "http://127.0.0.1:5173"],
+        allow_origins=settings.cors_origins,
         allow_methods=["GET", "POST"],
         allow_headers=["*"],
     )
@@ -67,6 +74,13 @@ def create_app(
 
     @app.post("/suggest", response_model=SuggestResponse)
     def suggest(body: SuggestRequest) -> SuggestResponse:
+        retry_after = limiter.allow()
+        if retry_after is not None:
+            raise HTTPException(
+                status_code=429,
+                detail="too many suggestions",
+                headers={"Retry-After": str(retry_after)},
+            )
         span = trace.get_current_span()
         set_json_io(span, input_payload={"board": body.board, "mode": body.mode})
         try:
