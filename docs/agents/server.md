@@ -1,6 +1,6 @@
 # Server
 
-FastAPI service that suggests the next 2048 move. The process is healthy even when Ollama is down. On LLM exhaustion the API still returns HTTP 200 with `source: "fallback"` and a legal move from a fixed order; the client treats fallback as an unusable suggestion (no **Play**—same as other failures). Expectimax runs a depth-limited search and does not call the model.
+FastAPI service that suggests the next 2048 move. The process is healthy even when Ollama is down. On LLM exhaustion or an expectimax search miss the API still returns HTTP 200 with `source: "fallback"` and a legal move from a fixed order; the client treats fallback as an unusable suggestion (no **Play**—same as other failures). Expectimax runs a depth-limited search and does not call the model.
 
 Agent/implementer detail for the API. Human architecture overview: [../architecture.md](../architecture.md). Product rules: [prd.md](prd.md).
 
@@ -38,7 +38,7 @@ Package name: `game-2048-server`. Entry: `app.main:app`. Python ≥ 3.11 (images
 | Method | Path | Success | Notes |
 |---|---|---|---|
 | `GET` | `/health` | `{"status":"ok"}` | Never calls Ollama. |
-| `POST` | `/suggest` | `SuggestResponse` | `409` when the board has no legal move. `422` on bad payload. `429` + `Retry-After` when the process rate limit is hit (checked before the model). |
+| `POST` | `/suggest` | `SuggestResponse` | Handler order: Pydantic `422` (before the rate-limit gate; does not consume the cap) → process rate limit `429` + `Retry-After` + `detail: "too many suggestions"` (before suggester / any mode) → `409` when no legal move → `200` with `SuggestResponse`. |
 
 CORS allows `http://localhost:${CLIENT_HOST_PORT}` and `http://127.0.0.1:${CLIENT_HOST_PORT}` (default 5173), methods `GET` and `POST`. Same-origin `/suggest` through Vite or nginx does not need CORS; the allowlist remains for builds that set `VITE_API_BASE_URL` to the API origin.
 
@@ -117,17 +117,24 @@ Loaded from the environment and optional `server/.env` (Compose does not use tha
 | `SUGGEST_RATE_LIMIT_REQUESTS` | `5` | 1–30; process-wide |
 | `SUGGEST_RATE_LIMIT_WINDOW_SECONDS` | `60` | 1–3600 |
 | `CLIENT_HOST_PORT` | `5173` | 1–65535; CORS allowlist |
-| `EXPORT_TRACES` | `true` | Host uvicorn / one-off image runs honor this env; CI pytest and smoke `docker run` set `false`. Compose `dev`/`prod` hardcode `true` (see [runtime.md](runtime.md)) |
-| `PHOENIX_COLLECTOR_ENDPOINT` | `http://localhost:6006` | Host process default |
-| `PHOENIX_API_KEY` | unset | Optional |
+| `EXPORT_TRACES` | `true` | Gates **OTLP export** only (instrumentation still loads when `false`). Host uvicorn / one-off image runs honor this env; CI pytest and smoke `docker run` set `false`. Compose `dev`/`prod` hardcode `true` (see [runtime.md](runtime.md)) |
+| `PHOENIX_COLLECTOR_ENDPOINT` | `http://localhost:6006` | Host process default; exporter posts to `{endpoint}/v1/traces` (or a full traces URL) |
+| `PHOENIX_API_KEY` | unset | Optional bearer; sent only for HTTPS or local/`host.docker.internal` HTTP |
+
+## Tracing (Phoenix / OpenInference)
+
+- When `EXPORT_TRACES=true`, spans export over OTLP HTTP to Phoenix. There is **no** scrape `/metrics` or Grafana on mainline (in-process GenAI histograms stay local).
+- Typical LLM tree: FastAPI `POST /suggest` → `suggest` chain → sibling `ollama chat` spans per attempt. Expectimax opens `suggest` without LLM children. Stuck board (`409`) is a single HTTP span (no nested `suggest`).
+- Auto HTTP spans skip `/health`, `/docs`, `/openapi.json`, `/redoc`. Retry/fallback detail may appear as span-only `failures` output (not in the API body).
+- Details and CI env split: [runtime.md](runtime.md).
 
 ## Tests
 
 - `tests/test_helpers.py` asserts `isolated_settings` pins every `Settings` field and ignores hostile `SUGGEST_RATE_LIMIT_*` env.
-- `tests/test_suggest.py` covers health, CORS, rate limit before the model (including the **default** 5-call cap on a shared app), LLM success and reason, illegal-move retry, exhausted fallback, expectimax search + score reason, illegal-search fallback, stuck-board 409, bad payload 422, Ollama HTTP failures, prod schema omission, attempt bounds, and the time budget stop.
+- `tests/test_suggest.py` covers health, CORS, rate limit before the suggester (including the **default** 5-call cap on a shared app), LLM success and reason, illegal-move retry, exhausted fallback, expectimax search + score reason, illegal-search fallback, stuck-board 409, bad payload 422, Ollama HTTP failures, prod schema omission, attempt bounds, and the time budget stop.
 - `tests/test_expectimax.py` covers legality, spawn odds, depth/budget cutoffs, and the reason format.
 - `tests/test_moves.py` covers the slide and merge rules used for legality.
-- `tests/test_telemetry.py` covers span wiring for suggest.
+- `tests/test_telemetry.py` covers export URL, API-key policy, nesting, retries, errors, health exclusion, and stuck-board span shape.
 - `tests/test_suggest_e2e.py` is marked `e2e` for real Ollama under `APP_ENV=prod`. It sizes `SUGGEST_RATE_LIMIT_REQUESTS` from its parametrized call volume, asserts `source == "llm"` with a short reason, and includes a non-e2e expectimax HTTP smoke that does not need Ollama.
 
 ## Not built yet

@@ -61,7 +61,7 @@ AI is unavailable when the game is over, while a move animation is playing, whil
 
 ### Product rules for suggestions
 
-- A suggestion must be a legal direction for the current board when it is offered for confirmation.
+- The API only returns a usable suggestion (`source` other than `fallback`) after server-side legality checks. The client offers **Play** from that response without re-validating the direction locally.
 - The player is never forced to accept a suggestion.
 - The product does not auto-play moves on a timer or after every turn.
 - There are no user accounts; suggestions are not tied to identity or saved history.

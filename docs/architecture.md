@@ -20,13 +20,15 @@ flowchart TB
   API -->|"LLM mode"| Ollama
 ```
 
-Ports bind to loopback. Host publish ports come from `API_HOST_PORT` / `CLIENT_HOST_PORT` (defaults 8000 / 5173) so worktrees can diverge. The browser calls same-origin `/suggest`; Vite (dev) or nginx (prod Compose) forwards to the API. Prod Compose does not publish the API host port.
+**Host-published** ports bind to loopback (`127.0.0.1` and `::1`). `CLIENT_HOST_PORT` maps the page (Vite/nginx); `API_HOST_PORT` maps the **dev** API only (defaults 8000 / 5173 so worktrees can diverge). Prod Compose publishes the client, not the API. The browser calls same-origin `/suggest`; Vite (dev) or nginx (prod Compose) forwards to the API.
 
 ## Suggestion path
 
 ```mermaid
 flowchart TD
-  A[Receive board + mode] --> R{Rate limit?}
+  A[Receive board + mode] --> V{Valid payload?}
+  V -->|no| U[422]
+  V -->|yes| R{Rate limit?}
   R -->|over| T[429 Retry-After]
   R -->|ok| B{Legal moves?}
   B -->|none| C[409]
@@ -41,6 +43,8 @@ flowchart TD
   I --> J
   H --> J
 ```
+
+Validation (`422`) runs before the rate-limit gate; invalid bodies do not consume the process cap.
 
 The API stays healthy when Ollama is down (`GET /health` never calls the model). Expectimax never calls Ollama. The client only offers **Play** when the suggestion is usable—not on fallback, rate limit, or transport errors.
 
@@ -78,7 +82,7 @@ flowchart LR
   Telemetry -.->|OTLP when EXPORT_TRACES| Phoenix[Phoenix]
 ```
 
-Client owns the playable rules and UI. Server owns suggestion modes, the process-wide rate limit, legality checks for the coach, expectimax search, the Ollama client, and optional Phoenix tracing. Both sides implement the same slide/merge rules so “legal” means the same thing.
+Client owns the playable rules and UI. Server owns suggestion modes, the process-wide rate limit, legality checks for the coach, expectimax search, the Ollama client, and Phoenix OTLP tracing when `EXPORT_TRACES` is on (default; collector optional—traces only, no scrape metrics on mainline). Both sides implement the same slide/merge rules so “legal” means the same thing.
 
 ## Stack
 
@@ -95,7 +99,7 @@ Client owns the playable rules and UI. Server owns suggestion modes, the process
 | Profile | What runs |
 |---|---|
 | `dev` | API with reload + Vite client (API published; Vite proxies `/suggest`) |
-| `prod` | API unpublished + nginx static client on `CLIENT_HOST_PORT` (nginx proxies `/suggest`) |
+| `prod` | API unpublished + nginx static client (`${CLIENT_HOST_PORT}`→80; nginx proxies `/suggest`) |
 
 Ollama always stays on the host. Compose reaches it via `host.docker.internal` (override with `COMPOSE_OLLAMA_BASE_URL`).
 

@@ -115,7 +115,7 @@ PR authors fill the Docs section in [`.github/PULL_REQUEST_TEMPLATE.md`](../../.
 
 | Check | What it does |
 |---|---|
-| `scripts/check_doc_links.py` | Fails CI if relative Markdown links under docs entrypoints are broken |
+| `scripts/check_doc_links.py` | Fails CI if relative Markdown links are broken in root `README.md`, `AGENTS.md`, `client/README.md`, and all `docs/**/*.md` |
 | `scripts/check_docs_freshness.py` | **Warns** (does not fail) when `client/`, `server/`, Compose, env example, or workflows change without `docs/agents/` or `AGENTS.md` |
 | `scripts/test_*.py` | Pinned unit tests for the scripts above (stdlib `unittest`, no extra deps) |
 
@@ -133,7 +133,7 @@ python scripts/check_docs_freshness.py
 2. Canonical file under `docs/agents/` updated (or Docs N/A noted on the PR)
 3. Human page updated only if the story/diagram would lie
 4. No second copy of the same fact
-5. `python3 scripts/check_doc_links.py` passes
+5. Same commands as the CI `docs` job (script unit tests + `check_doc_links.py`; run freshness locally too)
 
 ### Agents maintaining docs
 

@@ -11,4 +11,4 @@ Building or changing code? Start at [../AGENTS.md](../AGENTS.md) and [agents/](a
 | [getting-started.md](getting-started.md) | Run locally or with Compose |
 | [agents/](agents/README.md) | Agent rules, deep detail, review patterns, **how to write docs** |
 
-CI `docs` job: script unit tests, `check_doc_links.py`, and a freshness nudge when code changes without `docs/agents/`. Details: [agents/writing-docs.md](agents/writing-docs.md).
+CI `docs` job: script unit tests, `check_doc_links.py` (**fails** on broken links), and a freshness **warn** when code changes without `docs/agents/` or root `AGENTS.md`. Details: [agents/writing-docs.md](agents/writing-docs.md).

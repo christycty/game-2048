@@ -16,9 +16,10 @@ cp .env.example .env   # optional; set API_HOST_PORT / CLIENT_HOST_PORT if 8000/
 
 # 1. Ollama listening on http://localhost:11434
 
-# 2. API (use the same API_HOST_PORT as .env)
+# 2. API — export API_HOST_PORT from the repo-root .env (or match the default);
+#    uvicorn reads the shell, not the root .env file. server/.env is for API settings.
 cd server
-cp .env.example .env   # optional; keep CLIENT_HOST_PORT in sync
+cp .env.example .env   # optional; keep CLIENT_HOST_PORT in sync for CORS / VITE_API_BASE_URL
 uv sync --extra dev
 uvicorn app.main:app --reload --host 127.0.0.1 --port "${API_HOST_PORT:-8000}"
 
