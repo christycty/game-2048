@@ -7,7 +7,7 @@
     "dev": "vite",
     "build": "vite build",
     "lint": "oxlint",
-    "test": "vitest run && node --test src/game.test.js src/swipe.test.js",
+    "test": "vitest run && node --test src/game.test.js src/swipe.test.js src/api.test.js",
     "preview": "vite preview"
   },
   "dependencies": {

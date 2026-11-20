@@ -1,3 +1,38 @@
-// API interaction, currently for AI suggestion calls 
+// Calls the suggestion API. The board is a 4x4 of tile values; mode is llm or expectimax.
 
-// GET AI suggestion: pass board state, AI mode (chat, others)
+const DEFAULT_BASE_URL = "http://localhost:8000";
+
+function apiBaseUrl() {
+    return import.meta.env?.VITE_API_BASE_URL ?? DEFAULT_BASE_URL;
+}
+
+export class SuggestError extends Error {
+    constructor(message, { status } = {}) {
+        super(message);
+        this.name = "SuggestError";
+        this.status = status;
+    }
+}
+
+export async function suggestMove(board, mode = "llm", { fetch: fetchImpl = fetch } = {}) {
+    let response;
+    try {
+        response = await fetchImpl(`${apiBaseUrl()}/suggest`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ board, mode }),
+        });
+    } catch {
+        throw new SuggestError("suggestion request failed", { status: 0 });
+    }
+
+    if (!response.ok) {
+        throw new SuggestError("suggestion request failed", { status: response.status });
+    }
+
+    const body = await response.json();
+    if (!body || typeof body.move !== "string") {
+        throw new SuggestError("suggestion response was unusable");
+    }
+    return body;
+}

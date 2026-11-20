@@ -1,18 +1,14 @@
 import json
-import logging
 from typing import NamedTuple, Protocol
 
 import httpx
 
 from app.config import Settings
 
-logger = logging.getLogger(__name__)
-
 DIRECTIONS = ("up", "down", "left", "right")
 REASON_WORD_LIMIT = 50
 # A single token has one word, so the word cap alone would not bound the payload.
 REASON_CHAR_LIMIT = 400
-HEALTH_TIMEOUT_SECONDS = 2.0
 
 
 class LlmError(Exception):
@@ -90,19 +86,6 @@ class OllamaClient:
             raise LlmError("ollama response has no message")
         return parse_move(message.get("content", ""))
 
-    def healthy(self) -> bool:
-        try:
-            response = self._client.get("/api/tags", timeout=HEALTH_TIMEOUT_SECONDS)
-            response.raise_for_status()
-            body = response.json()
-        except (httpx.HTTPError, ValueError) as exc:
-            logger.warning("ollama health check failed: %s", exc)
-            return False
-        if not _model_is_installed(body, self._model):
-            logger.warning("ollama model %s is not installed", self._model)
-            return False
-        return True
-
     def close(self) -> None:
         if self._owns_client and not self._closed:
             self._closed = True
@@ -140,25 +123,6 @@ def _bounded_reason(reason: str) -> str:
     if not text:
         raise LlmError("model output has no reason")
     return text
-
-
-def _model_is_installed(body: object, model: str) -> bool:
-    if not isinstance(body, dict):
-        return False
-    models = body.get("models")
-    if not isinstance(models, list):
-        return False
-    names: list[str] = []
-    for item in models:
-        if not isinstance(item, dict):
-            continue
-        name = item.get("name")
-        if isinstance(name, str):
-            names.append(name)
-    # An untagged name resolves to :latest. A different tag is a different model.
-    if ":" in model:
-        return model in names
-    return model in names or f"{model}:latest" in names
 
 
 def _move_schema(legal: list[str]) -> dict:
