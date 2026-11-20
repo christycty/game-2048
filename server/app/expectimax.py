@@ -113,6 +113,7 @@ def _chance_value(
 
     # A legal slide always leaves an empty cell, so the spawn has a place to land.
     empties = _empty_cells(board)
+    assert empties, "chance node reached a full board"
     total = 0.0
     weight = 1.0 / len(empties)
     for row, col in empties:

@@ -1,4 +1,6 @@
-from app.expectimax import choose_move
+import pytest
+
+from app.expectimax import _chance_value, _freeze, choose_move
 from app.moves import first_legal_move, legal_moves
 from helpers import COLUMN_PAIR, SORTED_ROW
 
@@ -157,3 +159,16 @@ def test_choice_is_always_legal() -> None:
     ]
     move = choose_move(board, depth=2)
     assert move in legal_moves(board)
+
+
+def test_chance_node_rejects_a_full_board() -> None:
+    full = _freeze(
+        [
+            [2, 4, 8, 16],
+            [32, 64, 128, 256],
+            [512, 1024, 2048, 4096],
+            [8192, 16384, 32768, 65536],
+        ]
+    )
+    with pytest.raises(AssertionError, match="full board"):
+        _chance_value(full, 0, {})
