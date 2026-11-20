@@ -10,14 +10,7 @@ from app.llm import LlmError, ModelSuggestion, OllamaClient, _prompt, parse_move
 from app.main import create_app
 from app.schemas import MAX_TILE
 from app.suggester import MoveSuggester
-from helpers import isolated_settings
-
-COLUMN_PAIR = [
-    [0, 0, 0, 4],
-    [0, 0, 0, 4],
-    [0, 0, 0, 8],
-    [0, 0, 0, 0],
-]
+from helpers import COLUMN_PAIR, SORTED_ROW, isolated_settings
 
 OPEN_BOARD = [
     [2, 0, 0, 0],
@@ -153,13 +146,14 @@ def test_exhausted_retries_fall_back() -> None:
 
 def test_expectimax_skips_the_model() -> None:
     llm = FakeLLM(["up"])
-    response = _client(llm).post("/suggest", json={"board": OPEN_BOARD, "mode": "expectimax"})
+    response = _client(llm).post("/suggest", json={"board": SORTED_ROW, "mode": "expectimax"})
     assert response.status_code == 200
     body = response.json()
     assert body["mode"] == "expectimax"
     assert body["source"] == "expectimax"
     assert body["reason"] is None
-    assert body["move"] in {"right", "down"}
+    # Up is the fallback and would smash the sorted row. Right only slides the 2.
+    assert body["move"] == "right"
     assert llm.calls == 0
 
 
