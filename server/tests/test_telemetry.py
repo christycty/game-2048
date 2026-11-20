@@ -21,6 +21,8 @@ from app.telemetry import (
     LLM_TOKEN_COUNT_PROMPT,
     OPENINFERENCE_SPAN_KIND,
     OUTPUT_VALUE,
+    PROM_OPERATION_DURATION,
+    PROM_TOKEN_USAGE,
     SERVICE_NAME,
     SPAN_KIND_CHAIN,
     SPAN_KIND_LLM,
@@ -124,6 +126,7 @@ def test_health_and_asgi_noise_are_not_traced() -> None:
     )
     client = TestClient(app)
     assert client.get("/health").status_code == 200
+    assert client.get("/metrics").status_code == 200
     assert exporter.get_finished_spans() == ()
 
     response = client.post("/suggest", json={"board": OPEN_BOARD, "mode": "llm"})
@@ -136,6 +139,41 @@ def test_health_and_asgi_noise_are_not_traced() -> None:
     assert root.attributes[OPENINFERENCE_SPAN_KIND] == SPAN_KIND_CHAIN
     assert '"mode": "llm"' in root.attributes[INPUT_VALUE]
     assert '"source": "llm"' in root.attributes[OUTPUT_VALUE]
+
+
+def test_metrics_exposes_gen_ai_series_after_suggest() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            json={
+                "model": "test-model",
+                "message": {"content": '{"move": "right", "reason": "Opens the row."}'},
+                "done_reason": "stop",
+                "prompt_eval_count": 40,
+                "eval_count": 12,
+                "load_duration": 100_000_000,
+                "prompt_eval_duration": 200_000_000,
+                "eval_duration": 300_000_000,
+                "total_duration": 600_000_000,
+            },
+        )
+
+    settings = isolated_settings(export_traces=False, ollama_model="test-model")
+    transport = httpx.MockTransport(handler)
+    with httpx.Client(transport=transport, base_url="http://ollama.test") as http:
+        app = create_app(settings, OllamaClient(settings, client=http))
+        client = TestClient(app)
+        assert client.post("/suggest", json={"board": OPEN_BOARD, "mode": "llm"}).status_code == 200
+        metrics = client.get("/metrics")
+
+    assert metrics.status_code == 200
+    body = metrics.text
+    assert PROM_OPERATION_DURATION in body
+    assert PROM_TOKEN_USAGE in body
+    assert 'gen_ai_token_type="input"' in body
+    assert 'gen_ai_token_type="output"' in body
+    assert "time_to_first_token" not in body
+    assert "time_per_output_token" not in body
 
 
 def test_suggest_nests_llm_under_suggest_chain() -> None:

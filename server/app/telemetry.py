@@ -1,7 +1,8 @@
-"""Phoenix / OpenInference tracing for suggestion requests.
+"""Phoenix traces + Prometheus metrics for suggestion requests.
 
-Each app owns its tracer and exporter. A request binds that tracer so
-threadpool work still records on the app that served it.
+Traces (OTLP → Phoenix) own LLM forensics. Metrics (`GET /metrics`) own
+ops aggregates scrapers can read. Each app owns its tracer, meter, and
+Prometheus registry so tests can build more than one app in-process.
 """
 
 from __future__ import annotations
@@ -15,6 +16,7 @@ from contextvars import ContextVar
 from dataclasses import dataclass
 from urllib.parse import urlparse
 
+from fastapi.responses import Response
 from openinference.semconv.trace import (
     MessageAttributes,
     OpenInferenceLLMProviderValues,
@@ -24,12 +26,14 @@ from openinference.semconv.trace import (
 )
 from opentelemetry import metrics, trace
 from opentelemetry.exporter.otlp.proto.http.trace_exporter import OTLPSpanExporter
+from opentelemetry.exporter.prometheus import PrometheusMetricReader
 from opentelemetry.instrumentation.fastapi import FastAPIInstrumentor
 from opentelemetry.sdk.metrics import MeterProvider
 from opentelemetry.sdk.resources import Resource
 from opentelemetry.sdk.trace import TracerProvider
 from opentelemetry.sdk.trace.export import BatchSpanProcessor, SpanProcessor
 from opentelemetry.trace import Span, Status, StatusCode
+from prometheus_client import CONTENT_TYPE_LATEST, CollectorRegistry, generate_latest
 from starlette.types import ASGIApp, Receive, Scope, Send
 
 from app.config import Settings
@@ -39,14 +43,18 @@ SERVICE_NAME = "game-2048-server"
 _LOOPBACK = {"localhost", "127.0.0.1", "::1"}
 # Compose reaches Phoenix on the host at this name.
 _DOCKER_HOST_ALIAS = "host.docker.internal"
-# Keep the Phoenix tree on suggestion work.
-_EXCLUDED_URLS = "/health,/docs,/openapi.json,/redoc"
+# Keep the Phoenix tree on suggestion work. /metrics is scrape noise.
+_EXCLUDED_URLS = "/health,/metrics,/docs,/openapi.json,/redoc"
 # Phoenix places TTFT from this OpenInference event name.
 # The call is not streamed; the stamp is load + prompt_eval.
 _FIRST_TOKEN_EVENT = "First Token Stream Event"
 _GENERATION_DONE_EVENT = "Generation Done"
 _DURATION_BUCKETS = (0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5, 10, 20)
 _TOKEN_BUCKETS = (1, 4, 16, 64, 256, 1024, 4096, 16384)
+# Prometheus text names for the two primary GenAI series (dots → underscores;
+# unit "s" becomes a `_seconds` suffix).
+PROM_OPERATION_DURATION = "gen_ai_client_operation_duration_seconds"
+PROM_TOKEN_USAGE = "gen_ai_client_token_usage"
 
 # OpenInference keys used by tests and callers.
 OPENINFERENCE_SPAN_KIND = SpanAttributes.OPENINFERENCE_SPAN_KIND
@@ -77,9 +85,8 @@ SPAN_KIND_CHAIN = OpenInferenceSpanKindValues.CHAIN.value
 
 @dataclass(frozen=True)
 class LlmMetrics:
+    # Primary scrape series. TTFT / per-token timings stay on span events.
     operation_duration: metrics.Histogram
-    time_to_first_token: metrics.Histogram
-    time_per_output_token: metrics.Histogram
     token_usage: metrics.Histogram
 
 
@@ -169,7 +176,7 @@ def setup_telemetry(
     settings: Settings,
     span_processor: SpanProcessor | None = None,
 ) -> TracerProvider:
-    """Wire this app's tracer, in-process metrics, and FastAPI instrumentation."""
+    """Wire this app's tracer, Prometheus metrics, and FastAPI instrumentation."""
     endpoint = traces_url(settings.phoenix_collector_endpoint)
     resource = Resource.create({"service.name": SERVICE_NAME})
     provider = TracerProvider(resource=resource)
@@ -182,28 +189,21 @@ def setup_telemetry(
             )
         provider.add_span_processor(span_processor)
 
-    # TODO(metrics): Stage 1 — Prometheus reader + /metrics (duration + token
-    # usage). Stage 2 — Compose Prometheus/Grafana. See plan/metrics-stages.md.
-    # Phoenix ingests traces only; these histograms are in-process until Stage 1.
-    meter_provider = MeterProvider(resource=resource)
+    # Phoenix stays on OTLP traces. Scrapers (Prometheus, Datadog, Grafana)
+    # read the same /metrics text. Stage 2 may add Compose Prometheus/Grafana.
+    metrics_registry = CollectorRegistry()
+    metric_reader = PrometheusMetricReader(
+        registry=metrics_registry,
+        disable_target_info=True,
+        scope_info_enabled=False,
+    )
+    meter_provider = MeterProvider(resource=resource, metric_readers=[metric_reader])
     meter = meter_provider.get_meter(SERVICE_NAME)
     app_metrics = LlmMetrics(
         operation_duration=meter.create_histogram(
             name="gen_ai.client.operation.duration",
             unit="s",
             description="End-to-end LLM call duration (time to done).",
-            explicit_bucket_boundaries_advisory=_DURATION_BUCKETS,
-        ),
-        time_to_first_token=meter.create_histogram(
-            name="gen_ai.client.time_to_first_token",
-            unit="s",
-            description="Approximate time to first token from provider timings.",
-            explicit_bucket_boundaries_advisory=_DURATION_BUCKETS,
-        ),
-        time_per_output_token=meter.create_histogram(
-            name="gen_ai.client.time_per_output_token",
-            unit="s",
-            description="Average generation time per output token.",
             explicit_bucket_boundaries_advisory=_DURATION_BUCKETS,
         ),
         token_usage=meter.create_histogram(
@@ -231,8 +231,17 @@ def setup_telemetry(
     )
     app.state.tracer_provider = provider
     app.state.meter_provider = meter_provider
+    app.state.metrics_registry = metrics_registry
     app.state.trace_endpoint = endpoint
     app.state.telemetry_shutdown = False
+
+    @app.get("/metrics", include_in_schema=False)
+    def prometheus_metrics() -> Response:
+        return Response(
+            generate_latest(metrics_registry),
+            media_type=CONTENT_TYPE_LATEST,
+        )
+
     return provider
 
 
@@ -386,10 +395,6 @@ def record_llm_usage(
     if instruments is None:
         return
     instruments.operation_duration.record(wall_seconds, metric_attrs)
-    if ttft is not None:
-        instruments.time_to_first_token.record(ttft, metric_attrs)
-    if seconds_per_token is not None:
-        instruments.time_per_output_token.record(seconds_per_token, metric_attrs)
     if prompt_tokens is not None:
         instruments.token_usage.record(
             prompt_tokens, {**metric_attrs, "gen_ai.token.type": "input"}

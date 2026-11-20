@@ -60,7 +60,8 @@ def create_app(
     setup_telemetry(app, settings, span_processor)
 
     # The process is up even when Ollama is not. Expectimax never calls the
-    # model, and an llm failure still returns a legal move.
+    # model, and an llm failure still returns a legal move. /metrics is
+    # registered in setup_telemetry for Prometheus-compatible scrapes.
     @app.get("/health", response_model=HealthResponse)
     def health() -> HealthResponse:
         return HealthResponse(status="ok")
