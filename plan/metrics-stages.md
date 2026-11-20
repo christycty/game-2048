@@ -1,6 +1,6 @@
 # Metrics follow-up (after Phoenix traces)
 
-Phoenix owns LLM forensics (prompts, completions, retries, span trees). Metrics own ops aggregates (p95 latency, token burn). Charts may overlap; the systems do not replace each other.
+Phoenix owns LLM forensics (prompts, completions, retries, span trees). Metrics own ops aggregates (p50/p95 latency, token burn). Charts may overlap; the systems do not replace each other.
 
 ## Stage 1 — thin scrapeable surface (no Grafana)
 
@@ -32,7 +32,7 @@ Phoenix owns LLM forensics (prompts, completions, retries, span trees). Metrics 
 **Do:**
 - Add Prometheus with scrape config pointing at the API `/metrics`.
 - Add Grafana with a provisioned Prometheus datasource.
-- Dashboard: API (`/suggest` by status unstacked, suggest source, latency) + LLM (success rate, outcomes, error types, p95, tokens).
+- Dashboard: API (`/suggest` by status unstacked, suggest source, latency p50/p95) + LLM (success rate, outcomes, error types, duration p50/p95, tokens). Rate legends drop idle zeros (`> 0`).
 - Dev/prod Compose profiles and short run notes in the PR or runtime doc.
 - Inventory + scrape-contract tests: `docs/agents/telemetry.md` (Phoenix vs scrape series; `/metrics` asserts, not Grafana UI).
 

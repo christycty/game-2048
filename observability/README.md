@@ -10,4 +10,4 @@ docker compose --profile dev --profile metrics up
 # Grafana GenAI ops: http://127.0.0.1:${GRAFANA_HOST_PORT:-3000}/d/game2048-genai
 ```
 
-Telemetry inventory (every signal; Phoenix vs Prometheus/Grafana): [docs/agents/telemetry.md](../docs/agents/telemetry.md).
+Telemetry inventory (every signal; Phoenix vs Prometheus/Grafana; GenAI ops panel → series map, including p50/p95 and legend `> 0` rate filters): [docs/agents/telemetry.md](../docs/agents/telemetry.md).
