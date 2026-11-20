@@ -20,8 +20,10 @@ from app.moves import legal_moves
 from app.telemetry import PROM_CLIENT_SUGGEST_OUTCOME
 from helpers import (
     E2E_BOARD_COUNT,
+    E2E_EXTRA_LLM_CALLS,
     E2E_RUN_COUNT,
     E2E_SUGGEST_CALLS,
+    E2E_TOTAL_LLM_CALLS,
     SORTED_ROW,
     isolated_settings,
 )
@@ -47,10 +49,6 @@ STUCK_BOARD = [
     [8192, 16384, 32768, 65536],
 ]
 
-# Extra LLM posts on the shared e2e app beyond the parametrized matrix
-# (traceparent continuation + /metrics after success).
-E2E_EXTRA_LLM_CALLS = 2
-
 # One module-scoped app serves every parametrized case. Size the rate limit
 # from this list so adding a board or run cannot silently hit the default cap.
 E2E_BOARDS = [MERGE_BOARD, CORNER_BOARD]
@@ -58,6 +56,7 @@ E2E_RUN_IDS = [1, 2, 3]
 assert len(E2E_BOARDS) == E2E_BOARD_COUNT
 assert len(E2E_RUN_IDS) == E2E_RUN_COUNT
 assert len(E2E_BOARDS) * len(E2E_RUN_IDS) == E2E_SUGGEST_CALLS
+assert E2E_TOTAL_LLM_CALLS == E2E_SUGGEST_CALLS + E2E_EXTRA_LLM_CALLS
 
 TRACEPARENT_RE = re.compile(
     r"^00-[0-9a-f]{32}-[0-9a-f]{16}-0[01]$",
@@ -94,7 +93,7 @@ def suggest_client() -> TestClient:
         ollama_base_url=base_url,
         llm_max_attempts=3,
         # Default process cap is 5; this suite shares one app for more posts.
-        suggest_rate_limit_requests=E2E_SUGGEST_CALLS + E2E_EXTRA_LLM_CALLS,
+        suggest_rate_limit_requests=E2E_TOTAL_LLM_CALLS,
         suggest_rate_limit_window_seconds=60,
     )
     # Prod parses the prompt's JSON. The schema format stays off.

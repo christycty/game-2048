@@ -22,6 +22,10 @@ SORTED_ROW = [
 E2E_BOARD_COUNT = 2
 E2E_RUN_COUNT = 3
 E2E_SUGGEST_CALLS = E2E_BOARD_COUNT * E2E_RUN_COUNT
+# Extra LLM posts on the shared e2e app beyond the parametrized matrix
+# (traceparent continuation + /metrics after success). Bump when adding more.
+E2E_EXTRA_LLM_CALLS = 2
+E2E_TOTAL_LLM_CALLS = E2E_SUGGEST_CALLS + E2E_EXTRA_LLM_CALLS
 
 # Every Settings field must appear here. Init kwargs beat env; omitted fields
 # still read SUGGEST_RATE_LIMIT_* / .env and the helper stops being isolated.

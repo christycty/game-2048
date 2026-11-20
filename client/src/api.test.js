@@ -35,6 +35,11 @@ test("suggestMove posts the board and mode with traceparent, then returns the bo
 
     assert.equal(calls.length, 1);
     assert.equal(calls[0].url, "/suggest");
+    assert.equal(
+        calls.some((c) => c.url === "/client-events"),
+        false,
+        "success must not beacon fail/rate_limit",
+    );
     assert.equal(calls[0].options.method, "POST");
     assert.equal(calls[0].options.headers["Content-Type"], "application/json");
     assert.match(calls[0].options.headers.traceparent, TRACEPARENT_RE);
@@ -42,7 +47,7 @@ test("suggestMove posts the board and mode with traceparent, then returns the bo
     assert.deepEqual(body, { move: "left", mode: "llm", source: "llm", reason: "Merges." });
 });
 
-test("suggestMove beacons rate_limit on 429 and does not on success", async () => {
+test("suggestMove beacons rate_limit on 429", async () => {
     const calls = [];
     const fetchImpl = async (url, options) => {
         calls.push({ url, options });
