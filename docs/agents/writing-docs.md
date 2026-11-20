@@ -62,7 +62,7 @@ If a human section has **no diagram and more than ~15 lines**, it probably belon
 **Avoid:**
 
 - Mixing *plan* with *truth* (put staged plans under `plan/` or mark clearly as non-canonical)
-- Conflicting copies of the same fact across packages or old `doc/` paths
+- Conflicting copies of the same fact across packages
 - Essay-length narrative that duplicates human overview
 
 ## Truth vs intent vs plan
