@@ -23,3 +23,11 @@ class Settings(BaseSettings):
         if self.app_env == "prod":
             self.ollama_structured_output = False
         return self
+
+    @model_validator(mode="after")
+    def budget_covers_two_attempts(self) -> "Settings":
+        # A slow first call still needs time for one retry. The caps allow a
+        # 20s attempt with a shorter budget, which would skip the model entirely.
+        if self.llm_suggest_budget_seconds < self.llm_attempt_timeout_seconds * 2:
+            raise ValueError("suggestion budget must cover two attempt timeouts")
+        return self

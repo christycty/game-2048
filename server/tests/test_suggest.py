@@ -478,6 +478,12 @@ def test_attempt_count_stays_between_one_and_five() -> None:
         isolated_settings(llm_attempt_timeout_seconds=30)
     with pytest.raises(ValidationError):
         isolated_settings(llm_suggest_budget_seconds=60)
+    # 20s attempts need a 40s budget. A shorter budget would skip the retry.
+    with pytest.raises(ValidationError):
+        isolated_settings(llm_attempt_timeout_seconds=20, llm_suggest_budget_seconds=30)
+    shorter = isolated_settings(llm_attempt_timeout_seconds=10, llm_suggest_budget_seconds=20)
+    assert shorter.llm_attempt_timeout_seconds == 10
+    assert shorter.llm_suggest_budget_seconds == 20
 
 
 def test_fallback_logs_the_failed_attempts(caplog: pytest.LogCaptureFixture) -> None:

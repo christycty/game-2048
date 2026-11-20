@@ -23,8 +23,8 @@ services:
       OLLAMA_BASE_URL: ${COMPOSE_OLLAMA_BASE_URL:-http://host.docker.internal:11434}
       OLLAMA_MODEL: ${OLLAMA_MODEL:-gemma4:latest}
       LLM_MAX_ATTEMPTS: ${LLM_MAX_ATTEMPTS:-3}
-      LLM_ATTEMPT_TIMEOUT_SECONDS: ${LLM_ATTEMPT_TIMEOUT_SECONDS:-10}
-      LLM_SUGGEST_BUDGET_SECONDS: ${LLM_SUGGEST_BUDGET_SECONDS:-20}
+      LLM_ATTEMPT_TIMEOUT_SECONDS: ${LLM_ATTEMPT_TIMEOUT_SECONDS:-20}
+      LLM_SUGGEST_BUDGET_SECONDS: ${LLM_SUGGEST_BUDGET_SECONDS:-40}
     volumes:
       - ./server:/app
     command: ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000", "--reload"]
@@ -59,8 +59,8 @@ services:
       OLLAMA_BASE_URL: ${COMPOSE_OLLAMA_BASE_URL:-http://host.docker.internal:11434}
       OLLAMA_MODEL: ${OLLAMA_MODEL:-gemma4:latest}
       LLM_MAX_ATTEMPTS: ${LLM_MAX_ATTEMPTS:-3}
-      LLM_ATTEMPT_TIMEOUT_SECONDS: ${LLM_ATTEMPT_TIMEOUT_SECONDS:-10}
-      LLM_SUGGEST_BUDGET_SECONDS: ${LLM_SUGGEST_BUDGET_SECONDS:-20}
+      LLM_ATTEMPT_TIMEOUT_SECONDS: ${LLM_ATTEMPT_TIMEOUT_SECONDS:-20}
+      LLM_SUGGEST_BUDGET_SECONDS: ${LLM_SUGGEST_BUDGET_SECONDS:-40}
 
   # Published on 5173 so the page origin matches the API allowlist.
   client:
