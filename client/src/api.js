@@ -55,7 +55,13 @@ export async function suggestMove(board, mode = "llm", { fetch: fetchImpl = fetc
         throw new SuggestError("suggestion request failed", { status: response.status });
     }
 
-    const body = await response.json();
+    let body;
+    try {
+        body = await response.json();
+    } catch {
+        reportClientOutcome("fail", { fetch: fetchImpl });
+        throw new SuggestError("suggestion response was unusable");
+    }
     if (!body || typeof body.move !== "string") {
         reportClientOutcome("fail", { fetch: fetchImpl });
         throw new SuggestError("suggestion response was unusable");

@@ -117,3 +117,49 @@ test("suggestMove ignores beacon failures", async () => {
         (error) => error instanceof SuggestError && error.status === 500,
     );
 });
+
+test("suggestMove beacons fail when response JSON cannot be parsed", async () => {
+    const calls = [];
+    const fetchImpl = async (url, options) => {
+        calls.push({ url, options });
+        if (url.endsWith("/client-events")) {
+            return { ok: true, status: 204, async json() { return {}; } };
+        }
+        return {
+            ok: true,
+            status: 200,
+            async json() {
+                throw new SyntaxError("Unexpected end of JSON input");
+            },
+        };
+    };
+
+    await assert.rejects(
+        () => suggestMove(BOARD, "llm", { fetch: fetchImpl }),
+        (error) => error instanceof SuggestError && error.message.includes("unusable"),
+    );
+
+    const beacon = calls.find((c) => c.url === "/client-events");
+    assert.ok(beacon);
+    assert.deepEqual(JSON.parse(beacon.options.body), { outcome: "fail" });
+});
+
+test("suggestMove beacons fail when response body lacks a move", async () => {
+    const calls = [];
+    const fetchImpl = async (url, options) => {
+        calls.push({ url, options });
+        if (url.endsWith("/client-events")) {
+            return { ok: true, status: 204, async json() { return {}; } };
+        }
+        return { ok: true, status: 200, async json() { return { reason: "nope" }; } };
+    };
+
+    await assert.rejects(
+        () => suggestMove(BOARD, "llm", { fetch: fetchImpl }),
+        (error) => error instanceof SuggestError && error.message.includes("unusable"),
+    );
+
+    const beacon = calls.find((c) => c.url === "/client-events");
+    assert.ok(beacon);
+    assert.deepEqual(JSON.parse(beacon.options.body), { outcome: "fail" });
+});
