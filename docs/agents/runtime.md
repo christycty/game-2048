@@ -73,7 +73,7 @@ Two layers for **LLM**; Expectimax keeps a separate cheap window.
 
 **Layer 2 — LLM capacity gate:** `LLM_MAX_IN_FLIGHT` (default `1`) limits concurrent LLM `/suggest` calls admitted to Ollama. This is the real throttle for Auto Play. Expectimax does not take a slot.
 
-Either layer returns `429` with `Retry-After` (same client UX). The caps are not per browser: in prod the only caller is nginx. A mid-run cancel (`499`) releases **that request’s** hard-ceiling token and its in-flight slot so Stop/disconnect does not burn the mode cap, a sibling’s hit, or capacity. Auto Play may still hit the hard ceiling only as a safety net; under normal serial play the capacity gate dominates.
+Either layer returns `429` with the same `detail` today; clients can still tell them apart via `Retry-After` (capacity = `1`; hard ceiling = remaining window, often `60`). Distinct detail/labels are a multi-client follow-up. The caps are not per browser: in prod the only caller is nginx. A mid-run cancel (`499`) releases **that request’s** hard-ceiling token and its in-flight slot so Stop/disconnect does not burn the mode cap, a sibling’s hit, or capacity. Auto Play may still hit the hard ceiling only as a safety net; under normal serial play the capacity gate dominates.
 
 ### Metrics profile
 
@@ -96,12 +96,13 @@ Server image: `python:3.12-slim`, `pip install -e .`, uvicorn on `0.0.0.0:8000`.
 
 ## CI
 
-`.github/workflows/ci.yml` (pull requests only; four parallel jobs):
+`.github/workflows/ci.yml` (pull requests + `workflow_dispatch`; four required jobs + optional load):
 
 - Docs (Python 3.12): script unit tests, `check_doc_links.py` (**fails** on broken links), freshness nudge (`check_docs_freshness.py`, warn-only).
-- Server: install, `ruff format --check`, `ruff check`, `pytest` (e2e off; `EXPORT_TRACES` off for tests). Metrics stay on regardless.
+- Server: install, `ruff format --check`, `ruff check`, `pytest` (e2e and load off; `EXPORT_TRACES` off for tests). Metrics stay on regardless.
 - Client (Node 22): install, lint, test, build.
-- Docker: build both images; client image smoke (`id="root"`); curl `/health` on the server image without Ollama (`EXPORT_TRACES=false`); Compose config checks for default Ollama/Phoenix URLs on `host.docker.internal`, loopback publish binds, **prod API unpublished** (client still publishes `${CLIENT_HOST_PORT}`→80), the `api` alias, metrics-profile ports, `API_HOST_PORT` / `CLIENT_HOST_PORT` / `PROMETHEUS_HOST_PORT` / `GRAFANA_HOST_PORT` remaps, Compose API `EXPORT_TRACES=true`, and `COMPOSE_OLLAMA_BASE_URL` / `COMPOSE_PHOENIX_COLLECTOR_ENDPOINT` overrides.
+- Docker: build both images; client image smoke (`id="root"`); API image with `APP_ENV=prod` + `EXPORT_TRACES=false` (health); **`scripts/smoke_api_images.sh`** — health, prod `/docs`+`/openapi.json` 404, expectimax `/suggest` through nginx → DNS `prod`, `GET /metrics` shows `suggest_source=expectimax` + `/suggest` 200, nginx does not proxy `/health` or `/metrics`; Compose config checks for default Ollama/Phoenix URLs on `host.docker.internal`, loopback publish binds, **prod API unpublished** (client still publishes `${CLIENT_HOST_PORT}`→80), the `api` alias, metrics-profile ports, `API_HOST_PORT` / `CLIENT_HOST_PORT` / `PROMETHEUS_HOST_PORT` / `GRAFANA_HOST_PORT` remaps, Compose API `EXPORT_TRACES=true`, and `COMPOSE_OLLAMA_BASE_URL` / `COMPOSE_PHOENIX_COLLECTOR_ENDPOINT` overrides.
+- **Load** (manual only): `workflow_dispatch` runs `pytest --load -m load` against FakeLLM. Not required on every PR. Local checklist: [server.md](server.md#verification-checklist).
 
 ## Not in this layout
 

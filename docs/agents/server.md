@@ -12,8 +12,9 @@ From `server/`:
 # copy server/.env.example if you want local overrides
 uv sync --extra dev          # or: pip install -e ".[dev]"
 uvicorn app.main:app --reload --host 127.0.0.1 --port "${API_HOST_PORT:-8000}"
-pytest                       # unit tests; skips e2e
+pytest                       # unit/API/concurrency; skips e2e + load
 pytest --e2e                 # needs a local Ollama and the configured model
+pytest --load -m load        # opt-in FakeLLM soak (not required PR CI)
 ruff format --check . && ruff check .
 ```
 
@@ -135,13 +136,33 @@ Typical LLM tree: FastAPI `POST /suggest` → `suggest` chain → sibling `ollam
 
 ## Tests
 
+Shared Fake/Blocking LLM doubles live in `tests/helpers.py` (used by suggest, cancel, contract, and load).
+
 - `tests/test_helpers.py` asserts `isolated_settings` pins every `Settings` field and ignores hostile `SUGGEST_RATE_LIMIT_*` env.
-- `tests/test_suggest.py` covers health, CORS, per-mode hard ceilings before the suggester (including the **default** 60-call LLM hard ceiling and a separate Expectimax bucket), LLM in-flight capacity (second call 429 while first holds; capacity reject does not burn the hard ceiling; expectimax unaffected), LLM success and reason, illegal-move retry, exhausted fallback, expectimax search + score reason, illegal-search fallback, stuck-board 409, bad payload 422, Ollama HTTP failures, prod schema omission, attempt bounds, and the time budget stop.
-- `tests/test_cancel.py` covers per-request cancel through suggester / expectimax (pre-set and mid-search via `_check`) / Ollama client (pre-set, mid-flight hanging POST with `task.cancel`, and single-POST when the caller already has a running loop), concurrent isolation (cancel A, B still completes; LLM isolation raises `LLM_MAX_IN_FLIGHT`), endpoint `499` mapping, disconnect middleware, concurrent ASGI disconnect cancelling A while B completes (LLM and expectimax), rate-limit token refund and in-flight slot release after cancel, and concurrent release not popping a sibling’s hit.
+- `tests/test_suggest.py` covers health, CORS, per-mode hard ceilings before the suggester (including the **default** 60-call LLM hard ceiling and a separate Expectimax bucket), LLM in-flight capacity (`max_in_flight=1` and `=2`; capacity reject does not burn the hard ceiling; expectimax unaffected; slot free after drain), LLM success and reason, illegal-move retry, exhausted fallback, expectimax search + score reason, illegal-search fallback, stuck-board 409, bad payload 422, Ollama HTTP failures, prod schema omission, attempt bounds, and the time budget stop.
+- `tests/test_suggest_http_contract.py` locks hard-ceiling vs capacity `429` (`Retry-After` window vs `1`; same `detail` until multi-client splits it), a combined scenario that surfaces **both** in one run, and cancel `499`.
+- `tests/test_cancel.py` covers per-request cancel through suggester / expectimax (pre-set and mid-search via `_check`) / Ollama client (pre-set, mid-flight hanging POST with `task.cancel`, and single-POST when the caller already has a running loop), concurrent isolation (cancel A, B still completes; LLM isolation raises `LLM_MAX_IN_FLIGHT`), endpoint `499` mapping, disconnect middleware, concurrent ASGI disconnect cancelling A while B completes (LLM and expectimax) **and mid-flight occupancy** (after A’s 499 with `max_in_flight=2`, a third `/suggest` admits while B holds and a fourth is capacity-429), rate-limit token refund and in-flight slot release after cancel, and concurrent release not popping a sibling’s hit.
+- `tests/test_load_suggest.py` is marked `load` (opt-in FakeLLM soak): N workers × M suggests at `LLM_MAX_IN_FLIGHT` 1 then 2; mixed hard-ceiling + capacity `429` classified by `Retry-After`; plus ASGI disconnect-under-capacity waves (`cancels` + `completes` account); asserts accounting and no slot leak after drain.
 - `tests/test_expectimax.py` covers legality, spawn odds, depth/budget cutoffs, and the reason format.
 - `tests/test_moves.py` covers the slide and merge rules used for legality.
 - `tests/test_telemetry.py` covers Phoenix URL/header rules, per-app exporters, excluded `/health` and `/metrics`, span nesting, retries, errors, stuck-board span shape, GenAI series on `/metrics` after a suggest (success / request / response / parse / illegal_move / timeout + suggest sources), and HTTP scrape status codes for `/suggest` (200 / 422 / 409 / 429).
 - `tests/test_suggest_e2e.py` is marked `e2e` for real Ollama under `APP_ENV=prod`. It sizes `SUGGEST_RATE_LIMIT_REQUESTS` from its parametrized call volume, asserts `source == "llm"` with a short reason, and includes a non-e2e expectimax HTTP smoke that does not need Ollama.
+
+## Verification checklist
+
+Run from `server/` after `pip install -e ".[dev]"` (or `uv sync --extra dev`). Goal: conclude the suggest path is solid **without reading implementation files**.
+
+| Layer | Command | Pass if |
+|---|---|---|
+| Unit + API + concurrency + contract | `pytest` | All green; e2e and load skipped |
+| Light chaos (disconnect mid-flight) | (included in default `pytest` via `test_cancel.py`) | Cancel A leaves B; while B holds at `max_in_flight=2`, third admits / fourth capacity-429; slot + hard-ceiling token refunded |
+| Image smokes (all HTTP surfaces, no Ollama) | CI docker job: `APP_ENV=prod` API + client, then `bash scripts/smoke_api_images.sh` | `/health` ok; `/docs` + `/openapi.json` 404; expectimax via nginx `:5173/suggest`; `GET /metrics` has `suggest_source=expectimax` + `/suggest` 200; nginx does **not** proxy `/health` or `/metrics` |
+| E2E (real Ollama) | `pytest --e2e` | Local Ollama up with `OLLAMA_MODEL`; asserts `source == "llm"` |
+| Load / soak (FakeLLM + cancel waves) | `pytest --load -m load` | Workers join; accounting closes (incl. cancels + mixed `429` layers); final suggest / gate probe OK. Also: Actions → **Run workflow** (`workflow_dispatch` `load` job) |
+
+**`429` layers (today):** same `detail: "too many suggestions"`. Distinguish by `Retry-After`: capacity ≈ `1`; hard ceiling ≈ remaining window seconds (often `60` when just filled). Covered in default CI (`test_suggest_http_contract`) and opt-in load. Distinct detail/labels land in the multi-client PR.
+
+**Optional Grafana / Phoenix spot-checks** (when series exist — cancel-obs / multi-client may add panels): after a local Compose `--profile metrics` drill, confirm `/suggest` status rates and GenAI success/error lines move; Phoenix shows a `suggest` chain for a live LLM call. Not required to trust FakeLLM CI.
 
 ## Not built yet
 
