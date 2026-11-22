@@ -79,6 +79,7 @@ def create_app(
     span_processor: SpanProcessor | None = None,
     rate_limiters: dict[str, SuggestRateLimiter] | None = None,
     llm_in_flight: LlmInFlightGate | None = None,
+    client_events_rate_limiter: SuggestRateLimiter | None = None,
 ) -> FastAPI:
     settings = settings or Settings()
     owns_llm = llm_client is None
@@ -92,6 +93,10 @@ def create_app(
         ),
     }
     in_flight = llm_in_flight or LlmInFlightGate(settings.llm_max_in_flight)
+    beacon_limiter = client_events_rate_limiter or SuggestRateLimiter(
+        settings.client_events_rate_limit_requests,
+        settings.client_events_rate_limit_window_seconds,
+    )
     suggester = MoveSuggester(
         llm,
         max_attempts=settings.llm_max_attempts,
@@ -136,9 +141,17 @@ def create_app(
         return HealthResponse(status="ok")
 
     # Thin client beacons: fail / rate_limit / cancel counts for Grafana. Not traced
-    # (see _EXCLUDED_URLS).
+    # (see _EXCLUDED_URLS). Process-wide sliding window keeps the scrape series
+    # hard to spam casually; separate from suggest mode buckets.
     @app.post("/client-events", status_code=204, include_in_schema=False)
     def client_events(body: ClientEventRequest) -> None:
+        gate = beacon_limiter.allow()
+        if gate.retry_after is not None:
+            raise HTTPException(
+                status_code=429,
+                detail="too many client events",
+                headers={"Retry-After": str(gate.retry_after)},
+            )
         record_client_suggest_outcome(body.outcome)
 
     @app.post("/suggest", response_model=SuggestResponse)

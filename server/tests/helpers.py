@@ -43,6 +43,8 @@ ISOLATED_SETTINGS_DEFAULTS: dict[str, object] = {
     "suggest_rate_limit_expectimax_requests": 30,
     "suggest_rate_limit_window_seconds": 60,
     "llm_max_in_flight": 1,
+    "client_events_rate_limit_requests": 60,
+    "client_events_rate_limit_window_seconds": 60,
     "client_host_port": 5173,
     "phoenix_collector_endpoint": "http://phoenix.test",
     "phoenix_api_key": None,
