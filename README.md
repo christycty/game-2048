@@ -1,6 +1,6 @@
 # 2048 with AI suggestions
 
-A single-player 2048 game in the browser, with an optional AI coach that suggests the next move. Confirm each suggestion with **Play**, or turn on **Auto Play** to apply them in a loop.
+Single-player 2048 with an optional AI coach (**LLM** via Ollama or **Expectimax**), **Auto Play**, and local ops (Phoenix traces + Prometheus / Grafana).
 
 ```mermaid
 flowchart LR
@@ -11,9 +11,10 @@ flowchart LR
   API -->|"chat"| Ollama
 ```
 
-- Play classic 2048 (keys or swipe); track score and session best.
-- Ask for a suggestion (LLM by default, or Expectimax search with per-direction scores).
-- Confirm with **Play**, ignore it and move yourself, or start **Auto Play** to keep applying suggestions until you stop.
+- Play classic 2048 (keys or swipe): random opening **2**s (2–8), hard win at **2048**, score + session best.
+- Ask for a suggestion (LLM or Expectimax with per-direction scores), confirm with **Play**, or ignore and move yourself.
+- **Auto Play** applies suggestions in a loop until you **Stop** (retries when the model is busy; stops on spend-cap 429).
+- Optional ops: host Phoenix for per-request traces; Compose `--profile metrics` for Prometheus / Grafana.
 
 ## Quick start
 
@@ -32,5 +33,5 @@ Open `http://127.0.0.1:${CLIENT_HOST_PORT:-5173}`. Or use Compose: `cp .env.exam
 | Audience | Start here |
 |---|---|
 | **Humans** — what this is and how it’s built | [docs/](docs/README.md) |
-| **Pitch page** — diagram-heavy presentation (GitHub Pages) | [site/](site/index.html) |
+| **Pitch page** — diagram-heavy walkthrough (GitHub Pages) | [site/](site/index.html) |
 | **Agents** — rules, invariants, implementation detail | [AGENTS.md](AGENTS.md) → [docs/agents/](docs/agents/README.md) |

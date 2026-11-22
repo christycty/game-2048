@@ -42,8 +42,8 @@
         <h1>2048 with AI suggestions</h1>
         <p class="summary">
           Single-player 2048 with an optional AI coach (<strong>LLM</strong> via Ollama or
-          <strong>Expectimax</strong>), Auto Play, and local ops: Phoenix traces plus
-          Prometheus / Grafana metrics.
+          <strong>Expectimax</strong>), Auto Play, and local ops (Phoenix traces + Prometheus /
+          Grafana).
         </p>
       </header>
 
@@ -90,9 +90,9 @@ flowchart LR
         <section id="ui">
           <h2>3. Client</h2>
           <p>
-            Board starts with two random <strong>2</strong>s; hard win at <strong>2048</strong>. Pick
-            mode → <strong>AI</strong> (or <strong>Auto Play</strong>) → hint +
-            <strong>Play</strong>. <strong>Stop</strong> during Thinking aborts the in-flight
+            Board starts with a random count of <strong>2</strong>s (2–8); hard win at
+            <strong>2048</strong>. Pick mode → <strong>AI</strong> (or <strong>Auto Play</strong>) →
+            hint + <strong>Play</strong>. <strong>Stop</strong> during Thinking aborts the in-flight
             suggest. Auto Play <strong>retries</strong> on capacity-busy 429; <strong>stops</strong>
             on spend-cap 429.
           </p>
@@ -375,7 +375,7 @@ flowchart LR
           <h2>9. What to verify</h2>
           <ol class="steps">
             <li>
-              <strong>Board / win</strong> — new game shows two random 2s; reaching 2048 is a hard
+              <strong>Board / win</strong> — new game deals 2–8 opening 2s; reaching 2048 is a hard
               win.
             </li>
             <li><strong>Expectimax without Ollama</strong> — board + AI works; health stays ok.</li>
