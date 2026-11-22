@@ -6,6 +6,10 @@ export const SETTLE_MS = SLIDE_MS + 20;
 // Pause after settle before the next Auto Play suggestion so the loop is watchable
 // and does not burn the process rate limit as fast as the slide allows.
 export const AUTO_PLAY_GAP_MS = 750;
+// Opening deal: uniform count of 2s (requirements: random number; classic used exactly 2).
+export const MIN_START_TILES = 2;
+export const MAX_START_TILES = 8;
+export const WIN_TILE = 2048;
 
 // One step on the board. Row grows downward, column grows to the right.
 const DIRECTIONS = {
@@ -67,12 +71,17 @@ function nextTileId(tiles) {
     return tiles.reduce((max, tile) => Math.max(max, tile.id), 0) + 1;
 }
 
-// Two 2s on different empty cells. Every new game starts its ids at 1.
+// Random count of 2s on distinct empty cells (MIN_START_TILES..MAX_START_TILES).
+// Every new game starts its ids at 1.
 export function createInitialTiles(random = Math.random) {
     const grid = blankGrid();
-    const first = spawnTile(grid, 1, random, [2]);
-    const second = spawnTile(grid, 2, random, [2]);
-    return [first, second].filter(Boolean);
+    const count = MIN_START_TILES + roll(random, MAX_START_TILES - MIN_START_TILES + 1);
+    const tiles = [];
+    for (let id = 1; id <= count; id++) {
+        const tile = spawnTile(grid, id, random, [2]);
+        if (tile) tiles.push(tile);
+    }
+    return tiles;
 }
 
 // A gap means some tile can still slide. A full board can move only when neighbors match.
@@ -91,6 +100,10 @@ export function hasMoves(tiles) {
         }
     }
     return false;
+}
+
+export function hasWon(tiles) {
+    return tiles.some((tile) => tile.value >= WIN_TILE);
 }
 
 // The /suggest API takes a 4x4 of tile values, with 0 for an empty cell.
@@ -123,7 +136,14 @@ export function applyMove(tiles, direction, random = Math.random) {
     const vector = DIRECTIONS[direction];
     if (!vector) {
         // An unknown direction leaves the same tiles in place.
-        return { moved: false, scoreGained: 0, visualTiles: tiles, resolvedTiles: tiles, lost: false };
+        return {
+            moved: false,
+            scoreGained: 0,
+            visualTiles: tiles,
+            resolvedTiles: tiles,
+            won: false,
+            lost: false,
+        };
     }
 
     // Copy the tiles so this move does not change the caller's board.
@@ -195,7 +215,14 @@ export function applyMove(tiles, direction, random = Math.random) {
 
     if (!moved) {
         // Nothing changed, so there is no spawn and no score.
-        return { moved: false, scoreGained: 0, visualTiles: tiles, resolvedTiles: tiles, lost: false };
+        return {
+            moved: false,
+            scoreGained: 0,
+            visualTiles: tiles,
+            resolvedTiles: tiles,
+            won: false,
+            lost: false,
+        };
     }
 
     const survivors = grid.flat().filter(Boolean);
@@ -237,12 +264,15 @@ export function applyMove(tiles, direction, random = Math.random) {
         }));
     }
 
+    // Win if any tile reached 2048 (checked after merge + spawn). Win beats lose.
+    const won = hasWon(resolvedTiles);
     return {
         moved: true,
         scoreGained,
         visualTiles,
         resolvedTiles,
+        won,
         // Lost only when the board after the spawn has no move left.
-        lost: !hasMoves(resolvedTiles),
+        lost: !won && !hasMoves(resolvedTiles),
     };
 }

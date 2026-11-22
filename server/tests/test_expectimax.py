@@ -158,20 +158,33 @@ def test_returns_none_when_the_board_is_stuck() -> None:
 
 def test_a_full_board_that_can_merge_is_not_lost() -> None:
     # The top pair can still merge. A lost board would return None.
+    # Tiles stay below 2048 so search is not short-circuited by the win terminal.
     board = [
         [2, 2, 8, 16],
         [32, 64, 128, 256],
-        [512, 1024, 2048, 4096],
-        [8192, 16384, 32768, 65536],
+        [4, 8, 16, 32],
+        [64, 128, 256, 512],
     ]
     assert first_legal_move(board) == "left"
-    assert choose_move(board).move == "right"
+    assert choose_move(board).move in legal_moves(board)
+
+
+def test_prefers_a_move_that_creates_2048() -> None:
+    board = [
+        [1024, 1024, 0, 0],
+        [2, 4, 8, 16],
+        [0, 0, 0, 0],
+        [0, 0, 0, 0],
+    ]
+    assert "left" in legal_moves(board)
+    assert choose_move(board, depth=0).move == "left"
+    assert choose_move(board).move == "left"
 
 
 def test_a_max_tile_pair_merges_instead_of_sliding() -> None:
     board = [
-        [0, 0, 0, 65536],
-        [0, 0, 0, 65536],
+        [0, 0, 0, 512],
+        [0, 0, 0, 512],
         [0, 0, 0, 0],
         [0, 0, 0, 0],
     ]

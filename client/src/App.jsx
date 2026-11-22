@@ -25,6 +25,7 @@ function App() {
     const [bestScore, setBestScore] = useState(0);
     const [tiles, setTiles] = useState(createInitialTiles);
     const [lost, setLost] = useState(false);
+    const [won, setWon] = useState(false);
     // Tracks a slide or an in-flight suggestion so the AI control can look inactive.
     const [busy, setBusy] = useState(false);
     const [suggesting, setSuggesting] = useState(false);
@@ -37,6 +38,7 @@ function App() {
     const tilesRef = useRef(tiles);
     const scoreRef = useRef(0);
     const lostRef = useRef(false);
+    const wonRef = useRef(false);
     const animatingRef = useRef(false);
     const suggestingRef = useRef(false);
     const autoPlayingRef = useRef(false);
@@ -85,9 +87,11 @@ function App() {
         tilesRef.current = nextTiles;
         scoreRef.current = 0;
         lostRef.current = false;
+        wonRef.current = false;
         setTiles(nextTiles);
         setCurrentScore(0);
         setLost(false);
+        setWon(false);
         setBusy(false);
         setSuggesting(false);
         setAutoPlaying(false);
@@ -95,7 +99,7 @@ function App() {
     }
 
     function handleMove(direction) {
-        if (animatingRef.current || lostRef.current) return false;
+        if (animatingRef.current || lostRef.current || wonRef.current) return false;
 
         const result = applyMove(tilesRef.current, direction);
         if (!result.moved) {
@@ -131,13 +135,15 @@ function App() {
             const nextScore = scoreRef.current + result.scoreGained;
             tilesRef.current = result.resolvedTiles;
             scoreRef.current = nextScore;
-            lostRef.current = result.lost;
+            lostRef.current = Boolean(result.lost);
+            wonRef.current = Boolean(result.won);
             setTiles(result.resolvedTiles);
             setCurrentScore(nextScore);
             setBestScore((best) => Math.max(best, nextScore));
             animatingRef.current = false;
-            if (result.lost) {
-                setLost(true);
+            if (result.won || result.lost) {
+                setWon(Boolean(result.won));
+                setLost(Boolean(result.lost));
                 setBusy(false);
                 stopAutoPlay();
                 return;
@@ -160,7 +166,7 @@ function App() {
     }
 
     async function handleSuggest() {
-        if (animatingRef.current || lostRef.current || suggestingRef.current) return;
+        if (animatingRef.current || lostRef.current || wonRef.current || suggestingRef.current) return;
         if (!hasMoves(tilesRef.current)) {
             stopAutoPlay();
             if (!animatingRef.current) setBusy(false);
@@ -245,7 +251,7 @@ function App() {
     }
 
     function handleApplySuggestion() {
-        if (!pendingMove || animatingRef.current || lostRef.current) return;
+        if (!pendingMove || animatingRef.current || lostRef.current || wonRef.current) return;
         handleMove(pendingMove);
     }
 
@@ -259,7 +265,7 @@ function App() {
             stopAutoPlay();
             return;
         }
-        if (lostRef.current || animatingRef.current || suggestingRef.current) return;
+        if (lostRef.current || wonRef.current || animatingRef.current || suggestingRef.current) return;
         if (!pendingMove && !hasMoves(tilesRef.current)) return;
 
         autoPlayingRef.current = true;
@@ -309,15 +315,15 @@ function App() {
         };
     }, []);
 
-    const canSuggest = !lost && !busy && hasMoves(tiles);
-    const canApplySuggestion = Boolean(pendingMove) && !lost && !busy;
+    const canSuggest = !lost && !won && !busy && hasMoves(tiles);
+    const canApplySuggestion = Boolean(pendingMove) && !lost && !won && !busy;
     const canToggleAutoPlay =
-        autoPlaying || (!lost && !busy && (Boolean(pendingMove) || hasMoves(tiles)));
+        autoPlaying || (!lost && !won && !busy && (Boolean(pendingMove) || hasMoves(tiles)));
 
     return (
         <div className="app">
             <ScoreCard score={currentScore} bestScore={bestScore}></ScoreCard>
-            <Board tiles={tiles} lost={lost} onSwipe={handleMove}></Board>
+            <Board tiles={tiles} lost={lost} won={won} onSwipe={handleMove}></Board>
             <ActionPanel
                 onNewGame={startGame}
                 onSuggest={handleSuggest}

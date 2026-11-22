@@ -183,6 +183,7 @@ test("a lost game ignores later moves", () => {
         visualTiles: resolved,
         resolvedTiles: resolved,
         lost: true,
+        won: false,
     });
 
     render(<App />);
@@ -197,6 +198,32 @@ test("a lost game ignores later moves", () => {
     expect(screen.getByText("Game over")).toBeTruthy();
     expect(scoreValue("SCORE")).toBe("4");
     press("ArrowLeft");
+    expect(applyMove).toHaveBeenCalledTimes(1);
+});
+
+test("a won game shows You win and ignores later moves", () => {
+    const resolved = [{ id: 1, row: 0, col: 0, value: 2048 }];
+    applyMove.mockReturnValue({
+        moved: true,
+        scoreGained: 2048,
+        visualTiles: resolved,
+        resolvedTiles: resolved,
+        lost: false,
+        won: true,
+    });
+
+    render(<App />);
+    press("ArrowLeft");
+    expect(screen.queryByText("You win!")).toBeNull();
+
+    act(() => {
+        vi.advanceTimersByTime(SETTLE_MS);
+    });
+
+    expect(screen.getByText("You win!")).toBeTruthy();
+    expect(screen.queryByText("Game over")).toBeNull();
+    expect(screen.getByRole("button", { name: "AI" }).disabled).toBe(true);
+    press("ArrowDown");
     expect(applyMove).toHaveBeenCalledTimes(1);
 });
 

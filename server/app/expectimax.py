@@ -2,6 +2,8 @@
 
 Player nodes maximize. Chance nodes average over a random spawn: each empty cell
 is equally likely, and the new tile is a 2 (90%) or a 4 (10%), matching the client.
+A board with a tile ≥ 2048 is a hard win (matching the client), scored above any
+non-winning living position.
 """
 
 from __future__ import annotations
@@ -21,7 +23,9 @@ _Clock = Callable[[], float]
 _SIZE = 4
 _TWO_PROB = 0.9
 _FOUR_PROB = 0.1
+_WIN_TILE = 2048
 _GAME_OVER = -1_000_000.0  # worse than any living board
+_GAME_WON = 1_000_000.0  # better than any non-winning living board
 _FALLBACK_RANK = {direction: index for index, direction in enumerate(FALLBACK_ORDER)}
 # Depth 3+ was too slow for /suggest; stay at 1–2 and cut on this wall budget.
 _BUDGET_SECONDS = 0.5
@@ -162,6 +166,14 @@ def _chance_value(
     empties = _empty_cells(board)
     if not empties:
         raise _SearchBroken("chance node reached a full board")
+
+    # Merge already created 2048: spawn cannot undo the win. Prefer sooner wins
+    # via +depth so a one-ply 2048 beats a longer path that also reaches 2048.
+    if _has_won(board):
+        value = _GAME_WON + depth
+        cache[key] = value
+        return value
+
     total = 0.0
     weight = 1.0 / len(empties)
     for row, col in empties:
@@ -188,6 +200,12 @@ def _max_value(
     if cached is not None:
         return cached
 
+    # Match client: reaching 2048 is a hard win (checked after the spawn that led here).
+    if _has_won(board):
+        value = _GAME_WON + depth
+        cache[key] = value
+        return value
+
     legal = _legal_directions(board)
     if not legal:
         value = _GAME_OVER
@@ -205,6 +223,10 @@ def _max_value(
     )
     cache[key] = value
     return value
+
+
+def _has_won(board: Board) -> bool:
+    return any(cell >= _WIN_TILE for row in board for cell in row)
 
 
 def _evaluate(board: Board) -> float:
