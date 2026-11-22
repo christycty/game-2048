@@ -33,5 +33,5 @@ Open `http://127.0.0.1:${CLIENT_HOST_PORT:-5173}`. Or use Compose: `cp .env.exam
 | Audience | Start here |
 |---|---|
 | **Humans** — what this is and how it’s built | [docs/](docs/README.md) |
-| **Pitch page** — diagram-heavy walkthrough (GitHub Pages) | [site/](site/index.html) |
+| **Pitch page** — diagram-heavy walkthrough (GitHub Pages) | [Live site](https://christycty.github.io/game-2048/) · [source](site/index.html) |
 | **Agents** — rules, invariants, implementation detail | [AGENTS.md](AGENTS.md) → [docs/agents/](docs/agents/README.md) |
