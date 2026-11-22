@@ -30,7 +30,7 @@ A **scrape series** is a metric the process exposes on `GET /metrics` in Prometh
 We intentionally **do not** scrape TTFT / time-per-output-token / prompt text: those stay Phoenix span events/attributes so `/metrics` stays cheap and dashboards stay readable.
 
 **Grafana charting:**
-- **API row:** `/suggest` by status (all codes), Suggest by source, Latency (p50/p95).
+- **API row:** `/suggest` by status (all codes), Suggest by source, Latency (p50/p95), in-flight HTTP POSTs.
 - **Client row:** suggest outcomes (`fail` / `rate_limit` from `/client-events`).
 - **LLM row:** success rate, outcomes, error types, duration (p50/p95), tokens.
 - Multi-series **rate** panels use **unstacked** lines (each series Y is absolute). Stacked areas make a smaller series look “above” a larger one.
@@ -116,6 +116,7 @@ Every panel on the provisioned dashboard and the **exact** Prom series suffix it
 | POST /suggest by status | `http_server_duration_milliseconds_count` | `sum by (http_status_code)` · `http_target="/suggest"` · rate `> 0` |
 | Suggest by source | `suggest_source_total` | `sum by (suggest_source)` · `llm` \| `fallback` \| `expectimax` · rate `> 0` |
 | POST /suggest latency | `http_server_duration_milliseconds_bucket` | `histogram_quantile` p50 + p95 · empty when no `/suggest` traffic |
+| In-flight HTTP requests | `http_server_active_requests` | `sum` · `http_method="POST"` (proxy for overlapping `/suggest`; `/health`/`/metrics`/`/client-events` not instrumented) |
 | Client suggest outcomes | `client_suggest_outcome_total` | `sum by (outcome)` · `fail` \| `rate_limit` · rate `> 0` |
 | LLM request success rate | `gen_ai_client_request_count_total` | `success` rate / total rate; empty when idle (`total rate == 0`) |
 | LLM requests by outcome | `gen_ai_client_request_count_total` | `sum by (gen_ai_request_outcome)` · `success` \| `error` \| `timeout` · rate `> 0` |
@@ -123,15 +124,13 @@ Every panel on the provisioned dashboard and the **exact** Prom series suffix it
 | LLM call duration | `gen_ai_client_operation_duration_seconds_bucket` | `histogram_quantile` p50 + p95 · empty when no body-path calls (excludes timeout/request failures) |
 | Token usage rate by type | `gen_ai_client_token_usage_sum` | `sum by (gen_ai_token_type)` · `input` \| `output` · rate `> 0` |
 
-### Present but not charted (noise / secondary)
+### Intentionally not scraped
 
-| Series | Kind | Notes |
-|---|---|---|
-| `http_server_active_requests` | Gauge | In-flight HTTP |
-| `http_server_request_size_bytes_*` | Histogram | Request body size |
-| `http_server_response_size_bytes_*` | Histogram | Response body size |
+| Signal | Why |
+|---|---|
+| `http.server.request.size` / `http.server.response.size` | Dropped via OTel `View` + `DropAggregation` in `setup_telemetry`. Fixed tiny JSON boards make size panels flat; scrape surface matches charted series. |
 
-HTTP series also carry high-cardinality host labels (`http_host`, `http_server_name`, `net_host_port`, …). Prefer filtering on `http_target="/suggest"` in dashboards and PR Verify screenshots.
+HTTP duration / active series still carry host-ish labels (`http_host`, `http_server_name`, `net_host_port`, …). Prefer filtering on `http_target="/suggest"` (duration) or `http_method="POST"` (active) in dashboards and PR Verify screenshots.
 
 ### Outcome semantics
 

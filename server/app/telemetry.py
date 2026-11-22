@@ -29,6 +29,7 @@ from opentelemetry.exporter.otlp.proto.http.trace_exporter import OTLPSpanExport
 from opentelemetry.exporter.prometheus import PrometheusMetricReader
 from opentelemetry.instrumentation.fastapi import FastAPIInstrumentor
 from opentelemetry.sdk.metrics import MeterProvider
+from opentelemetry.sdk.metrics.view import DropAggregation, View
 from opentelemetry.sdk.resources import Resource
 from opentelemetry.sdk.trace import TracerProvider
 from opentelemetry.sdk.trace.export import BatchSpanProcessor, SpanProcessor
@@ -45,6 +46,13 @@ _LOOPBACK = {"localhost", "127.0.0.1", "::1"}
 _DOCKER_HOST_ALIAS = "host.docker.internal"
 # Keep the Phoenix tree on suggestion work. /metrics and client beacons are scrape noise.
 _EXCLUDED_URLS = "/health,/metrics,/client-events,/docs,/openapi.json,/redoc"
+# FastAPI OTel also emits request/response body-size histograms. Tiny fixed JSON
+# boards make those panels flat forever — drop at the SDK so scrape == charted.
+# Keep duration (API latency) and active_requests (in-flight /suggest under Auto Play).
+_DROP_HTTP_BODY_SIZE_VIEWS = (
+    View(instrument_name="http.server.request.size", aggregation=DropAggregation()),
+    View(instrument_name="http.server.response.size", aggregation=DropAggregation()),
+)
 # Phoenix places TTFT from this OpenInference event name.
 # The call is not streamed; the stamp is load + prompt_eval.
 _FIRST_TOKEN_EVENT = "First Token Stream Event"
@@ -210,7 +218,11 @@ def setup_telemetry(
         disable_target_info=True,
         scope_info_enabled=False,
     )
-    meter_provider = MeterProvider(resource=resource, metric_readers=[metric_reader])
+    meter_provider = MeterProvider(
+        resource=resource,
+        metric_readers=[metric_reader],
+        views=_DROP_HTTP_BODY_SIZE_VIEWS,
+    )
     meter = meter_provider.get_meter(SERVICE_NAME)
     app_metrics = LlmMetrics(
         operation_duration=meter.create_histogram(

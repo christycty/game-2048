@@ -222,6 +222,19 @@ def test_client_events_increment_scrape_counter() -> None:
     assert _labeled_counter(body, PROM_CLIENT_SUGGEST_OUTCOME, 'outcome="cancel"') == 0.0
 
 
+def test_http_body_size_metrics_dropped_active_and_duration_kept() -> None:
+    """Scrape surface matches GenAI ops: drop size histograms, keep duration + active."""
+    app = create_app(isolated_settings(export_traces=False), _QuietLLM())
+    client = TestClient(app)
+    assert client.post("/suggest", json={"board": OPEN_BOARD, "mode": "llm"}).status_code == 200
+
+    body = client.get("/metrics").text
+    assert "http_server_duration_milliseconds" in body
+    assert "http_server_active_requests" in body
+    assert "http_server_request_size_bytes" not in body
+    assert "http_server_response_size_bytes" not in body
+
+
 def test_metrics_exposes_gen_ai_series_after_suggest() -> None:
     def handler(request: httpx.Request) -> httpx.Response:
         return httpx.Response(
