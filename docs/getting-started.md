@@ -44,6 +44,13 @@ docker compose --profile dev --profile metrics up
 
 `docker compose up` with no profile starts nothing. Published ports are loopback-only. Defaults are API `8000` and client `5173` (override with `API_HOST_PORT` / `CLIENT_HOST_PORT`); with `metrics`, also Prometheus / Grafana (`PROMETHEUS_HOST_PORT` / `GRAFANA_HOST_PORT`). Prod publishes only the client; nginx forwards `/suggest` and `/client-events`.
 
+### Full ops walkthrough (optional)
+
+- **Expectimax / board only** — no Ollama required.
+- **LLM suggest** — host Ollama + model from `OLLAMA_MODEL` (first pull can take a while).
+- **Grafana aggregates** — Compose `--profile metrics` as above.
+- **Phoenix traces** — run Phoenix (or another OTLP collector) on the host; it is **not** a Compose service. API export defaults on via `EXPORT_TRACES` (see [agents/runtime.md](agents/runtime.md) / [agents/telemetry.md](agents/telemetry.md)).
+
 ## It worked if…
 
 - Path A / Compose **dev**: `GET http://127.0.0.1:${API_HOST_PORT:-8000}/health` returns `{"status":"ok"}` (even if Ollama is down).

@@ -9,6 +9,7 @@ Building or changing code? Start at [../AGENTS.md](../AGENTS.md) and [agents/](a
 | [overview.md](overview.md) | What the product is, who it’s for, the player journey |
 | [architecture.md](architecture.md) | How the pieces fit (topology, request path, stack) |
 | [getting-started.md](getting-started.md) | Run locally or with Compose |
+| [../site/](../site/index.html) | Diagram-heavy pitch page (GitHub Pages) |
 | [agents/](agents/README.md) | Agent rules, deep detail, review patterns, **how to write docs** |
 
 CI `docs` job: script unit tests, `check_doc_links.py` (**fails** on broken links), and a freshness **warn** when code changes without `docs/agents/` or root `AGENTS.md`. Details: [agents/writing-docs.md](agents/writing-docs.md).

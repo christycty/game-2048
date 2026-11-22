@@ -1,0 +1,425 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>2048 with AI suggestions — technical walkthrough</title>
+    <meta
+      name="description"
+      content="Technical walkthrough: suggest path, cancel, tracing, and scrape metrics."
+    />
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Source+Serif+4:opsz,wght@8..60,600;8..60,700&family=Figtree:wght@400;500;600&display=swap"
+      rel="stylesheet"
+    />
+    <link rel="stylesheet" href="./styles.css" />
+  </head>
+  <body>
+    <aside class="sidebar" aria-label="Sections">
+      <p class="sidebar-title">2048 + AI</p>
+      <nav>
+        <ol>
+          <li><a href="#stack">Stack</a></li>
+          <li><a href="#system">Topology</a></li>
+          <li><a href="#ui">Client</a></li>
+          <li><a href="#path">Suggest path</a></li>
+          <li><a href="#cancel">Cancel</a></li>
+          <li><a href="#obs">Ops split</a></li>
+          <li><a href="#phoenix">Phoenix</a></li>
+          <li><a href="#metrics">Metrics</a></li>
+          <li><a href="#verify">Verify</a></li>
+        </ol>
+      </nav>
+      <p class="sidebar-links">
+        <a href="https://github.com/christycty/game-2048">Repository</a>
+      </p>
+    </aside>
+
+    <div class="content">
+      <header class="top">
+        <h1>2048 with AI suggestions</h1>
+        <p class="summary">
+          Single-player 2048 with an optional AI coach (<strong>LLM</strong> via Ollama or
+          <strong>Expectimax</strong>), Auto Play, and local ops (Phoenix traces + Prometheus /
+          Grafana).
+        </p>
+      </header>
+
+      <main>
+        <section id="stack">
+          <h2>1. Stack</h2>
+          <div class="cards">
+            <article>
+              <h3>Client</h3>
+              <p>Vite + React. Board rules local; suggest over HTTP.</p>
+            </article>
+            <article>
+              <h3>API</h3>
+              <p>FastAPI. LLM via Ollama, or depth-limited expectimax.</p>
+            </article>
+            <article>
+              <h3>Traces</h3>
+              <p>OTLP → Phoenix on the host (optional collector).</p>
+            </article>
+            <article>
+              <h3>Metrics</h3>
+              <p><code>GET /metrics</code> → Prometheus → Grafana (Compose profile).</p>
+            </article>
+          </div>
+        </section>
+
+        <section id="system">
+          <h2>2. Topology</h2>
+          <p>
+            Same-origin proxy to the API. Prometheus scrapes the API; Grafana only talks to
+            Prometheus. Phoenix receives OTLP from the API.
+          </p>
+          <pre class="mermaid">
+flowchart LR
+  UI[Client] --> Proxy[Vite / nginx]
+  Proxy -->|/suggest · /client-events| API[FastAPI]
+  API -->|LLM| Ollama
+  API -->|OTLP| Phoenix
+  Prom[Prometheus] -->|scrape /metrics| API
+  Grafana --> Prom
+          </pre>
+        </section>
+
+        <section id="ui">
+          <h2>3. Client</h2>
+          <p>
+            Board starts with a random count of <strong>2</strong>s (2–8); hard win at
+            <strong>2048</strong>. Pick mode → <strong>AI</strong> (or <strong>Auto Play</strong>) →
+            hint + <strong>Play</strong>. <strong>Stop</strong> during Thinking aborts the in-flight
+            suggest. Auto Play <strong>retries</strong> on capacity-busy 429; <strong>stops</strong>
+            on spend-cap 429.
+          </p>
+          <figure class="figure">
+            <img
+              src="./assets/ui-suggest.png"
+              alt="2048 UI with Expectimax suggestion, per-direction scores, and Play Left"
+              width="1550"
+              height="808"
+            />
+            <figcaption>
+              Live UI: Expectimax hint with per-direction scores and confirm via Play.
+            </figcaption>
+          </figure>
+        </section>
+
+        <section id="path">
+          <h2>4. Suggest path</h2>
+          <p>
+            Order: <strong>validate → spend ceiling → capacity gate (LLM) → legality → mode</strong>.
+            Invalid bodies do not consume either gate. Two distinct
+            <strong>429</strong>s: spend (<code>too many suggestions</code> /
+            <code>X-Suggest-Limit: spend</code>) vs capacity (<code>model busy</code> /
+            <code>X-Suggest-Limit: capacity</code>). Disconnect returns <strong>499</strong> and
+            refunds the spend token / frees the in-flight slot.
+          </p>
+          <pre class="mermaid">
+flowchart TD
+  In[board + mode] --> V{valid?}
+  V -->|no| X422[422]
+  V -->|yes| S{spend ceiling}
+  S -->|over| X429s["429 spend"]
+  S -->|ok| C{LLM capacity?}
+  C -->|full| X429c["429 capacity + refund spend"]
+  C -->|ok / expectimax| L{legal moves?}
+  L -->|none| X409[409]
+  L -->|yes| M{mode}
+  M -->|expectimax| EX[search + scores]
+  M -->|llm| LLM[Ollama + retries]
+  EX --> OK[SuggestResponse]
+  LLM --> OK
+  LLM -->|disconnect| C499[499 + refund]
+          </pre>
+        </section>
+
+        <section id="cancel">
+          <h2>5. Cancel</h2>
+          <p>
+            Client aborts the fetch on Stop / move / New Game / mode change. Server watches
+            disconnect on <code>/suggest</code>, cancels that run only, responds 499. The UI stays
+            silent; the browser beacons <code>cancel</code> so Grafana can see abandons.
+          </p>
+          <pre class="mermaid">
+sequenceDiagram
+  participant UI
+  participant API
+  participant LLM as Ollama
+  UI->>API: POST /suggest
+  API->>LLM: chat
+  UI-->>API: abort / disconnect
+  API-->>LLM: cancel
+  API-->>UI: 499
+  UI->>API: POST /client-events cancel
+  Note over UI: silent — no failure hint
+          </pre>
+          <ul class="bullets">
+            <li>Abort stays silent in the UI (no “AI could not suggest”).</li>
+            <li>Beacon outcome is <code>cancel</code>, not <code>fail</code>; GenAI scrape can show
+              <code>cancelled</code> when an Ollama attempt had already opened.</li>
+            <li>Token-matched abort still ends Auto Play so the loop cannot stall.</li>
+            <li>Spend token + in-flight slot release on cancel; siblings keep their own slots.</li>
+          </ul>
+        </section>
+
+        <section id="obs">
+          <h2>6. Ops split</h2>
+          <p>
+            Same topics (latency, failures) can appear in both places — the systems answer
+            different questions and do not replace each other.
+          </p>
+          <pre class="mermaid">
+flowchart TB
+  subgraph phoenix [Phoenix — one request]
+    Q1["Why did *this* suggest fail?"]
+    A1["Prompt · retries · span tree"]
+    Q1 --> A1
+  end
+  subgraph grafana [Grafana — over time]
+    Q2["Is fallback or 429 rising?"]
+    A2["Rates · p50/p95 · token burn"]
+    Q2 --> A2
+  end
+          </pre>
+          <ul class="bullets">
+            <li><strong>Phoenix</strong> — push OTLP traces; high-cardinality forensics (prompt text, TTFT on the span).</li>
+            <li><strong>Prometheus / Grafana</strong> — pull <code>GET /metrics</code>; low-cardinality aggregates.</li>
+            <li>HTTP <code>200</code> can still be model <code>fallback</code> — API status ≠ LLM outcome.</li>
+          </ul>
+        </section>
+
+        <section id="phoenix">
+          <h2>7. Phoenix</h2>
+          <p>
+            No browser OTel SDK. The client sends a hand-rolled W3C <code>traceparent</code> on
+            <code>POST /suggest</code>; FastAPI continues that trace into the suggest / LLM spans.
+          </p>
+          <pre class="mermaid">
+flowchart TB
+  UI["Client creates traceparent"] --> HTTP["POST /suggest span"]
+  HTTP --> SUG["suggest span<br/>board · mode · result"]
+  SUG -->|"llm mode only"| LLM["ollama chat span<br/>prompt · completion · tokens"]
+  SUG -->|"expectimax"| EX["no ollama chat span"]
+  LLM --> EV["span events: TTFT · generation done"]
+          </pre>
+          <ul class="bullets">
+            <li><strong>Open a suggest in Phoenix</strong> → one tree: HTTP → <code>suggest</code> → optional <code>ollama chat</code>.</li>
+            <li><strong>On <code>ollama chat</code></strong> → prompt/completion, model name, token counts, ERROR on bad JSON / illegal move / transport fail.</li>
+            <li><strong>Retries</strong> → multiple <code>ollama chat</code> children under the same suggest.</li>
+            <li><strong>Not traced</strong> — <code>/health</code>, <code>/metrics</code>, <code>/client-events</code> (scrape noise).</li>
+            <li>Host collector only (not in Compose). <code>EXPORT_TRACES</code> defaults on; CI turns it off.</li>
+          </ul>
+          <details class="shot">
+            <summary>UI screenshot — Phoenix span tree + detail</summary>
+            <div class="shot-stack">
+              <figure class="figure">
+                <img
+                  src="./assets/phoenix-trace.png"
+                  alt="Phoenix Traces view with POST /suggest expanded to suggest and ollama chat"
+                  width="1600"
+                  height="900"
+                />
+                <figcaption>
+                  Trace list / tree: expand <code>POST /suggest</code> → <code>suggest</code> →
+                  <code>ollama chat</code>.
+                </figcaption>
+              </figure>
+              <figure class="figure">
+                <img
+                  src="./assets/phoenix-span-detail.png"
+                  alt="Phoenix span detail for POST /suggest showing tree, Input board JSON, and Output move"
+                  width="1490"
+                  height="1154"
+                />
+                <figcaption>
+                  Open a root <code>POST /suggest</code>: tree on the left; Input (board + mode) and
+                  Output (move + reason) on the right. Click <code>ollama chat</code> for prompt /
+                  completion / tokens.
+                </figcaption>
+              </figure>
+            </div>
+          </details>
+        </section>
+
+        <section id="metrics">
+          <h2>8. Metrics (Grafana)</h2>
+          <p>
+            Always-on scrape at <code>GET /metrics</code>. Compose
+            <code>--profile metrics</code> runs Prometheus + a provisioned GenAI ops dashboard.
+            Client outcomes come from thin <code>/client-events</code> beacons (not Phoenix):
+            <code>fail</code> / <code>rate_limit</code> (spend) / <code>model_busy</code> (capacity) /
+            <code>cancel</code>.
+          </p>
+          <pre class="mermaid">
+flowchart LR
+  API["API /metrics"] --> Prom[Prometheus]
+  Prom --> Graf[Grafana]
+  UI[Client] -->|fail · rate_limit · model_busy · cancel| CE[/client-events/]
+  CE --> API
+          </pre>
+          <p class="subhead">What each chart answers (same order as the dashboard rows)</p>
+          <p class="row-label">API</p>
+          <div class="cards">
+            <article>
+              <h3>POST /suggest by status</h3>
+              <p>Are we getting 200, or 429 / 422 / 409 / 499?</p>
+            </article>
+            <article>
+              <h3>Suggest by source</h3>
+              <p>Is the coach returning llm, expectimax, or fallback?</p>
+            </article>
+            <article>
+              <h3>Suggest limit rejects</h3>
+              <p>Capacity-busy vs spend-cap 429 volume (<code>suggest_limit_reject_total</code>).</p>
+            </article>
+            <article>
+              <h3>POST /suggest latency</h3>
+              <p>Wall-time p50 / p95 for /suggest under load.</p>
+            </article>
+            <article>
+              <h3>In-flight HTTP requests</h3>
+              <p>Overlapping POSTs right now (usually 0; spikes = multi-tab / slow LLM).</p>
+            </article>
+          </div>
+          <p class="row-label">Client</p>
+          <div class="cards">
+            <article>
+              <h3>Client suggest outcomes</h3>
+              <p>
+                Browser beacons: fail vs spend <code>rate_limit</code> vs capacity
+                <code>model_busy</code> vs <code>cancel</code>.
+              </p>
+            </article>
+          </div>
+          <p class="row-label">LLM</p>
+          <div class="cards">
+            <article>
+              <h3>LLM request success rate</h3>
+              <p>Share of Ollama attempts that succeed (cancelled excluded).</p>
+            </article>
+            <article>
+              <h3>LLM requests by outcome</h3>
+              <p>Success vs error / timeout / <code>cancelled</code> over time.</p>
+            </article>
+            <article>
+              <h3>LLM errors by type</h3>
+              <p>Which failure modes dominate when the model path breaks?</p>
+            </article>
+            <article>
+              <h3>LLM call duration</h3>
+              <p>Model-call p50 / p95 (not the full HTTP /suggest time).</p>
+            </article>
+            <article>
+              <h3>Token usage rate by type</h3>
+              <p>Prompt vs completion token burn over time.</p>
+            </article>
+          </div>
+          <ul class="bullets">
+            <li>Stale-token ignores do <strong>not</strong> beacon; aborts beacon <code>cancel</code>, not
+              <code>fail</code>.</li>
+            <li>
+              Still open (separate PRs): process-wide rate limit on <code>/client-events</code>
+              (beacon integrity) and a verification ladder (checklist + opt-in
+              <code>pytest --load</code>).
+            </li>
+          </ul>
+          <details class="shot">
+            <summary>UI screenshot — Grafana GenAI ops (API / Client / LLM)</summary>
+            <div class="shot-stack">
+              <figure class="figure">
+                <img
+                  src="./assets/grafana-api.png"
+                  alt="Grafana GenAI ops — API row: status, source, latency, in-flight"
+                  width="1268"
+                  height="730"
+                />
+                <figcaption>
+                  <strong>API</strong> — status / source / latency / in-flight. In-flight stays flat for
+                  short Expectimax; spikes during slow LLM calls.
+                </figcaption>
+              </figure>
+              <figure class="figure">
+                <img
+                  src="./assets/grafana-client.png"
+                  alt="Grafana GenAI ops — Client row: suggest outcomes"
+                  width="1268"
+                  height="390"
+                />
+                <figcaption>
+                  <strong>Client</strong> — beacons for fail / spend <code>rate_limit</code> / capacity
+                  <code>model_busy</code> / <code>cancel</code> (UI abort stays silent).
+                </figcaption>
+              </figure>
+              <figure class="figure">
+                <img
+                  src="./assets/grafana-llm.png"
+                  alt="Grafana GenAI ops — LLM row: success, outcome, errors, duration, tokens"
+                  width="1268"
+                  height="732"
+                />
+                <figcaption>
+                  <strong>LLM</strong> — success / outcome / errors / duration / tokens. Errors-by-type
+                  stays empty when the model path is clean.
+                </figcaption>
+              </figure>
+            </div>
+          </details>
+        </section>
+
+        <section id="verify">
+          <h2>9. What to verify</h2>
+          <ol class="steps">
+            <li>
+              <strong>Board / win</strong> — new game deals 2–8 opening 2s; reaching 2048 is a hard
+              win.
+            </li>
+            <li><strong>Expectimax without Ollama</strong> — board + AI works; health stays ok.</li>
+            <li>
+              <strong>LLM + Phoenix</strong> — host Ollama + collector; open one trace: HTTP →
+              suggest → ollama chat (prompt visible).
+            </li>
+            <li>
+              <strong>Cancel</strong> — Auto Play → Stop while Thinking; silent UI; server 499;
+              Client <code>cancel</code> (and LLM <code>cancelled</code> when an attempt opened).
+            </li>
+            <li>
+              <strong>Spend vs capacity</strong> — spend 429 stops Auto Play; capacity
+              <code>model busy</code> retries; Grafana reject reasons split.
+            </li>
+            <li>
+              <strong>Metrics</strong> — Compose <code>--profile metrics</code>; panels move;
+              scrape contract is <code>GET /metrics</code>.
+            </li>
+            <li>
+              <strong>Beacons</strong> — fail / spend / busy / cancel increment Client row; stale
+              ignore does not.
+            </li>
+          </ol>
+          <p class="note">
+            Phoenix is host-side (not Compose). Board + Expectimax alone is enough for a fast product
+            pass; full ops needs Ollama + collector + metrics profile. Deeper “verify without reading
+            code” ladder (incl. opt-in load) is the open verification PR.
+          </p>
+        </section>
+      </main>
+
+      <footer class="footer">
+        <p>
+          Detail:
+          <a href="https://github.com/christycty/game-2048/tree/main/docs/agents">docs/agents/</a>
+          ·
+          <a href="https://github.com/christycty/game-2048/blob/main/docs/getting-started.md"
+            >getting started</a
+          >
+        </p>
+      </footer>
+    </div>
+
+    <script src="./main.js"></script>
+  </body>
+</html>
