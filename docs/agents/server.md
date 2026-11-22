@@ -121,7 +121,7 @@ Loaded from the environment and optional `server/.env` (Compose does not use tha
 | `LLM_ATTEMPT_TIMEOUT_SECONDS` | `20` | >0, ≤20 |
 | `LLM_SUGGEST_BUDGET_SECONDS` | `40` | >0, ≤40; raised to 2× attempt timeout when lower |
 | `SUGGEST_RATE_LIMIT_REQUESTS` | `60` | 1–120; LLM hard ceiling (spend safety net) |
-| `SUGGEST_RATE_LIMIT_EXPECTIMAX_REQUESTS` | `30` | 1–120; Expectimax bucket (process-wide) |
+| `SUGGEST_RATE_LIMIT_EXPECTIMAX_REQUESTS` | `120` | 1–120; Expectimax bucket (process-wide; sized for Auto Play ~1/s) |
 | `SUGGEST_RATE_LIMIT_WINDOW_SECONDS` | `60` | 1–3600; shared window for both modes |
 | `LLM_MAX_IN_FLIGHT` | `1` | 1–8; concurrent LLM suggests admitted to Ollama |
 | `CLIENT_EVENTS_RATE_LIMIT_REQUESTS` | `60` | 1–600; process-wide `/client-events` integrity cap |
