@@ -15,7 +15,9 @@ def test_isolated_settings_ignores_hostile_rate_limit_env(
     monkeypatch.setenv("SUGGEST_RATE_LIMIT_REQUESTS", "1")
     monkeypatch.setenv("SUGGEST_RATE_LIMIT_EXPECTIMAX_REQUESTS", "1")
     monkeypatch.setenv("SUGGEST_RATE_LIMIT_WINDOW_SECONDS", "1")
+    monkeypatch.setenv("LLM_MAX_IN_FLIGHT", "8")
     settings = isolated_settings()
-    assert settings.suggest_rate_limit_requests == 5
+    assert settings.suggest_rate_limit_requests == 60
     assert settings.suggest_rate_limit_expectimax_requests == 30
     assert settings.suggest_rate_limit_window_seconds == 60
+    assert settings.llm_max_in_flight == 1
