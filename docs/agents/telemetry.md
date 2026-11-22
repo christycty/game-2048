@@ -46,7 +46,7 @@ Coarse client fail / rate-limit counts go to scrape metrics via `POST /client-ev
 
 App passes `shouldReportOutcome` so abandoned in-flight suggests (stale token after a board-changing move / New Game) do **not** beacon `fail` / `rate_limit`. **Follow-on:** a `cancel` beacon outcome waits on client `AbortSignal` + server disconnect cancel. Do not emit cancel from stale-token ignores either.
 
-`/client-events` is unauthenticated like the rest of the API (no player auth yet). Prod keeps the API unpublished; published ports are loopback-only.
+`/client-events` is unauthenticated like the rest of the API (no player auth yet). Prod keeps the API unpublished; published ports are loopback-only. Follow-up integrity gate (beacon rate limit): [client-events-integrity.md](../../plan/client-events-integrity.md).
 
 ## Where each concern belongs
 
