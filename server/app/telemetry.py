@@ -73,6 +73,7 @@ REQUEST_OUTCOME_TIMEOUT = "timeout"
 # Browser beacon outcomes (fail / rate_limit; cancel deferred until AbortSignal).
 CLIENT_OUTCOME_FAIL = "fail"
 CLIENT_OUTCOME_RATE_LIMIT = "rate_limit"
+_CLIENT_OUTCOMES = frozenset({CLIENT_OUTCOME_FAIL, CLIENT_OUTCOME_RATE_LIMIT})
 
 # OpenInference keys used by tests and callers.
 OPENINFERENCE_SPAN_KIND = SpanAttributes.OPENINFERENCE_SPAN_KIND
@@ -465,6 +466,8 @@ def record_suggest_source(source: str) -> None:
 
 def record_client_suggest_outcome(outcome: str) -> None:
     """Count one browser beacon for a suggest fail / rate_limit (not cancel yet)."""
+    if outcome not in _CLIENT_OUTCOMES:
+        return
     instruments = llm_metrics()
     if instruments is None:
         return

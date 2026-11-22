@@ -210,16 +210,36 @@ def test_suggest_continues_client_traceparent() -> None:
 
 
 def test_client_events_increment_scrape_counter() -> None:
+    from app.telemetry import (
+        CLIENT_OUTCOME_FAIL,
+        CLIENT_OUTCOME_RATE_LIMIT,
+        record_client_suggest_outcome,
+    )
+
     app = create_app(isolated_settings(export_traces=False), _QuietLLM())
     client = TestClient(app)
-    assert client.post("/client-events", json={"outcome": "fail"}).status_code == 204
-    assert client.post("/client-events", json={"outcome": "rate_limit"}).status_code == 204
+    assert client.post("/client-events", json={"outcome": CLIENT_OUTCOME_FAIL}).status_code == 204
+    assert (
+        client.post("/client-events", json={"outcome": CLIENT_OUTCOME_RATE_LIMIT}).status_code
+        == 204
+    )
     assert client.post("/client-events", json={"outcome": "cancel"}).status_code == 422
+    # Defense in depth: unknown labels never touch the scrape counter.
+    record_client_suggest_outcome("cancel")
+    record_client_suggest_outcome("not-an-outcome")
 
     body = client.get("/metrics").text
     assert PROM_CLIENT_SUGGEST_OUTCOME in body
-    assert _labeled_counter(body, PROM_CLIENT_SUGGEST_OUTCOME, 'outcome="fail"') == 1.0
-    assert _labeled_counter(body, PROM_CLIENT_SUGGEST_OUTCOME, 'outcome="rate_limit"') == 1.0
+    assert (
+        _labeled_counter(body, PROM_CLIENT_SUGGEST_OUTCOME, f'outcome="{CLIENT_OUTCOME_FAIL}"')
+        == 1.0
+    )
+    assert (
+        _labeled_counter(
+            body, PROM_CLIENT_SUGGEST_OUTCOME, f'outcome="{CLIENT_OUTCOME_RATE_LIMIT}"'
+        )
+        == 1.0
+    )
     assert _labeled_counter(body, PROM_CLIENT_SUGGEST_OUTCOME, 'outcome="cancel"') == 0.0
 
 

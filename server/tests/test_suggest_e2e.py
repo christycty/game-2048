@@ -108,8 +108,9 @@ def test_gemma_returns_a_legal_move_and_a_short_reason(
 
 
 @pytest.mark.e2e
-def test_llm_accepts_client_traceparent(suggest_client: TestClient) -> None:
-    # Browser api.js sends a hand-rolled W3C header; the server must accept it.
+def test_llm_suggest_with_client_traceparent_header(suggest_client: TestClient) -> None:
+    # Smoke: real Ollama path tolerates the browser's hand-rolled W3C header.
+    # Span continuation (shared trace_id) is asserted in test_telemetry.py.
     traceparent = "00-" + ("a" * 32) + "-" + ("b" * 16) + "-01"
     assert TRACEPARENT_RE.match(traceparent)
     response = suggest_client.post(

@@ -4,7 +4,8 @@
 // Each suggest sends W3C `traceparent` so Phoenix can tie UI → API → LLM.
 // Fail / 429 outcomes beacon to /client-events for scrapeable client counts.
 // Pass shouldReportOutcome when the UI can abandon the request (stale token);
-// abandoned fails must not inflate client Grafana rates. Abort stays silent (no fail beacon).
+// abandoned fails must not inflate client Grafana rates. Abort (including across
+// response.json) stays silent — maybeReportOutcome also checks signal.aborted.
 
 import { createTraceparent } from "./trace.js";
 
@@ -39,9 +40,10 @@ function reportClientOutcome(outcome, { fetch: fetchImpl = fetch } = {}) {
 
 function maybeReportOutcome(
     outcome,
-    { fetch: fetchImpl = fetch, shouldReportOutcome = () => true } = {},
+    { fetch: fetchImpl = fetch, signal, shouldReportOutcome = () => true } = {},
 ) {
-    if (!shouldReportOutcome()) return;
+    // Abort may land across an await (e.g. during response.json); never beacon then.
+    if (signal?.aborted || !shouldReportOutcome()) return;
     reportClientOutcome(outcome, { fetch: fetchImpl });
 }
 
@@ -50,7 +52,7 @@ export async function suggestMove(
     mode = "llm",
     { fetch: fetchImpl = fetch, signal, shouldReportOutcome = () => true } = {},
 ) {
-    const reportOpts = { fetch: fetchImpl, shouldReportOutcome };
+    const reportOpts = { fetch: fetchImpl, signal, shouldReportOutcome };
     const traceparent = createTraceparent();
     let response;
     try {
@@ -91,6 +93,10 @@ export async function suggestMove(
         }
         maybeReportOutcome("fail", reportOpts);
         throw new SuggestError("suggestion response was unusable");
+    }
+    // Abort across json() must stay silent even when the body is also unusable.
+    if (signal?.aborted) {
+        throw new DOMException("Aborted", "AbortError");
     }
     if (!body || typeof body.move !== "string") {
         maybeReportOutcome("fail", reportOpts);

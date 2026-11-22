@@ -244,6 +244,32 @@ test("suggestMove re-checks shouldReportOutcome after the suggest await", async 
     );
 });
 
+test("suggestMove treats abort during json of a bad body as AbortError and does not beacon", async () => {
+    // Abort across await response.json() must not beacon fail for an unusable body.
+    const controller = new AbortController();
+    const calls = [];
+    const fetchImpl = async (url, options) => {
+        calls.push({ url, options });
+        if (url.endsWith("/client-events")) {
+            return { ok: true, status: 204, async json() { return {}; } };
+        }
+        return {
+            ok: true,
+            status: 200,
+            async json() {
+                controller.abort();
+                return { reason: "nope" };
+            },
+        };
+    };
+
+    await assert.rejects(
+        () => suggestMove(BOARD, "llm", { fetch: fetchImpl, signal: controller.signal }),
+        (error) => isAbortError(error) && !(error instanceof SuggestError),
+    );
+    assert.equal(calls.some((c) => c.url === "/client-events"), false);
+});
+
 test("suggestMove preserves AbortError instead of wrapping it and does not beacon", async () => {
     const calls = [];
     const fetchImpl = async (url, options) => {
