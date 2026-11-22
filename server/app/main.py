@@ -158,11 +158,13 @@ def create_app(
                     headers={"Retry-After": str(capacity.retry_after)},
                 )
             slot = capacity.token
-        span = trace.get_current_span()
-        set_json_io(span, input_payload={"board": body.board, "mode": body.mode})
-        # Middleware installs a per-request Event; fall back for non-HTTP callers.
-        cancel = getattr(request.state, "suggest_cancel", None) or threading.Event()
+        # try starts immediately after acquire so a pre-suggester failure cannot leak the slot
+        # (default LLM_MAX_IN_FLIGHT=1 would sticky-429 until restart).
         try:
+            span = trace.get_current_span()
+            set_json_io(span, input_payload={"board": body.board, "mode": body.mode})
+            # Middleware installs a per-request Event; fall back for non-HTTP callers.
+            cancel = getattr(request.state, "suggest_cancel", None) or threading.Event()
             result = await asyncio.to_thread(suggester.suggest, body.board, body.mode, cancel)
         except SuggestCancelled as exc:
             # Refund this request's hit only (token), so concurrent siblings keep theirs.

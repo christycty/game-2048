@@ -356,21 +356,53 @@ def test_invalid_body_and_stuck_board_do_not_leak_capacity() -> None:
     assert llm.calls == 1
 
 
+def test_pre_suggester_failure_releases_llm_in_flight_slot(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A raise after acquire but before suggester must not sticky-hold capacity."""
+    from app import main as main_mod
+
+    llm = FakeLLM(["right"])
+    settings = isolated_settings(suggest_rate_limit_requests=10, llm_max_in_flight=1)
+    app = create_app(settings, llm)
+
+    def boom(*_args: object, **_kwargs: object) -> None:
+        raise RuntimeError("span io failed")
+
+    monkeypatch.setattr(main_mod, "set_json_io", boom)
+    with TestClient(app, raise_server_exceptions=False) as client:
+        failed = client.post("/suggest", json={"board": OPEN_BOARD, "mode": "llm"})
+        assert failed.status_code == 500
+        assert llm.calls == 0
+
+    monkeypatch.undo()
+    with TestClient(app) as client:
+        assert client.post("/suggest", json={"board": OPEN_BOARD, "mode": "llm"}).status_code == 200
+        assert llm.calls == 1
+
+
 def test_concurrent_llm_suggests_fail_fast_without_leaking_capacity() -> None:
-    """Light concurrency: max_in_flight=1 fail-fast 429s under overlap; slot free after drain."""
+    """Held slot: overlapping peers get capacity 429; slot frees after drain."""
     workers = 8
-    llm = FakeLLM(["right"] * (workers + 1))
+    llm = _BlockingLLM()
     settings = isolated_settings(suggest_rate_limit_requests=50, llm_max_in_flight=1)
     app = create_app(settings, llm)
     body = {"board": OPEN_BOARD, "mode": "llm"}
-    statuses: list[int] = []
+    holder_status: dict[str, int] = {}
+    extras: list[int] = []
     lock = threading.Lock()
+
+    def hold() -> None:
+        with TestClient(app) as client:
+            holder_status["code"] = client.post("/suggest", json=body).status_code
+
+    holder = threading.Thread(target=hold)
+    holder.start()
+    assert llm.started.wait(2)
 
     def one() -> None:
         with TestClient(app) as client:
             status = client.post("/suggest", json=body).status_code
             with lock:
-                statuses.append(status)
+                extras.append(status)
 
     threads = [threading.Thread(target=one) for _ in range(workers)]
     for thread in threads:
@@ -379,16 +411,16 @@ def test_concurrent_llm_suggests_fail_fast_without_leaking_capacity() -> None:
         thread.join(timeout=5)
         assert not thread.is_alive()
 
-    ok = statuses.count(200)
-    busy = statuses.count(429)
-    assert ok + busy == workers
-    assert ok >= 1
-    assert busy >= 1  # overlap must hit the capacity gate
-    assert llm.calls == ok
+    assert extras == [429] * workers
+    assert llm.calls == 1
+
+    llm.release.set()
+    holder.join(timeout=3)
+    assert holder_status["code"] == 200
     # After drain, the slot is free (v1 has no queue — retries are a follow-up).
     with TestClient(app) as client:
         assert client.post("/suggest", json=body).status_code == 200
-        assert llm.calls == ok + 1
+        assert llm.calls == 2
 
 
 def test_e2e_rate_limit_covers_parametrized_volume() -> None:
