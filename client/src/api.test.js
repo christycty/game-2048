@@ -259,9 +259,11 @@ test("suggestMove preserves AbortError instead of wrapping it and does not beaco
 });
 
 test("suggestMove maps a non-AbortError to AbortError when the signal is already aborted", async () => {
+    const calls = [];
     const controller = new AbortController();
     controller.abort();
-    const fetchImpl = async () => {
+    const fetchImpl = async (url, options) => {
+        calls.push({ url, options });
         throw new TypeError("Failed to fetch");
     };
 
@@ -269,30 +271,47 @@ test("suggestMove maps a non-AbortError to AbortError when the signal is already
         () => suggestMove(BOARD, "llm", { fetch: fetchImpl, signal: controller.signal }),
         (error) => isAbortError(error) && !(error instanceof SuggestError),
     );
+    assert.equal(calls.some((c) => c.url === "/client-events"), false);
 });
 
-test("suggestMove treats HTTP 499 as AbortError", async () => {
-    const fetchImpl = async () => ({ ok: false, status: 499, async json() { return {}; } });
+test("suggestMove treats HTTP 499 as AbortError and does not beacon", async () => {
+    const calls = [];
+    const fetchImpl = async (url, options) => {
+        calls.push({ url, options });
+        if (url.endsWith("/client-events")) {
+            return { ok: true, status: 204, async json() { return {}; } };
+        }
+        return { ok: false, status: 499, async json() { return {}; } };
+    };
 
     await assert.rejects(
         () => suggestMove(BOARD, "llm", { fetch: fetchImpl }),
         (error) => isAbortError(error) && !(error instanceof SuggestError),
     );
+    assert.equal(calls.some((c) => c.url === "/client-events"), false);
 });
 
 test("suggestMove treats a resolved response as AbortError when the signal is aborted", async () => {
+    const calls = [];
     const controller = new AbortController();
     controller.abort();
-    const fetchImpl = async () => ({
-        ok: true,
-        status: 200,
-        async json() {
-            return { move: "left", mode: "llm", source: "llm", reason: "late" };
-        },
-    });
+    const fetchImpl = async (url, options) => {
+        calls.push({ url, options });
+        if (url.endsWith("/client-events")) {
+            return { ok: true, status: 204, async json() { return {}; } };
+        }
+        return {
+            ok: true,
+            status: 200,
+            async json() {
+                return { move: "left", mode: "llm", source: "llm", reason: "late" };
+            },
+        };
+    };
 
     await assert.rejects(
         () => suggestMove(BOARD, "llm", { fetch: fetchImpl, signal: controller.signal }),
         (error) => isAbortError(error) && !(error instanceof SuggestError),
     );
+    assert.equal(calls.some((c) => c.url === "/client-events"), false);
 });
