@@ -65,18 +65,25 @@ PROM_OPERATION_DURATION = "gen_ai_client_operation_duration_seconds"
 PROM_TOKEN_USAGE = "gen_ai_client_token_usage"
 PROM_REQUEST_COUNT = "gen_ai_client_request_count"
 PROM_SUGGEST_SOURCE = "suggest_source"
+PROM_SUGGEST_LIMIT_REJECT = "suggest_limit_reject"
 PROM_CLIENT_SUGGEST_OUTCOME = "client_suggest_outcome"
 # Outcome label on request_count (success rate = success / total).
 REQUEST_OUTCOME_SUCCESS = "success"
 REQUEST_OUTCOME_ERROR = "error"
 REQUEST_OUTCOME_TIMEOUT = "timeout"
 REQUEST_OUTCOME_CANCELLED = "cancelled"
-# Browser beacon outcomes (fail / rate_limit / cancel).
+# Browser beacon outcomes (fail / rate_limit spend / model_busy capacity / cancel).
 CLIENT_OUTCOME_FAIL = "fail"
 CLIENT_OUTCOME_RATE_LIMIT = "rate_limit"
+CLIENT_OUTCOME_MODEL_BUSY = "model_busy"
 CLIENT_OUTCOME_CANCEL = "cancel"
 _CLIENT_OUTCOMES = frozenset(
-    {CLIENT_OUTCOME_FAIL, CLIENT_OUTCOME_RATE_LIMIT, CLIENT_OUTCOME_CANCEL}
+    {
+        CLIENT_OUTCOME_FAIL,
+        CLIENT_OUTCOME_RATE_LIMIT,
+        CLIENT_OUTCOME_MODEL_BUSY,
+        CLIENT_OUTCOME_CANCEL,
+    }
 )
 
 # OpenInference keys used by tests and callers.
@@ -113,6 +120,7 @@ class LlmMetrics:
     token_usage: metrics.Histogram
     request_count: metrics.Counter
     suggest_source: metrics.Counter
+    suggest_limit_reject: metrics.Counter
     client_suggest_outcome: metrics.Counter
 
 
@@ -252,10 +260,17 @@ def setup_telemetry(
             unit="{suggestion}",
             description="Suggest responses by source (llm / fallback / expectimax).",
         ),
+        suggest_limit_reject=meter.create_counter(
+            name="suggest.limit.reject",
+            unit="{request}",
+            description="Suggest 429s by reason (capacity busy vs spend hard ceiling).",
+        ),
         client_suggest_outcome=meter.create_counter(
             name="client.suggest.outcome",
             unit="{event}",
-            description="Browser-reported suggest outcomes (fail / rate_limit / cancel).",
+            description=(
+                "Browser-reported suggest outcomes (fail / rate_limit / model_busy / cancel)."
+            ),
         ),
     )
 
@@ -482,8 +497,16 @@ def record_suggest_source(source: str) -> None:
     instruments.suggest_source.add(1, {"suggest.source": source})
 
 
+def record_suggest_limit_reject(reason: str) -> None:
+    """Count one suggest 429 by reason (`capacity` or `spend`)."""
+    instruments = llm_metrics()
+    if instruments is None:
+        return
+    instruments.suggest_limit_reject.add(1, {"reason": reason})
+
+
 def record_client_suggest_outcome(outcome: str) -> None:
-    """Count one browser beacon for a suggest fail / rate_limit / cancel."""
+    """Count one browser beacon for fail / rate_limit / model_busy / cancel."""
     if outcome not in _CLIENT_OUTCOMES:
         return
     instruments = llm_metrics()

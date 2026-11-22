@@ -5,14 +5,33 @@ Runs in the default suite (CI). Real-model cases live in ``test_suggest_e2e.py``
 
 from __future__ import annotations
 
+import threading
+
 from fastapi.testclient import TestClient
 
+from app.llm import ModelSuggestion
 from app.main import create_app
 from app.moves import legal_moves
-from app.telemetry import PROM_CLIENT_SUGGEST_OUTCOME
+from app.rate_limit import (
+    DETAIL_MODEL_BUSY,
+    DETAIL_SPEND_CAP,
+    HEADER_SUGGEST_LIMIT,
+    LIMIT_REASON_CAPACITY,
+    LIMIT_REASON_SPEND,
+    LlmInFlightGate,
+    SuggestRateLimiter,
+)
+from app.telemetry import PROM_CLIENT_SUGGEST_OUTCOME, PROM_SUGGEST_LIMIT_REJECT
 from helpers import SORTED_ROW, isolated_settings
 
 CORNER_BOARD = [
+    [2, 0, 0, 0],
+    [0, 0, 0, 0],
+    [0, 0, 0, 0],
+    [0, 0, 0, 0],
+]
+
+OPEN_BOARD = [
     [2, 0, 0, 0],
     [0, 0, 0, 0],
     [0, 0, 0, 0],
@@ -30,6 +49,19 @@ STUCK_BOARD = [
 class _UnusedLLM:
     def suggest_move(self, *args, **kwargs):
         raise AssertionError("expectimax / stuck / validation must not call the model")
+
+
+class _BlockingLLM:
+    """Holds the capacity slot until ``release`` is set."""
+
+    def __init__(self) -> None:
+        self.started = threading.Event()
+        self.release = threading.Event()
+
+    def suggest_move(self, *args, **kwargs) -> ModelSuggestion:
+        self.started.set()
+        assert self.release.wait(5)
+        return ModelSuggestion("right", "ok")
 
 
 def test_health_ok_without_ollama() -> None:
@@ -90,8 +122,97 @@ def test_suggest_rate_limit_is_429_with_retry_after() -> None:
     assert first.json()["source"] == "fallback"
     limited = client.post("/suggest", json={"board": SORTED_ROW, "mode": "llm"})
     assert limited.status_code == 429
-    assert limited.json()["detail"] == "too many suggestions"
+    assert limited.json()["detail"] == DETAIL_SPEND_CAP
     assert limited.headers.get("retry-after") is not None
+    assert limited.headers.get(HEADER_SUGGEST_LIMIT.lower()) == LIMIT_REASON_SPEND
+    metrics = client.get("/metrics").text
+    assert PROM_SUGGEST_LIMIT_REJECT in metrics
+    assert f'reason="{LIMIT_REASON_SPEND}"' in metrics
+
+
+def test_capacity_429_uses_model_busy_detail() -> None:
+    """Capacity full is distinct from spend: detail + X-Suggest-Limit + short Retry-After."""
+    llm = _BlockingLLM()
+    settings = isolated_settings(
+        app_env="prod",
+        suggest_rate_limit_requests=10,
+        llm_max_in_flight=1,
+    )
+    app = create_app(settings, llm, llm_in_flight=LlmInFlightGate(1))
+    body = {"board": OPEN_BOARD, "mode": "llm"}
+
+    def hold() -> None:
+        with TestClient(app) as client:
+            client.post("/suggest", json=body)
+
+    holder = threading.Thread(target=hold)
+    holder.start()
+    assert llm.started.wait(2)
+
+    with TestClient(app) as client:
+        blocked = client.post("/suggest", json=body)
+        assert blocked.status_code == 429
+        assert blocked.json()["detail"] == DETAIL_MODEL_BUSY
+        assert blocked.headers["retry-after"] == "1"
+        assert blocked.headers[HEADER_SUGGEST_LIMIT.lower()] == LIMIT_REASON_CAPACITY
+        metrics = client.get("/metrics").text
+        assert PROM_SUGGEST_LIMIT_REJECT in metrics
+        assert f'reason="{LIMIT_REASON_CAPACITY}"' in metrics
+
+    llm.release.set()
+    holder.join(timeout=3)
+    assert not holder.is_alive()
+
+
+def test_capacity_and_spend_429_have_distinct_details() -> None:
+    """One scenario surfaces both layers; clients must not treat every 429 alike."""
+    clock = _MutableClock()
+    limiter = SuggestRateLimiter(2, 60, clock)
+    llm = _BlockingLLM()
+    app = create_app(
+        isolated_settings(app_env="prod", suggest_rate_limit_requests=2, llm_max_in_flight=1),
+        llm,
+        rate_limiters={"llm": limiter, "expectimax": SuggestRateLimiter(30, 60, clock)},
+        llm_in_flight=LlmInFlightGate(1),
+    )
+    body = {"board": OPEN_BOARD, "mode": "llm"}
+
+    def hold() -> None:
+        with TestClient(app) as client:
+            client.post("/suggest", json=body)
+
+    holder = threading.Thread(target=hold)
+    holder.start()
+    assert llm.started.wait(2)
+
+    with TestClient(app) as client:
+        capacity = client.post("/suggest", json=body)
+        assert capacity.status_code == 429
+        assert capacity.json()["detail"] == DETAIL_MODEL_BUSY
+        assert capacity.headers["retry-after"] == "1"
+        assert capacity.headers[HEADER_SUGGEST_LIMIT.lower()] == LIMIT_REASON_CAPACITY
+
+    llm.release.set()
+    holder.join(timeout=3)
+    assert not holder.is_alive()
+
+    with TestClient(app) as client:
+        assert client.post("/suggest", json=body).status_code == 200
+        spend = client.post("/suggest", json=body)
+        assert spend.status_code == 429
+        assert spend.json()["detail"] == DETAIL_SPEND_CAP
+        assert spend.headers["retry-after"] == "60"
+        assert spend.headers[HEADER_SUGGEST_LIMIT.lower()] == LIMIT_REASON_SPEND
+
+    assert capacity.json()["detail"] != spend.json()["detail"]
+
+
+class _MutableClock:
+    def __init__(self) -> None:
+        self.now = 0.0
+
+    def __call__(self) -> float:
+        return self.now
 
 
 def test_expectimax_returns_a_legal_search_move() -> None:
@@ -133,6 +254,7 @@ def test_client_events_beacons_and_metrics() -> None:
     client = TestClient(create_app(isolated_settings(app_env="prod"), _UnusedLLM()))
     assert client.post("/client-events", json={"outcome": "fail"}).status_code == 204
     assert client.post("/client-events", json={"outcome": "rate_limit"}).status_code == 204
+    assert client.post("/client-events", json={"outcome": "model_busy"}).status_code == 204
     assert client.post("/client-events", json={"outcome": "cancel"}).status_code == 204
     assert client.post("/client-events", json={}).status_code == 422
     assert client.post("/client-events", json={"outcome": "success"}).status_code == 422
@@ -141,4 +263,5 @@ def test_client_events_beacons_and_metrics() -> None:
     assert PROM_CLIENT_SUGGEST_OUTCOME in text
     assert 'outcome="fail"' in text
     assert 'outcome="rate_limit"' in text
+    assert 'outcome="model_busy"' in text
     assert 'outcome="cancel"' in text
