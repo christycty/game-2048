@@ -25,6 +25,10 @@ class Settings(BaseSettings):
     suggest_rate_limit_window_seconds: float = Field(default=60, ge=1, le=3600)
     # Concurrent LLM /suggest calls admitted to Ollama (capacity gate).
     llm_max_in_flight: int = Field(default=1, ge=1, le=8)
+    # Process-wide cap on POST /client-events (ops metric integrity, not player auth).
+    # Separate from the suggest LLM / expectimax buckets.
+    client_events_rate_limit_requests: int = Field(default=60, ge=1, le=600)
+    client_events_rate_limit_window_seconds: float = Field(default=60, ge=1, le=3600)
     # Host port the page is published on (Compose / local Vite). CORS allowlist
     # follows this so a worktree can move off 5173 without editing code.
     client_host_port: int = Field(default=5173, ge=1, le=65535)

@@ -24,6 +24,15 @@ from app.rate_limit import (
 from app.telemetry import PROM_CLIENT_SUGGEST_OUTCOME, PROM_SUGGEST_LIMIT_REJECT
 from helpers import SORTED_ROW, isolated_settings
 
+
+def _labeled_counter(body: str, metric: str, label_fragment: str) -> float:
+    prefix = f"{metric}_total{{"
+    for line in body.splitlines():
+        if line.startswith(prefix) and label_fragment in line:
+            return float(line.rsplit(" ", 1)[-1])
+    return 0.0
+
+
 CORNER_BOARD = [
     [2, 0, 0, 0],
     [0, 0, 0, 0],
@@ -265,3 +274,81 @@ def test_client_events_beacons_and_metrics() -> None:
     assert 'outcome="rate_limit"' in text
     assert 'outcome="model_busy"' in text
     assert 'outcome="cancel"' in text
+
+
+def test_client_events_rate_limit_is_429_and_skips_counter() -> None:
+    limiter = SuggestRateLimiter(1, 60)
+    client = TestClient(
+        create_app(
+            isolated_settings(app_env="prod"),
+            _UnusedLLM(),
+            client_events_rate_limiter=limiter,
+        )
+    )
+    assert client.post("/client-events", json={"outcome": "fail"}).status_code == 204
+    limited = client.post("/client-events", json={"outcome": "fail"})
+    assert limited.status_code == 429
+    assert limited.json()["detail"] == "too many client events"
+    assert limited.headers.get("retry-after") is not None
+
+    text = client.get("/metrics").text
+    assert _labeled_counter(text, PROM_CLIENT_SUGGEST_OUTCOME, 'outcome="fail"') == 1.0
+
+
+def test_client_events_bad_payload_is_422_and_skips_rate_limit() -> None:
+    client = TestClient(
+        create_app(
+            isolated_settings(
+                app_env="prod",
+                client_events_rate_limit_requests=1,
+                client_events_rate_limit_window_seconds=60,
+            ),
+            _UnusedLLM(),
+        )
+    )
+    assert client.post("/client-events", json={"outcome": "success"}).status_code == 422
+    assert client.post("/client-events", json={}).status_code == 422
+    # Validation must not consume the beacon integrity cap.
+    assert client.post("/client-events", json={"outcome": "fail"}).status_code == 204
+
+
+def test_client_events_and_suggest_rate_limits_are_independent() -> None:
+    settings = isolated_settings(
+        app_env="prod",
+        ollama_base_url="http://127.0.0.1:1",
+        ollama_model="missing-model",
+        llm_max_attempts=1,
+        llm_attempt_timeout_seconds=1,
+        llm_suggest_budget_seconds=2,
+        suggest_rate_limit_requests=1,
+        suggest_rate_limit_window_seconds=60,
+        client_events_rate_limit_requests=1,
+        client_events_rate_limit_window_seconds=60,
+    )
+    client = TestClient(create_app(settings))
+
+    # Exhaust the beacon bucket; /suggest must still admit.
+    assert client.post("/client-events", json={"outcome": "cancel"}).status_code == 204
+    assert client.post("/client-events", json={"outcome": "cancel"}).status_code == 429
+    suggest = client.post("/suggest", json={"board": SORTED_ROW, "mode": "llm"})
+    assert suggest.status_code == 200
+    assert suggest.json()["source"] == "fallback"
+
+    # Exhaust the LLM suggest bucket; beacons must still admit on a fresh limiter app.
+    client2 = TestClient(
+        create_app(
+            isolated_settings(
+                app_env="prod",
+                ollama_base_url="http://127.0.0.1:1",
+                ollama_model="missing-model",
+                llm_max_attempts=1,
+                llm_attempt_timeout_seconds=1,
+                llm_suggest_budget_seconds=2,
+                suggest_rate_limit_requests=1,
+                client_events_rate_limit_requests=2,
+            )
+        )
+    )
+    assert client2.post("/suggest", json={"board": SORTED_ROW, "mode": "llm"}).status_code == 200
+    assert client2.post("/suggest", json={"board": SORTED_ROW, "mode": "llm"}).status_code == 429
+    assert client2.post("/client-events", json={"outcome": "rate_limit"}).status_code == 204

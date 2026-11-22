@@ -46,7 +46,7 @@ Coarse client fail / spend `rate_limit` / capacity `model_busy` / cancel counts 
 
 App passes `shouldReportOutcome` so abandoned in-flight suggests (stale token after a board-changing move / New Game) do **not** beacon `fail` / `rate_limit` / `model_busy`. Abort (`AbortError` / HTTP `499`, including abort across `response.json()`) beacons `cancel` (not `fail`); that path does not consult `shouldReportOutcome` because Stop/move already bumps the token before fetch rejects. Stale-token ignores that never aborted a fetch stay beacon-free.
 
-`/client-events` is unauthenticated like the rest of the API (no player auth yet). Prod keeps the API unpublished; published ports are loopback-only. Follow-up integrity gate (beacon rate limit): [client-events-integrity.md](../../plan/client-events-integrity.md).
+`/client-events` is unauthenticated like the rest of the API (no player auth yet). Prod keeps the API unpublished; published ports are loopback-only. Client rates are best-effort under that deployment boundary: a process-wide sliding-window rate limit (`CLIENT_EVENTS_RATE_LIMIT_REQUESTS` / `CLIENT_EVENTS_RATE_LIMIT_WINDOW_SECONDS`, default 60 / 60s) returns `429` + `Retry-After` over the cap and does not increment `client_suggest_outcome`. That gate is separate from the suggest LLM / expectimax buckets; the browser already ignores beacon failures.
 
 ## Where each concern belongs
 
