@@ -12,6 +12,11 @@ import {
     SETTLE_MS,
     tilesToBoard,
 } from "./game";
+import {
+    formatSuggestionHint,
+    hintForSuggestFailure,
+    HINT_SUGGEST_FAILED,
+} from "./suggestHints";
 import "./App.css";
 
 const KEY_DIRECTIONS = {
@@ -207,15 +212,11 @@ function App() {
             resetCapacityRetries();
             // "fallback" is a fixed move order, not a model choice.
             if (suggestion.source === "fallback") {
-                setHint("AI could not suggest a move");
+                setHint(HINT_SUGGEST_FAILED);
                 stopAutoPlay();
                 return;
             }
-            const reason =
-                typeof suggestion.reason === "string" ? suggestion.reason.trim() : "";
-            const hintText = reason
-                ? `Suggested: ${capitalize(suggestion.move)}. ${reason}`
-                : `Suggested: ${capitalize(suggestion.move)}.`;
+            const hintText = formatSuggestionHint(suggestion.move, suggestion.reason);
 
             if (autoPlayingRef.current) {
                 setHint(hintText);
@@ -225,7 +226,7 @@ function App() {
                 const moved = handleMove(suggestion.move);
                 autoApplyingRef.current = false;
                 if (!moved) {
-                    setHint("AI could not suggest a move");
+                    setHint(HINT_SUGGEST_FAILED);
                     stopAutoPlay();
                     if (!animatingRef.current) setBusy(false);
                 }
@@ -259,18 +260,12 @@ function App() {
             ) {
                 capacityRetriesRef.current += 1;
                 capacityRetryDelayMs = Math.max(1, error.retryAfter ?? 1) * 1000;
-                setHint("Model busy. Retrying…");
+                setHint(hintForSuggestFailure({ isCapacityBusy, isSpendCap, retrying: true }));
                 scheduleCapacityRetry = true;
                 return;
             }
 
-            if (isCapacityBusy) {
-                setHint("Model busy. Wait a moment and try again.");
-            } else if (isSpendCap) {
-                setHint("Too many suggestions. Wait a moment and try again.");
-            } else {
-                setHint("AI could not suggest a move");
-            }
+            setHint(hintForSuggestFailure({ isCapacityBusy, isSpendCap, retrying: false }));
             stopAutoPlay();
         } finally {
             if (suggestAbortRef.current === controller) {
@@ -323,7 +318,7 @@ function App() {
             autoApplyingRef.current = false;
             if (!moved) {
                 setPendingMove(null);
-                setHint("AI could not suggest a move");
+                setHint(HINT_SUGGEST_FAILED);
                 stopAutoPlay();
             }
             return;
@@ -387,10 +382,6 @@ function App() {
             ></ActionPanel>
         </div>
     );
-}
-
-function capitalize(value) {
-    return value.charAt(0).toUpperCase() + value.slice(1);
 }
 
 export default App;

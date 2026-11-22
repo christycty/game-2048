@@ -1,3 +1,4 @@
+import { capitalize } from "../suggestHints";
 import "./ActionPanel.css";
 
 const MODES = [
@@ -81,10 +82,6 @@ function ActionPanel({
             )}
         </div>
     );
-}
-
-function capitalize(value) {
-    return value.charAt(0).toUpperCase() + value.slice(1);
 }
 
 export default ActionPanel;
