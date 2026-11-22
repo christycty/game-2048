@@ -29,7 +29,8 @@ _GAME_WON = 1_000_000.0  # better than any non-winning living board
 _FALLBACK_RANK = {direction: index for index, direction in enumerate(FALLBACK_ORDER)}
 # Depth 3+ was too slow for /suggest; stay at 1–2 and cut on this wall budget.
 _BUDGET_SECONDS = 0.5
-_OPEN_BOARD_EMPTIES = 8  # ≥ this → depth 1; tighter boards → depth 2
+# ≥ this many empties → depth 1. Opening deals of 9–16 twos leave fewer empties and use depth 2.
+_OPEN_BOARD_EMPTIES = 8
 # Leaf heuristic weights (tuned for shallow search, not tournament play).
 _EMPTY_WEIGHT = 270.0
 _MAX_TILE_WEIGHT = 20.0

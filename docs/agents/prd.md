@@ -6,7 +6,7 @@ Product rules for implementers and agents. Human-oriented narrative: [../overvie
 
 ## Goals
 
-1. Play 2048 per assignment rules: start with a random count of 2s (2–8), slide and merge, spawn after each successful move, hard win at 2048 / lose when no moves.
+1. Play 2048 per assignment rules: start with a random count of 2s (1–16), slide and merge, spawn after each successful move, hard win at 2048 / lose when no moves.
 2. Keep the surface small: current score, best score for the session, and new game. No undo, accounts, or leaderboard.
 3. Offer optional AI help: the player picks a suggestion style, asks for a move, sees the recommendation, and either confirms with **Play** or starts **Auto Play**.
 
@@ -19,7 +19,7 @@ Someone who wants a local or self-hosted 2048 session with an optional coach. Th
 | Behavior | Detail |
 |---|---|
 | Board | 4×4 grid. |
-| Start | Two tiles valued **2** appear on random empty cells. |
+| Start | A random count (1–16) of tiles valued **2** appear on random empty cells. |
 | Controls | Arrow keys or swipe on the board. |
 | Slide | All tiles move as far as they can in that direction. |
 | Merge | Two equal tiles that collide combine into one tile with double the value. Each tile merges at most once per move. Score increases by the new value. |

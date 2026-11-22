@@ -90,7 +90,7 @@ flowchart LR
         <section id="ui">
           <h2>3. Client</h2>
           <p>
-            Board starts with a random count of <strong>2</strong>s (2–8); hard win at
+            Board starts with a random count of <strong>2</strong>s (1–16); hard win at
             <strong>2048</strong>. Pick mode → <strong>AI</strong> (or <strong>Auto Play</strong>) →
             hint + <strong>Play</strong>. <strong>Stop</strong> during Thinking aborts the in-flight
             suggest. Auto Play <strong>retries</strong> on capacity-busy 429; <strong>stops</strong>
@@ -375,7 +375,7 @@ flowchart LR
           <h2>9. What to verify</h2>
           <ol class="steps">
             <li>
-              <strong>Board / win</strong> — new game deals 2–8 opening 2s; reaching 2048 is a hard
+              <strong>Board / win</strong> — new game deals 1–16 opening 2s; reaching 2048 is a hard
               win.
             </li>
             <li><strong>Expectimax without Ollama</strong> — board + AI works; health stays ok.</li>
