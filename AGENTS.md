@@ -16,7 +16,7 @@ Human docs are orientation only. **Implementation truth is under `docs/agents/`.
 
 ## Goals
 
-1. Tile spawn: random count (2–8) of **2**s on random empty cells at start; after each board-changing move, spawn a **2** or **4** on a random empty cell. Hard win at **2048**; lose when no moves remain.
+1. Tile spawn: random count (1–16) of **2**s on random empty cells at start; after each board-changing move, spawn a **2** or **4** on a random empty cell. Hard win at **2048**; lose when no moves remain.
 2. Surface: current score, session best, new game only—no undo or leaderboard.
 3. AI suggestions on the server: client sends board + mode; server returns a suggested move. Modes today: LLM and depth-limited Expectimax (score-line reason).
 

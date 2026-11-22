@@ -91,6 +91,16 @@ def test_request_depth_follows_how_open_the_board_is() -> None:
     assert choose_move(tight, depth=1).move != tight_move
 
 
+def test_full_opening_deal_of_twos_still_suggests() -> None:
+    # Client may deal all 16 cells as 2s. Merges remain, so search must return
+    # a legal move (depth 2 via zero empties) instead of aborting.
+    board = [[2, 2, 2, 2] for _ in range(4)]
+    choice = choose_move(board, budget_seconds=2)
+    assert choice is not None
+    assert choice.move in legal_moves(board)
+    assert choice.move == choose_move(board, depth=2).move
+
+
 def test_a_cutoff_keeps_the_last_finished_depth() -> None:
     # Depth 0 wants up. Depth 1 wants down. Expiring on the first read of the
     # deeper search must keep up, not the fallback left and not a partial down.

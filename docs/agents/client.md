@@ -1,6 +1,6 @@
 # Client
 
-The playable 2048 board. A new game deals a random count of 2s (2–8). Arrow keys and swipes slide and merge tiles. Score and best score update after each slide. Reaching 2048 is a hard win; no moves left is a loss. The AI control asks the suggestion API for a move; the player confirms with **Play**, or turns on **Auto Play** to apply suggestions in a loop.
+The playable 2048 board. A new game deals a random count of 2s (1–16). Arrow keys and swipes slide and merge tiles. Score and best score update after each slide. Reaching 2048 is a hard win; no moves left is a loss. The AI control asks the suggestion API for a move; the player confirms with **Play**, or turns on **Auto Play** to apply suggestions in a loop.
 
 Agent/implementer detail for the client. Human architecture overview: [../architecture.md](../architecture.md). Product rules: [prd.md](prd.md).
 
@@ -95,7 +95,7 @@ The UI does not show the response `mode` or `source` fields beyond treating `"fa
 
 The grid is 4×4. Row 0 is the top. Column 0 is the left.
 
-`createInitialTiles` places a uniform random count of 2s (`MIN_START_TILES`..`MAX_START_TILES`, currently 2–8) on distinct empty cells. Ids start at 1. A later spawn takes one more than the highest id already on that board, so a new game does not continue the previous game's ids.
+`createInitialTiles` places a uniform random count of 2s (`MIN_START_TILES`..`MAX_START_TILES`, currently 1–16) on distinct empty cells. Ids start at 1. A later spawn takes one more than the highest id already on that board, so a new game does not continue the previous game's ids.
 
 `applyMove(tiles, direction, random)`:
 

@@ -8,9 +8,9 @@ export const SETTLE_MS = SLIDE_MS + 20;
 export const AUTO_PLAY_GAP_MS = 750;
 // Capacity-busy 429s: retry a few times with Retry-After backoff; spend 429 still stops.
 export const AUTO_PLAY_CAPACITY_MAX_RETRIES = 3;
-// Opening deal: uniform count of 2s (requirements: random number; classic used exactly 2).
-export const MIN_START_TILES = 2;
-export const MAX_START_TILES = 8;
+// Opening deal: uniform count of 2s across the full board (requirements: random number; classic used exactly 2).
+export const MIN_START_TILES = 1;
+export const MAX_START_TILES = GRID_COUNT;
 export const WIN_TILE = 2048;
 
 // One step on the board. Row grows downward, column grows to the right.

@@ -11,7 +11,7 @@ flowchart LR
   API -->|"chat"| Ollama
 ```
 
-- Play classic 2048 (keys or swipe): random opening **2**s (2–8), hard win at **2048**, score + session best.
+- Play classic 2048 (keys or swipe): random opening **2**s (1–16), hard win at **2048**, score + session best.
 - Ask for a suggestion (LLM or Expectimax with per-direction scores), confirm with **Play**, or ignore and move yourself.
 - **Auto Play** applies suggestions in a loop until you **Stop** (retries when the model is busy; stops on spend-cap 429).
 - Optional ops: host Phoenix for per-request traces; Compose `--profile metrics` for Prometheus / Grafana.

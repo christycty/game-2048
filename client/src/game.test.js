@@ -79,7 +79,7 @@ test("a new game deals a random count of distinct 2 tiles", () => {
     const few = createInitialTiles(() => 0);
     assert.equal(few.length, MIN_START_TILES);
     assert.ok(few.every((tile) => tile.value === 2));
-    assert.notDeepEqual([few[0].row, few[0].col], [few[1].row, few[1].col]);
+    assert.equal(new Set(few.map((tile) => `${tile.row},${tile.col}`)).size, MIN_START_TILES);
 
     // () => 0.99 → count = MAX_START_TILES; cell picks still advance through empties.
     const many = createInitialTiles(() => 0.99);
@@ -107,7 +107,12 @@ test("tile ids come from the tiles in play, not from earlier games", () => {
     const empty = [0, 0, 0, 0];
     // Play a move first. The game after it must still number its tiles from 1.
     applyMove(board([[2, 0, 0, 0], empty, empty, empty]), "right", () => 0);
-    const tiles = createInitialTiles(() => 0);
+    // Force two opening tiles so a merge leaves room to assert the spawn id.
+    const span = MAX_START_TILES - MIN_START_TILES + 1;
+    const twoRoll = (2 - MIN_START_TILES + 0.5) / span;
+    let calls = 0;
+    const random = () => (calls++ === 0 ? twoRoll : 0);
+    const tiles = createInitialTiles(random);
     assert.deepEqual(tiles.map((tile) => tile.id), [1, 2]);
 
     // Those two 2s combine toward the right, so the new tile is id 3.
