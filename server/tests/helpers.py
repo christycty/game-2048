@@ -25,7 +25,7 @@ E2E_SUGGEST_CALLS = E2E_BOARD_COUNT * E2E_RUN_COUNT
 # Shared e2e suggest_client rate-limit budget. Intentionally loose above the
 # parametrized matrix so adding another @pytest.mark.e2e LLM POST does not
 # require a paired constant bump (extras: traceparent, metrics, cancel beacon,
-# ASGI disconnect cancel). Settings caps suggest_rate_limit_requests at 30.
+# ASGI disconnect cancel). Stay well under the LLM hard-ceiling default (60).
 E2E_RATE_LIMIT_REQUESTS = 24
 assert E2E_RATE_LIMIT_REQUESTS > E2E_SUGGEST_CALLS
 
@@ -39,9 +39,10 @@ ISOLATED_SETTINGS_DEFAULTS: dict[str, object] = {
     "llm_max_attempts": 3,
     "llm_attempt_timeout_seconds": 20,
     "llm_suggest_budget_seconds": 40,
-    "suggest_rate_limit_requests": 5,
+    "suggest_rate_limit_requests": 60,
     "suggest_rate_limit_expectimax_requests": 30,
     "suggest_rate_limit_window_seconds": 60,
+    "llm_max_in_flight": 1,
     "client_host_port": 5173,
     "phoenix_collector_endpoint": "http://phoenix.test",
     "phoenix_api_key": None,

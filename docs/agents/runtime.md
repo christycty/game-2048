@@ -62,14 +62,20 @@ Dev client mounts `./client` and keeps Linux `node_modules` in a named volume. `
 
 ### Suggestion rate limit
 
-The API caps suggestions **per mode** for the whole process (shared window via `SUGGEST_RATE_LIMIT_WINDOW_SECONDS`, default 60s):
+Two layers for **LLM**; Expectimax keeps a separate cheap window.
+
+**Layer 1 — hard ceiling (spend / runaway safety):** per-mode sliding window (`SUGGEST_RATE_LIMIT_WINDOW_SECONDS`, default 60s):
 
 | Mode | Env | Default |
 |---|---|---|
-| LLM | `SUGGEST_RATE_LIMIT_REQUESTS` | 5 |
+| LLM | `SUGGEST_RATE_LIMIT_REQUESTS` | 60 |
 | Expectimax | `SUGGEST_RATE_LIMIT_EXPECTIMAX_REQUESTS` | 30 |
 
-Over the limit returns `429` with `Retry-After`. The cap is not per browser: in prod the only caller is nginx. The LLM bucket bounds model time; Expectimax is higher so Auto Play can run without spending the LLM quota. A mid-run cancel (`499`) releases **that request’s** rate-limit token so Stop/disconnect does not burn the mode cap or a sibling’s hit.
+**Layer 2 — LLM capacity gate:** `LLM_MAX_IN_FLIGHT` (default `1`) limits concurrent LLM `/suggest` calls admitted to Ollama. This is the real throttle for Auto Play. Expectimax does not take a slot.
+
+Either layer returns `429` with `Retry-After` (same client UX). The caps are not per browser: in prod the only caller is nginx. A mid-run cancel (`499`) releases **that request’s** hard-ceiling token and its in-flight slot so Stop/disconnect does not burn the mode cap, a sibling’s hit, or capacity. Auto Play may still hit the hard ceiling only as a safety net; under normal serial play the capacity gate dominates.
+
+**Verify (no code reading):** from `server/`, `pytest tests/test_rate_limit.py tests/test_suggest.py tests/test_cancel.py -q` — expect gate unit tests, capacity/hard-ceiling HTTP cases, cancel frees the in-flight slot, and concurrent LLM isolation with `LLM_MAX_IN_FLIGHT=2`. Broader load/checklist follow-up: parent `plan/verification-ladder.md`.
 
 ### Metrics profile
 

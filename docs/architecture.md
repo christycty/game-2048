@@ -28,11 +28,15 @@ flowchart TB
 flowchart TD
   A[Receive board + mode] --> V{Valid payload?}
   V -->|no| U[422]
-  V -->|yes| R{Rate limit?}
+  V -->|yes| R{Hard ceiling?}
   R -->|over| T[429 Retry-After]
-  R -->|ok| B{Legal moves?}
+  R -->|ok| M{mode}
+  M -->|expectimax| B{Legal moves?}
+  M -->|llm| Cap{In-flight slot?}
+  Cap -->|full| T
+  Cap -->|ok| B
   B -->|none| C[409]
-  B -->|yes| D{mode}
+  B -->|yes| D{mode work}
   D -->|expectimax| E[Depth-limited search + score reason]
   D -->|llm| F[Ollama chat with retries]
   F -->|valid move + reason| G[source: llm]
@@ -44,9 +48,9 @@ flowchart TD
   H --> J
 ```
 
-Validation (`422`) runs before the rate-limit gate; invalid bodies do not consume either mode’s cap.
+Validation (`422`) runs before the rate-limit gates; invalid bodies do not consume either mode’s hard ceiling or an LLM in-flight slot.
 
-The API stays healthy when Ollama is down (`GET /health` never calls the model). Expectimax never calls Ollama. The client only offers **Play** (or auto-applies under **Auto Play**) when the suggestion is usable—not on fallback, rate limit, or transport errors. Auto Play is entirely client-side: it loops suggest → apply → settle without changing the API. **Stop** / takeover aborts the in-flight `/suggest` fetch; the server watches for disconnect and cancels that request’s LLM/search work only (concurrent clients are supported in-process), responds `499`, and refunds that request’s rate-limit token. The client treats abort and `499` as silent (`AbortError`); a token-matched abort still ends Auto Play so the loop cannot stall.
+The API stays healthy when Ollama is down (`GET /health` never calls the model). Expectimax never calls Ollama. The client only offers **Play** (or auto-applies under **Auto Play**) when the suggestion is usable—not on fallback, rate limit, or transport errors. Auto Play is entirely client-side: it loops suggest → apply → settle without changing the API. **Stop** / takeover aborts the in-flight `/suggest` fetch; the server watches for disconnect and cancels that request’s LLM/search work only (concurrent clients are supported in-process), responds `499`, refunds that request’s hard-ceiling token, and frees its LLM in-flight slot. The client treats abort and `499` as silent (`AbortError`); a token-matched abort still ends Auto Play so the loop cannot stall.
 
 ## Coarse module map
 

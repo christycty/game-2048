@@ -408,6 +408,8 @@ def test_asgi_disconnect_cancels_blocking_llm() -> None:
     settings = isolated_settings(
         suggest_rate_limit_requests=10,
         suggest_rate_limit_expectimax_requests=10,
+        # Isolation test needs two LLM slots; production default is 1.
+        llm_max_in_flight=2,
     )
     app = create_app(settings, llm)
     body = json.dumps({"board": OPEN_BOARD, "mode": "llm"}).encode()
@@ -541,6 +543,64 @@ def test_asgi_disconnect_cancels_blocking_expectimax(
         assert status_b == 200
 
     asyncio.run(run())
+
+
+def test_cancelled_suggest_releases_llm_in_flight_slot() -> None:
+    """499 must free the capacity slot so the next LLM suggest is admitted."""
+    from app.rate_limit import LlmInFlightGate
+
+    llm = BlockingLLM()
+    gate = LlmInFlightGate(1)
+    settings = isolated_settings(suggest_rate_limit_requests=10, llm_max_in_flight=1)
+    app = create_app(settings, llm, llm_in_flight=gate)
+    body = json.dumps({"board": OPEN_BOARD, "mode": "llm"}).encode()
+
+    async def call_and_disconnect() -> int | None:
+        scope = {
+            "type": "http",
+            "asgi": {"version": "3.0"},
+            "http_version": "1.1",
+            "method": "POST",
+            "scheme": "http",
+            "path": "/suggest",
+            "raw_path": b"/suggest",
+            "query_string": b"",
+            "headers": [
+                (b"host", b"test"),
+                (b"content-type", b"application/json"),
+                (b"content-length", str(len(body)).encode()),
+            ],
+            "client": ("127.0.0.1", 50000),
+            "server": ("test", 80),
+            "state": {},
+        }
+        messages: list[dict] = [{"type": "http.request", "body": body, "more_body": False}]
+        disconnect = asyncio.Event()
+        sent: list[dict] = []
+
+        async def receive() -> dict:
+            if messages:
+                return messages.pop(0)
+            await disconnect.wait()
+            return {"type": "http.disconnect"}
+
+        async def send(message: dict) -> None:
+            sent.append(message)
+
+        task = asyncio.create_task(app(scope, receive, send))
+        assert await asyncio.to_thread(llm.started.wait, 2)
+        disconnect.set()
+        await asyncio.wait_for(task, timeout=3)
+        return next(
+            (m.get("status") for m in sent if m.get("type") == "http.response.start"),
+            None,
+        )
+
+    assert asyncio.run(call_and_disconnect()) == 499
+    llm.release.set()
+    # Slot freed in finally: a fresh suggest must not get capacity 429.
+    with TestClient(app) as client:
+        assert client.post("/suggest", json={"board": OPEN_BOARD, "mode": "llm"}).status_code == 200
 
 
 def test_cancelled_suggest_refunds_rate_limit_hit() -> None:
