@@ -36,4 +36,4 @@ Auto Play can start from a fresh suggest or from a pending **Play** move. If one
 
 ## Cover each loop exit that re-enables controls
 
-Happy-path loop tests are not enough. For an async suggest → apply → settle → gap cycle, assert the control-enabling state after every exit the product promises: **Stop** (including during the gap), **New Game**, loss, fallback, rate limit / transport failure, and manual takeover. Prefer checking `aria-pressed`, disabled **AI**, and that no further `suggestMove` / `applyMove` runs after the exit.
+Happy-path loop tests are not enough. For an async suggest → apply → settle → gap cycle, assert the control-enabling state after every exit the product promises: **Stop** (including during the gap), **New Game**, loss, fallback, spend hard-ceiling 429, exhausted capacity retries, transport failure, and manual takeover. Capacity-busy retries must keep Auto Play on until exhaustion. Prefer checking `aria-pressed`, disabled **AI**, and that no further `suggestMove` / `applyMove` runs after the exit.

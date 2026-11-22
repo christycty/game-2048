@@ -12,13 +12,22 @@ from starlette.types import ASGIApp, Receive, Scope, Send
 from app.cancel import SuggestCancelled
 from app.config import Settings
 from app.llm import LlmClient, OllamaClient
-from app.rate_limit import LlmInFlightGate, SuggestRateLimiter
+from app.rate_limit import (
+    DETAIL_MODEL_BUSY,
+    DETAIL_SPEND_CAP,
+    HEADER_SUGGEST_LIMIT,
+    LIMIT_REASON_CAPACITY,
+    LIMIT_REASON_SPEND,
+    LlmInFlightGate,
+    SuggestRateLimiter,
+)
 from app.schemas import ClientEventRequest, HealthResponse, SuggestRequest, SuggestResponse
 from app.suggester import MoveSuggester, NoLegalMove
 from app.telemetry import (
     mark_chain_io,
     mark_span_error,
     record_client_suggest_outcome,
+    record_suggest_limit_reject,
     set_json_io,
     setup_telemetry,
     shutdown_telemetry,
@@ -135,7 +144,7 @@ def create_app(
     def health() -> HealthResponse:
         return HealthResponse(status="ok")
 
-    # Thin client beacons: fail / rate_limit / cancel counts for Grafana. Not traced
+    # Thin client beacons: fail / rate_limit / model_busy / cancel for Grafana. Not traced
     # (see _EXCLUDED_URLS).
     @app.post("/client-events", status_code=204, include_in_schema=False)
     def client_events(body: ClientEventRequest) -> None:
@@ -146,10 +155,14 @@ def create_app(
         # Layer 1: per-mode sliding-window hard ceiling (spend / runaway safety).
         gate = limiters[body.mode].allow()
         if gate.retry_after is not None:
+            record_suggest_limit_reject(LIMIT_REASON_SPEND)
             raise HTTPException(
                 status_code=429,
-                detail="too many suggestions",
-                headers={"Retry-After": str(gate.retry_after)},
+                detail=DETAIL_SPEND_CAP,
+                headers={
+                    "Retry-After": str(gate.retry_after),
+                    HEADER_SUGGEST_LIMIT: LIMIT_REASON_SPEND,
+                },
             )
         # Layer 2 (LLM only): in-flight capacity before calling Ollama.
         slot: object | None = None
@@ -159,10 +172,14 @@ def create_app(
                 # Rejected before Ollama — do not burn the hard-ceiling hit.
                 if gate.token is not None:
                     limiters[body.mode].release(gate.token)
+                record_suggest_limit_reject(LIMIT_REASON_CAPACITY)
                 raise HTTPException(
                     status_code=429,
-                    detail="too many suggestions",
-                    headers={"Retry-After": str(capacity.retry_after)},
+                    detail=DETAIL_MODEL_BUSY,
+                    headers={
+                        "Retry-After": str(capacity.retry_after),
+                        HEADER_SUGGEST_LIMIT: LIMIT_REASON_CAPACITY,
+                    },
                 )
             slot = capacity.token
         # try starts immediately after acquire so a pre-suggester failure cannot leak the slot

@@ -51,7 +51,7 @@ Undo, cloud best scores, auth, multiplayer, deep tournament-strength search, nat
 - A visitor can play, lose, and start over without confusion.
 - Best score survives **New Game** on the same page load; a full reload resets it.
 - LLM or Expectimax suggest → reason → **Play** applies the move like any other input.
-- **Auto Play** applies usable suggestions in a loop until Stop, loss, failure, or a manual move, using the currently selected mode. Stop / takeover aborts an in-flight suggest (server cancels that run).
+- **Auto Play** applies usable suggestions in a loop until Stop, loss, failure, or a manual move, using the currently selected mode. Capacity-busy responses retry briefly; spend rate limits stop the loop. Stop / takeover aborts an in-flight suggest (server cancels that run).
 - A failed suggestion leaves the board unchanged with a clear message; abort / disconnect cancel is silent.
 
 Full product rules for implementers: [agents/prd.md](agents/prd.md).
