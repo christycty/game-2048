@@ -174,6 +174,23 @@ def test_client_events_rate_limit_is_429_and_skips_counter() -> None:
     assert _labeled_counter(text, PROM_CLIENT_SUGGEST_OUTCOME, 'outcome="fail"') == 1.0
 
 
+def test_client_events_bad_payload_is_422_and_skips_rate_limit() -> None:
+    client = TestClient(
+        create_app(
+            isolated_settings(
+                app_env="prod",
+                client_events_rate_limit_requests=1,
+                client_events_rate_limit_window_seconds=60,
+            ),
+            _UnusedLLM(),
+        )
+    )
+    assert client.post("/client-events", json={"outcome": "success"}).status_code == 422
+    assert client.post("/client-events", json={}).status_code == 422
+    # Validation must not consume the beacon integrity cap.
+    assert client.post("/client-events", json={"outcome": "fail"}).status_code == 204
+
+
 def test_client_events_and_suggest_rate_limits_are_independent() -> None:
     settings = isolated_settings(
         app_env="prod",

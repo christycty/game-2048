@@ -1,5 +1,6 @@
 .env
 plan.md
+plan/
 __pycache__/
 *.py[cod]
 .venv/

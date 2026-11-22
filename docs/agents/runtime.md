@@ -75,11 +75,11 @@ Two layers for **LLM**; Expectimax keeps a separate cheap window.
 
 Either layer returns `429` with `Retry-After` (same client UX). The caps are not per browser: in prod the only caller is nginx. A mid-run cancel (`499`) releases **that request’s** hard-ceiling token and its in-flight slot so Stop/disconnect does not burn the mode cap, a sibling’s hit, or capacity. Auto Play may still hit the hard ceiling only as a safety net; under normal serial play the capacity gate dominates.
 
-**Verify (no code reading):** from `server/`, `pytest tests/test_rate_limit.py tests/test_suggest.py tests/test_cancel.py -q` — expect gate unit tests, capacity/hard-ceiling HTTP cases, cancel frees the in-flight slot, and concurrent LLM isolation with `LLM_MAX_IN_FLIGHT=2`. Broader load/checklist follow-up: parent `plan/verification-ladder.md`.
+**Verify (no code reading):** from `server/`, `pytest tests/test_rate_limit.py tests/test_suggest.py tests/test_cancel.py -q` — expect gate unit tests, capacity/hard-ceiling HTTP cases, cancel frees the in-flight slot, and concurrent LLM isolation with `LLM_MAX_IN_FLIGHT=2`.
 
 ### Client-events integrity gate
 
-`POST /client-events` has its own process-wide sliding window (`CLIENT_EVENTS_RATE_LIMIT_REQUESTS` / `CLIENT_EVENTS_RATE_LIMIT_WINDOW_SECONDS`, default 60 / 60s), separate from the suggest buckets. Over the cap → `429` + `Retry-After` and no scrape bump. This is ops metric trust (harder to spam Grafana casually), not player auth. The page already ignores beacon failures.
+`POST /client-events` has its own process-wide sliding window (`CLIENT_EVENTS_RATE_LIMIT_REQUESTS` / `CLIENT_EVENTS_RATE_LIMIT_WINDOW_SECONDS`, default 60 / 60s), separate from the suggest buckets. Over the cap → `429` + `Retry-After` and no scrape bump. Compose passes the same env names from the root `.env` (like the suggest caps). This is ops metric trust (harder to spam Grafana casually), not player auth. The page already ignores beacon failures.
 
 **Verify:** `pytest tests/test_suggest_http_contract.py -q` — beacons under the cap still `204` + scrape series; exhausted cap → `429` with counter unchanged; suggest and beacon limits stay independent.
 
