@@ -302,6 +302,95 @@ def test_capacity_reject_does_not_burn_hard_ceiling() -> None:
     holder.join(timeout=3)
 
 
+def test_llm_in_flight_two_slots_third_blocked_until_one_finishes() -> None:
+    """max_in_flight=2 admits two holders; a third gets capacity 429 until one releases."""
+    llm = _BlockingLLM()
+    settings = isolated_settings(suggest_rate_limit_requests=20, llm_max_in_flight=2)
+    app = create_app(settings, llm)
+    body = {"board": OPEN_BOARD, "mode": "llm"}
+    results: dict[str, int] = {}
+
+    def hold(name: str) -> None:
+        with TestClient(app) as client:
+            results[name] = client.post("/suggest", json=body).status_code
+
+    a = threading.Thread(target=hold, args=("a",))
+    b = threading.Thread(target=hold, args=("b",))
+    a.start()
+    b.start()
+    deadline = time.monotonic() + 2
+    while llm.calls < 2 and time.monotonic() < deadline:
+        time.sleep(0.01)
+    assert llm.calls == 2
+
+    with TestClient(app) as client:
+        blocked = client.post("/suggest", json=body)
+        assert blocked.status_code == 429
+        assert blocked.headers["retry-after"] == "1"
+        assert llm.calls == 2
+
+        llm.release.set()
+        a.join(timeout=3)
+        b.join(timeout=3)
+        assert results == {"a": 200, "b": 200}
+        assert client.post("/suggest", json=body).status_code == 200
+        assert llm.calls == 3
+
+
+def test_invalid_body_and_stuck_board_do_not_leak_capacity() -> None:
+    """422 never takes a slot; 409 releases the slot so the next LLM suggest admits."""
+    llm = FakeLLM(["right", "right"])
+    settings = isolated_settings(suggest_rate_limit_requests=10, llm_max_in_flight=1)
+    client = TestClient(create_app(settings, llm))
+
+    bad = client.post("/suggest", json={"board": OPEN_BOARD, "mode": "random"})
+    assert bad.status_code == 422
+    assert llm.calls == 0
+
+    stuck = client.post("/suggest", json={"board": STUCK_BOARD, "mode": "llm"})
+    assert stuck.status_code == 409
+    assert llm.calls == 0
+
+    ok = client.post("/suggest", json={"board": OPEN_BOARD, "mode": "llm"})
+    assert ok.status_code == 200
+    assert llm.calls == 1
+
+
+def test_concurrent_llm_suggests_fail_fast_without_leaking_capacity() -> None:
+    """Light concurrency: max_in_flight=1 fail-fast 429s under overlap; slot free after drain."""
+    workers = 8
+    llm = FakeLLM(["right"] * (workers + 1))
+    settings = isolated_settings(suggest_rate_limit_requests=50, llm_max_in_flight=1)
+    app = create_app(settings, llm)
+    body = {"board": OPEN_BOARD, "mode": "llm"}
+    statuses: list[int] = []
+    lock = threading.Lock()
+
+    def one() -> None:
+        with TestClient(app) as client:
+            status = client.post("/suggest", json=body).status_code
+            with lock:
+                statuses.append(status)
+
+    threads = [threading.Thread(target=one) for _ in range(workers)]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join(timeout=5)
+        assert not thread.is_alive()
+
+    ok = statuses.count(200)
+    busy = statuses.count(429)
+    assert ok + busy == workers
+    assert ok >= 1
+    assert busy >= 1  # overlap must hit the capacity gate
+    assert llm.calls == ok
+    # After drain, the slot is free (v1 has no queue — retries are a follow-up).
+    with TestClient(app) as client:
+        assert client.post("/suggest", json=body).status_code == 200
+        assert llm.calls == ok + 1
+
+
 def test_e2e_rate_limit_covers_parametrized_volume() -> None:
     """A shared app sized like the e2e fixture survives the full parametrized volume."""
     llm = FakeLLM(["right"] * E2E_SUGGEST_CALLS)

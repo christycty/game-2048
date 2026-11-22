@@ -1,6 +1,13 @@
 """Unit tests for sliding-window and LLM in-flight gates (no HTTP)."""
 
+import pytest
+
 from app.rate_limit import LlmInFlightGate
+
+
+def test_llm_in_flight_rejects_non_positive_max() -> None:
+    with pytest.raises(ValueError, match="max_in_flight"):
+        LlmInFlightGate(0)
 
 
 def test_llm_in_flight_admits_up_to_max() -> None:
@@ -12,6 +19,16 @@ def test_llm_in_flight_admits_up_to_max() -> None:
     blocked = gate.acquire()
     assert blocked.token is None
     assert blocked.retry_after == 1
+
+
+def test_llm_in_flight_release_none_is_noop() -> None:
+    gate = LlmInFlightGate(1)
+    held = gate.acquire()
+    assert held.token is not None
+    gate.release(None)
+    assert gate.acquire().token is None
+    gate.release(held.token)
+    assert gate.acquire().retry_after is None
 
 
 def test_llm_in_flight_release_only_frees_matching_token() -> None:
