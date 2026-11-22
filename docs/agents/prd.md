@@ -89,8 +89,8 @@ A release matches this product when:
 - A new visitor can start a game, move with keys or swipe, see score update, lose, and start over without confusion.
 - Best score survives New Game within the same page load and resets on full reload.
 - The player can request an LLM or Expectimax suggestion, read the reason when one is returned, confirm with **Play**, and see that move applied like any other move.
-- The player can start **Auto Play** in the selected mode, watch usable suggestions apply in a loop, and stop with **Stop**, New Game, a manual move, loss, or a failed suggestion.
-- A failed or unusable suggestion leaves the board unchanged and shows a clear failure message (including a distinct rate-limit message).
+- The player can start **Auto Play** in the selected mode, watch usable suggestions apply in a loop, and stop with **Stop**, New Game, a manual move, loss, or a failed suggestion. Abort / server cancel during Thinking ends the loop without a failure hint.
+- A failed or unusable suggestion leaves the board unchanged and shows a clear failure message (including a distinct rate-limit message). Abort is silent (not a failure message).
 - Expectimax returns a legal search move with a per-direction score line the player can read.
 
 ## Open product decisions

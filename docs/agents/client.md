@@ -27,7 +27,7 @@ Stack: React 19, Vite, plain JavaScript. The page title is 2048. The app mounts 
 | `src/App.jsx` | Score, best score, tiles, loss, AI suggestion and Auto Play state. Owns input and the slide timer. |
 | `src/game.js` | Board rules. Pure functions. No DOM. Includes `tilesToBoard` for the API. |
 | `src/swipe.js` | Turns a pointer delta into a direction. |
-| `src/api.js` | `POST /suggest`. Throws `SuggestError` on network, HTTP, or unusable body. |
+| `src/api.js` | `POST /suggest` with optional `AbortSignal`. Throws `SuggestError` on network, HTTP, or unusable body; preserves / maps abort (including HTTP `499` and aborted-but-resolved responses) as `AbortError`. |
 | `src/utils.js` | Unused `getRandomInt`. Moves pass `Math.random` in instead. |
 | `src/components/Board.jsx` | Cells, sliding tiles, game-over overlay, pointer gestures. |
 | `src/components/ScoreCard.jsx` | Title, help, SCORE, BEST. |
