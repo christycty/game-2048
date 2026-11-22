@@ -227,6 +227,63 @@ test("a won game shows You win and ignores later moves", () => {
     expect(applyMove).toHaveBeenCalledTimes(1);
 });
 
+test("a new game clears a win and accepts another move", () => {
+    createInitialTiles.mockReset();
+    createInitialTiles.mockReturnValueOnce(opening).mockReturnValueOnce(restarted);
+    const resolved = [{ id: 1, row: 0, col: 0, value: 2048 }];
+    applyMove
+        .mockReturnValueOnce({
+            moved: true,
+            scoreGained: 2048,
+            visualTiles: resolved,
+            resolvedTiles: resolved,
+            lost: false,
+            won: true,
+        })
+        .mockReturnValueOnce({
+            moved: true,
+            scoreGained: 2,
+            visualTiles: [{ id: 9, row: 2, col: 2, value: 8, sliding: true }],
+            resolvedTiles: restarted,
+            lost: false,
+            won: false,
+        });
+
+    render(<App />);
+    press("ArrowUp");
+    act(() => {
+        vi.advanceTimersByTime(SETTLE_MS);
+    });
+    expect(screen.getByText("You win!")).toBeTruthy();
+
+    fireEvent.click(screen.getByRole("button", { name: "New Game" }));
+    expect(screen.queryByText("You win!")).toBeNull();
+
+    press("ArrowLeft");
+    expect(applyMove).toHaveBeenLastCalledWith(restarted, "left");
+});
+
+test("a new game shows the opening deal size from createInitialTiles", () => {
+    const dense = [
+        { id: 1, row: 0, col: 0, value: 2 },
+        { id: 2, row: 0, col: 1, value: 2 },
+        { id: 3, row: 0, col: 2, value: 2 },
+        { id: 4, row: 0, col: 3, value: 2 },
+        { id: 5, row: 1, col: 0, value: 2 },
+    ];
+    createInitialTiles.mockReset();
+    createInitialTiles.mockReturnValueOnce(opening).mockReturnValueOnce(dense);
+
+    render(<App />);
+    expect(document.querySelectorAll(".tile-inner")).toHaveLength(1);
+
+    fireEvent.click(screen.getByRole("button", { name: "New Game" }));
+    expect(document.querySelectorAll(".tile-inner")).toHaveLength(5);
+    expect([...document.querySelectorAll(".tile-inner")].every((node) => node.textContent === "2")).toBe(
+        true,
+    );
+});
+
 test("a move that does not change the board can be followed immediately", () => {
     applyMove.mockReturnValue({
         moved: false,
@@ -1163,6 +1220,43 @@ test("a loss during auto play stops the loop", async () => {
     );
     expect(suggestMove).toHaveBeenCalledTimes(1);
     expect(applyMove).toHaveBeenCalledTimes(1);
+});
+
+test("a win during auto play stops the loop", async () => {
+    suggestMove.mockResolvedValue({
+        move: "left",
+        mode: "expectimax",
+        source: "expectimax",
+        reason: null,
+    });
+    applyMove.mockReturnValue({
+        moved: true,
+        scoreGained: 2048,
+        visualTiles: [{ id: 1, row: 0, col: 0, value: 1024, fromRow: 0, fromCol: 1, sliding: true }],
+        resolvedTiles: [{ id: 1, row: 0, col: 0, value: 2048, isMerged: true }],
+        lost: false,
+        won: true,
+    });
+
+    render(<App />);
+    fireEvent.click(screen.getByRole("button", { name: "Auto Play" }));
+
+    await act(async () => {
+        await Promise.resolve();
+    });
+
+    await act(async () => {
+        vi.advanceTimersByTime(SETTLE_MS + AUTO_PLAY_GAP_MS);
+        await Promise.resolve();
+    });
+
+    expect(screen.getByText("You win!")).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Auto Play" }).getAttribute("aria-pressed")).toBe(
+        "false",
+    );
+    expect(suggestMove).toHaveBeenCalledTimes(1);
+    expect(applyMove).toHaveBeenCalledTimes(1);
+    expect(screen.getByRole("button", { name: "AI" }).disabled).toBe(true);
 });
 
 test("a rate limit during auto play stops the loop", async () => {

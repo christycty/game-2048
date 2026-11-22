@@ -4,7 +4,9 @@ import pytest
 
 from app.expectimax import (
     _BUDGET_SECONDS,
+    _GAME_WON,
     _chance_value,
+    _evaluate,
     _freeze,
     _SearchBroken,
     choose_move,
@@ -166,7 +168,7 @@ def test_a_full_board_that_can_merge_is_not_lost() -> None:
         [64, 128, 256, 512],
     ]
     assert first_legal_move(board) == "left"
-    assert choose_move(board).move in legal_moves(board)
+    assert choose_move(board).move == "right"
 
 
 def test_prefers_a_move_that_creates_2048() -> None:
@@ -179,6 +181,35 @@ def test_prefers_a_move_that_creates_2048() -> None:
     assert "left" in legal_moves(board)
     assert choose_move(board, depth=0).move == "left"
     assert choose_move(board).move == "left"
+
+
+def test_winning_chance_scores_above_any_heuristic_and_prefers_sooner_wins() -> None:
+    # A dense non-winning board still scores far below the win terminal.
+    strong = _freeze(
+        [
+            [1024, 512, 256, 128],
+            [64, 32, 16, 8],
+            [4, 2, 0, 0],
+            [0, 0, 0, 0],
+        ]
+    )
+    assert _evaluate(strong) < _GAME_WON
+
+    won = _freeze(
+        [
+            [2048, 2, 4, 8],
+            [16, 32, 64, 128],
+            [0, 0, 0, 0],
+            [0, 0, 0, 0],
+        ]
+    )
+    # Short-circuit before spawn averaging; +depth makes an earlier win score higher.
+    shallow = _chance_value(won, 0, {})
+    deeper = _chance_value(won, 2, {})
+    assert shallow == _GAME_WON
+    assert deeper == _GAME_WON + 2
+    assert deeper > shallow
+    assert deeper > _evaluate(strong)
 
 
 def test_a_max_tile_pair_merges_instead_of_sliding() -> None:

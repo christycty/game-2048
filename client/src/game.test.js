@@ -89,6 +89,20 @@ test("a new game deals a random count of distinct 2 tiles", () => {
     assert.equal(cells.size, MAX_START_TILES);
 });
 
+test("every opening count from min to max is reachable", () => {
+    const span = MAX_START_TILES - MIN_START_TILES + 1;
+    for (let count = MIN_START_TILES; count <= MAX_START_TILES; count++) {
+        // First roll picks the count bucket; later rolls pick the first empty cell / sole choice.
+        const countRoll = (count - MIN_START_TILES + 0.5) / span;
+        let calls = 0;
+        const random = () => (calls++ === 0 ? countRoll : 0);
+        const tiles = createInitialTiles(random);
+        assert.equal(tiles.length, count, `count ${count}`);
+        assert.ok(tiles.every((tile) => tile.value === 2));
+        assert.equal(new Set(tiles.map((tile) => `${tile.row},${tile.col}`)).size, count);
+    }
+});
+
 test("tile ids come from the tiles in play, not from earlier games", () => {
     const empty = [0, 0, 0, 0];
     // Play a move first. The game after it must still number its tiles from 1.
