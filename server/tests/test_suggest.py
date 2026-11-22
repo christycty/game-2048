@@ -437,8 +437,9 @@ def test_ollama_client_parses_structured_output() -> None:
         )
 
     transport = httpx.MockTransport(handler)
+    settings = isolated_settings(ollama_structured_output=True)
     with httpx.Client(transport=transport, base_url="http://ollama.test") as http:
-        suggestion = OllamaClient(isolated_settings(), client=http).suggest_move(
+        suggestion = OllamaClient(settings, client=http).suggest_move(
             OPEN_BOARD,
             legal=["right", "down"],
             rejected=[],

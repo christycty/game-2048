@@ -29,7 +29,7 @@ ISOLATED_SETTINGS_DEFAULTS: dict[str, object] = {
     "app_env": "dev",
     "ollama_base_url": "http://ollama.test",
     "ollama_model": "test-model",
-    "ollama_structured_output": True,
+    "ollama_structured_output": False,
     "llm_max_attempts": 3,
     "llm_attempt_timeout_seconds": 20,
     "llm_suggest_budget_seconds": 40,

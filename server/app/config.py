@@ -10,8 +10,8 @@ class Settings(BaseSettings):
     app_env: Literal["dev", "prod"] = "dev"
     ollama_base_url: str = "http://localhost:11434"
     ollama_model: str = "gemma4:latest"
-    # Dev can opt into a JSON schema. Prod always parses plain JSON from the prompt.
-    ollama_structured_output: bool = True
+    # Opt in to a JSON schema. Off by default; prod always keeps it off.
+    ollama_structured_output: bool = False
     # One hung call must not consume the whole suggestion, and the env cannot raise these.
     llm_max_attempts: int = Field(default=3, ge=1, le=5)
     llm_attempt_timeout_seconds: float = Field(default=20, gt=0, le=20)
