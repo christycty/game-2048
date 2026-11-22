@@ -87,3 +87,16 @@ test("suggestMove preserves AbortError instead of wrapping it", async () => {
         (error) => isAbortError(error) && !(error instanceof SuggestError),
     );
 });
+
+test("suggestMove maps a non-AbortError to AbortError when the signal is already aborted", async () => {
+    const controller = new AbortController();
+    controller.abort();
+    const fetchImpl = async () => {
+        throw new TypeError("Failed to fetch");
+    };
+
+    await assert.rejects(
+        () => suggestMove(BOARD, "llm", { fetch: fetchImpl, signal: controller.signal }),
+        (error) => isAbortError(error) && !(error instanceof SuggestError),
+    );
+});
