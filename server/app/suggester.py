@@ -84,7 +84,9 @@ class MoveSuggester:
             # Start a call only when the remaining budget covers its timeout.
             deadline = self._clock() + self._budget_seconds
             for attempt in range(1, self._max_attempts + 1):
-                raise_if_cancelled()
+                # Do not raise_if_cancelled here: enter suggest_move so a
+                # between-attempt abort still opens an ollama span and records
+                # gen_ai cancelled. Pre-loop cancel stays above (no GenAI series).
                 remaining = deadline - self._clock()
                 if remaining < self._attempt_timeout_seconds:
                     failures.append("time budget")

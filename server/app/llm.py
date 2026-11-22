@@ -61,9 +61,8 @@ class OllamaClient:
         invalid_reply: bool,
         cancel: threading.Event | None = None,
     ) -> ModelSuggestion:
-        if cancel is not None and cancel.is_set():
-            raise SuggestCancelled()
-
+        # Cancel already set is handled inside the span via _post_chat so the
+        # attempt still records gen_ai cancelled (not a silent pre-span raise).
         prompt = _prompt(
             board,
             legal=legal,
@@ -81,7 +80,12 @@ class OllamaClient:
         # Event stamps need a unix time; the duration stays on a monotonic clock.
         started_ns = time.time_ns()
         wall_start = time.perf_counter()
-        with tel.tracer().start_as_current_span("ollama chat") as span:
+        # Manual status: cancel must not look like a model ERROR in Phoenix.
+        with tel.tracer().start_as_current_span(
+            "ollama chat",
+            record_exception=False,
+            set_status_on_exception=False,
+        ) as span:
             tel.annotate_llm_span(span, self._model)
             # Attach the prompt now so a failed request still has it.
             tel.set_llm_messages(
@@ -96,7 +100,11 @@ class OllamaClient:
             try:
                 body = self._post_chat(payload, cancel)
             except SuggestCancelled:
-                tel.mark_span_error(span, SuggestCancelled())
+                tel.record_llm_request_count(
+                    self._model,
+                    outcome=tel.REQUEST_OUTCOME_CANCELLED,
+                )
+                tel.mark_span_cancelled(span)
                 raise
             except httpx.TimeoutException as exc:
                 error = LlmError(f"ollama request failed: {exc}")
@@ -370,7 +378,8 @@ def _prompt(
     rows = "\n".join(" ".join(str(cell) for cell in row) for row in board)
     lines = [
         "You are playing 2048. The board is 4x4. 0 is an empty cell. "
-        "Other numbers are tile values. Choose the single best next move.",
+        "Other numbers are tile values. The goal is to reach a 2048 tile. "
+        "Choose the single best next move.",
         rows,
         f"Legal moves: {', '.join(legal)}.",
         "Choose one of those moves.",

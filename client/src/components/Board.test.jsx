@@ -53,6 +53,19 @@ test("game over stays above the tile layer", () => {
     expect(Number(getComputedStyle(parked).zIndex)).toBe(1);
 });
 
+test("you win overlay prefers win over game over", () => {
+    render(
+        <Board
+            tiles={[{ id: 1, row: 0, col: 0, value: 2048 }]}
+            lost
+            won
+            onSwipe={() => {}}
+        />,
+    );
+    expect(screen.getByText("You win!")).toBeTruthy();
+    expect(screen.queryByText("Game over")).toBeNull();
+});
+
 test("a tile starts on its old cell and slides to the new one", () => {
     let frame = null;
     // Hold the frame so the tile can be seen on its old cell, then on the new one.

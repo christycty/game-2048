@@ -70,10 +70,14 @@ PROM_CLIENT_SUGGEST_OUTCOME = "client_suggest_outcome"
 REQUEST_OUTCOME_SUCCESS = "success"
 REQUEST_OUTCOME_ERROR = "error"
 REQUEST_OUTCOME_TIMEOUT = "timeout"
-# Browser beacon outcomes (fail / rate_limit; cancel deferred until AbortSignal).
+REQUEST_OUTCOME_CANCELLED = "cancelled"
+# Browser beacon outcomes (fail / rate_limit / cancel).
 CLIENT_OUTCOME_FAIL = "fail"
 CLIENT_OUTCOME_RATE_LIMIT = "rate_limit"
-_CLIENT_OUTCOMES = frozenset({CLIENT_OUTCOME_FAIL, CLIENT_OUTCOME_RATE_LIMIT})
+CLIENT_OUTCOME_CANCEL = "cancel"
+_CLIENT_OUTCOMES = frozenset(
+    {CLIENT_OUTCOME_FAIL, CLIENT_OUTCOME_RATE_LIMIT, CLIENT_OUTCOME_CANCEL}
+)
 
 # OpenInference keys used by tests and callers.
 OPENINFERENCE_SPAN_KIND = SpanAttributes.OPENINFERENCE_SPAN_KIND
@@ -241,7 +245,7 @@ def setup_telemetry(
         request_count=meter.create_counter(
             name="gen_ai.client.request_count",
             unit="{request}",
-            description="LLM chat requests by outcome (success / error / timeout).",
+            description="LLM chat requests by outcome (success / error / timeout / cancelled).",
         ),
         suggest_source=meter.create_counter(
             name="suggest.source",
@@ -251,7 +255,7 @@ def setup_telemetry(
         client_suggest_outcome=meter.create_counter(
             name="client.suggest.outcome",
             unit="{event}",
-            description="Browser-reported suggest outcomes (fail / rate_limit).",
+            description="Browser-reported suggest outcomes (fail / rate_limit / cancel).",
         ),
     )
 
@@ -302,11 +306,25 @@ def shutdown_telemetry(app) -> None:
 @contextmanager
 def chain_span(name: str, *, input_payload: object | None = None) -> Iterator[Span]:
     """OpenInference CHAIN span for a nested application step."""
-    with tracer().start_as_current_span(name) as span:
+    # Manual status: client cancel must not look like a model ERROR in Phoenix.
+    with tracer().start_as_current_span(
+        name,
+        record_exception=False,
+        set_status_on_exception=False,
+    ) as span:
         span.set_attribute(OPENINFERENCE_SPAN_KIND, SPAN_KIND_CHAIN)
         if input_payload is not None:
             set_json_io(span, input_payload=input_payload)
-        yield span
+        try:
+            yield span
+        except Exception as exc:
+            from app.cancel import SuggestCancelled
+
+            if isinstance(exc, SuggestCancelled):
+                set_json_io(span, output_payload={"detail": "cancelled"})
+            else:
+                mark_span_error(span, exc)
+            raise
 
 
 def set_json_io(
@@ -465,7 +483,7 @@ def record_suggest_source(source: str) -> None:
 
 
 def record_client_suggest_outcome(outcome: str) -> None:
-    """Count one browser beacon for a suggest fail / rate_limit (not cancel yet)."""
+    """Count one browser beacon for a suggest fail / rate_limit / cancel."""
     if outcome not in _CLIENT_OUTCOMES:
         return
     instruments = llm_metrics()
@@ -477,6 +495,12 @@ def record_client_suggest_outcome(outcome: str) -> None:
 def mark_span_error(span: Span, error: Exception) -> None:
     span.record_exception(error)
     span.set_status(Status(StatusCode.ERROR, str(error)))
+
+
+def mark_span_cancelled(span: Span) -> None:
+    """Client abort / disconnect — not a model failure (leave status unset)."""
+    set_json_io(span, output_payload={"detail": "cancelled"})
+    span.set_status(Status(StatusCode.UNSET))
 
 
 def _operation_metric_attrs(model: str) -> dict[str, str]:

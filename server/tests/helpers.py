@@ -24,8 +24,8 @@ E2E_RUN_COUNT = 3
 E2E_SUGGEST_CALLS = E2E_BOARD_COUNT * E2E_RUN_COUNT
 # Shared e2e suggest_client rate-limit budget. Intentionally loose above the
 # parametrized matrix so adding another @pytest.mark.e2e LLM POST does not
-# require a paired constant bump (extras today: traceparent + metrics).
-# Stay well under the LLM hard-ceiling default (60).
+# require a paired constant bump (extras: traceparent, metrics, cancel beacon,
+# ASGI disconnect cancel). Stay well under the LLM hard-ceiling default (60).
 E2E_RATE_LIMIT_REQUESTS = 24
 assert E2E_RATE_LIMIT_REQUESTS > E2E_SUGGEST_CALLS
 

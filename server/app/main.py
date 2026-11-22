@@ -135,8 +135,8 @@ def create_app(
     def health() -> HealthResponse:
         return HealthResponse(status="ok")
 
-    # Thin client beacons: fail / rate_limit counts for Grafana. Not traced
-    # (see _EXCLUDED_URLS). Cancel outcome waits on AbortSignal.
+    # Thin client beacons: fail / rate_limit / cancel counts for Grafana. Not traced
+    # (see _EXCLUDED_URLS).
     @app.post("/client-events", status_code=204, include_in_schema=False)
     def client_events(body: ClientEventRequest) -> None:
         record_client_suggest_outcome(body.outcome)
@@ -173,11 +173,11 @@ def create_app(
             # Middleware installs a per-request Event; fall back for non-HTTP callers.
             cancel = getattr(request.state, "suggest_cancel", None) or threading.Event()
             result = await asyncio.to_thread(suggester.suggest, body.board, body.mode, cancel)
-        except SuggestCancelled as exc:
+        except SuggestCancelled:
             # Refund this request's hit only (token), so concurrent siblings keep theirs.
             if gate.token is not None:
                 limiters[body.mode].release(gate.token)
-            mark_span_error(span, exc)
+            # Disconnect is not a model failure — leave HTTP span unset of ERROR pollution.
             set_json_io(span, output_payload={"detail": "cancelled"})
             # 499 = client closed request (nginx convention). Best-effort if already gone.
             raise HTTPException(status_code=499, detail="client cancelled") from None

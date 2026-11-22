@@ -1,6 +1,6 @@
 # Client
 
-The playable 2048 board. A new game deals two 2s. Arrow keys and swipes slide and merge tiles. Score and best score update after each slide. The AI control asks the suggestion API for a move; the player confirms with **Play**, or turns on **Auto Play** to apply suggestions in a loop.
+The playable 2048 board. A new game deals a random count of 2s (2–8). Arrow keys and swipes slide and merge tiles. Score and best score update after each slide. Reaching 2048 is a hard win; no moves left is a loss. The AI control asks the suggestion API for a move; the player confirms with **Play**, or turns on **Auto Play** to apply suggestions in a loop.
 
 Agent/implementer detail for the client. Human architecture overview: [../architecture.md](../architecture.md). Product rules: [prd.md](prd.md).
 
@@ -27,7 +27,7 @@ Stack: React 19, Vite, plain JavaScript. The page title is 2048. The app mounts 
 | `src/App.jsx` | Score, best score, tiles, loss, AI suggestion and Auto Play state. Owns input and the slide timer. |
 | `src/game.js` | Board rules. Pure functions. No DOM. Includes `tilesToBoard` for the API. |
 | `src/swipe.js` | Turns a pointer delta into a direction. |
-| `src/api.js` | `POST /suggest` with W3C `traceparent` and optional `AbortSignal`; beacons fail/429 to `/client-events` unless `shouldReportOutcome` is false (stale token) or the signal aborted. Throws `SuggestError` on network, HTTP, or unusable body; preserves / maps abort (including HTTP `499`, aborted-but-resolved responses, and abort during `json()`) as `AbortError` (no fail beacon). |
+| `src/api.js` | `POST /suggest` with W3C `traceparent` and optional `AbortSignal`; beacons fail/429 to `/client-events` unless `shouldReportOutcome` is false (stale token). Abort / HTTP `499` beacons `cancel` (not fail) and throws `AbortError`. Throws `SuggestError` on network, HTTP, or unusable body. |
 | `src/trace.js` | Hand-rolled W3C `traceparent` (no browser OTel SDK). |
 | `src/utils.js` | Unused `getRandomInt`. Moves pass `Math.random` in instead. |
 | `src/components/Board.jsx` | Cells, sliding tiles, game-over overlay, pointer gestures. |
@@ -77,7 +77,7 @@ A manual board-changing move while Auto Play is running stops Auto Play.
 `handleSuggest`:
 
 1. Clears any previous pending move. Clears the hint only when Auto Play is off (Auto Play keeps the last hint through Thinking).
-2. Calls `suggestMove(tilesToBoard(tiles), aiMode, { signal, shouldReportOutcome })` with an `AbortController` for this request; a stale token after abandon does not beacon fail/rate_limit.
+2. Calls `suggestMove(tilesToBoard(tiles), aiMode, { signal, shouldReportOutcome })` with an `AbortController` for this request; a stale token after abandon does not beacon fail/rate_limit; abort beacons `cancel`.
 3. If `source` is `"fallback"`, shows **AI could not suggest a move**, does not offer **Play**, and stops Auto Play. The fixed fallback order is not treated as a model choice.
 4. On a usable body, shows `Suggested: {Move}.` plus the reason when present. If Auto Play is off, sets `pendingMove`. If Auto Play is on, applies the move immediately via `handleMove` (marked as an auto-apply so the loop is not treated as a manual takeover).
 5. On HTTP `429`, shows **Too many suggestions. Wait a moment and try again.**, does not offer **Play**, and stops Auto Play.
@@ -94,7 +94,7 @@ The UI does not show the response `mode` or `source` fields beyond treating `"fa
 
 The grid is 4×4. Row 0 is the top. Column 0 is the left.
 
-`createInitialTiles` places two 2s on different empty cells. Their ids are 1 and 2. A later spawn takes one more than the highest id already on that board, so a new game does not continue the previous game's ids.
+`createInitialTiles` places a uniform random count of 2s (`MIN_START_TILES`..`MAX_START_TILES`, currently 2–8) on distinct empty cells. Ids start at 1. A later spawn takes one more than the highest id already on that board, so a new game does not continue the previous game's ids.
 
 `applyMove(tiles, direction, random)`:
 
@@ -102,10 +102,12 @@ The grid is 4×4. Row 0 is the top. Column 0 is the left.
 2. Walks cells starting from the side the tiles move toward. A row of four 2s becomes two 4s, not one 8.
 3. Each tile slides through empty cells. It merges into the next tile of the same value only if that tile has not merged yet this move. The score gained is the new value.
 4. If nothing moved, there is no spawn and no score.
-5. Otherwise one tile spawns on a random empty cell: a 2, or a 4 one time in ten. The opening deal passes `[2]` so both starting tiles are 2s.
-6. The game is lost only when the board after the spawn has no empty cell and no equal neighbors.
+5. Otherwise one tile spawns on a random empty cell: a 2, or a 4 one time in ten. The opening deal passes `[2]` so starting tiles are only 2s.
+6. After the spawn: `won` if any tile is ≥ 2048; else `lost` if there is no empty cell and no equal neighbors. Win beats lose.
 
 `hasMoves` is true when any cell is empty, or when a horizontal or vertical neighbor matches. Each pair is checked once, from the top or left cell.
+
+`hasWon` is true when any tile value is ≥ `WIN_TILE` (2048).
 
 `tilesToBoard` builds the 4×4 value grid the API expects. Empty cells are `0`. Animation fields are dropped.
 
@@ -125,9 +127,9 @@ A swipe starts on pointer down (left button only for a mouse), captures the poin
 
 ## Tests
 
-- `src/game.test.js` covers the deal, ids, slides, single merges, blocked moves, spawn timing, loss, and `tilesToBoard`.
+- `src/game.test.js` covers the deal, ids, slides, single merges, blocked moves, spawn timing, win, loss, and `tilesToBoard`.
 - `src/swipe.test.js` covers the threshold and axis choice.
-- `src/api.test.js` covers same-origin `/suggest` + `traceparent`, success body, `SuggestError` statuses including 429, fail/rate_limit beacons (HTTP, network, unusable JSON / missing `move`), skipping beacons when `shouldReportOutcome` is false, re-checking that gate after the suggest await, abort during `json()` of a bad body (AbortError, no fail beacon), passing `AbortSignal`, preserving `AbortError` (no fail beacon), mapping a non-`AbortError` to `AbortError` when the signal is already aborted, and treating HTTP `499` / aborted-but-resolved responses as `AbortError`.
+- `src/api.test.js` covers same-origin `/suggest` + `traceparent`, success body, `SuggestError` statuses including 429, fail/rate_limit beacons (HTTP, network, unusable JSON / missing `move`), skipping fail/rate_limit when `shouldReportOutcome` is false, re-checking that gate after the suggest await, abort paths beaconing `cancel` (including during `json()`, HTTP `499`, aborted-but-resolved, and when `shouldReportOutcome` is false), and preserving `AbortError`.
 - `src/trace.test.js` covers W3C `traceparent` shape and retry when `getRandomValues` returns all zeros.
 - `src/App.test.jsx` covers score timing, shared swipe and key paths, best score across a new game, a cancelled slide, a lost game ignoring input, suggest-then-confirm, Auto Play apply/gap/loop/stop (including Stop during the gap re-enabling AI, Stop during Thinking aborting the fetch, a token-matched AbortError during Thinking stopping the loop, and keeping the selected LLM mode), hint kept through the next Thinking step, pending-start and in-loop blocked apply, loss / rate limit / New Game exits, fallback/manual takeover, mode selection (including mode change during Thinking aborting the fetch), fallback / rate-limit / failed requests, dropping a stale suggestion after a board-changing move (asserts `signal.aborted` and `shouldReportOutcome` flipping false), New Game during Thinking aborting the fetch, and unmount aborting an in-flight suggest.
 - `src/components/Board.test.jsx` covers the slide, overlay stacking, and pointer capture.

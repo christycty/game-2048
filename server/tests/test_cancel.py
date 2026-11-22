@@ -202,12 +202,16 @@ def test_cancel_one_of_two_concurrent_suggests_leaves_the_other() -> None:
 
 
 def test_ollama_client_raises_when_cancel_already_set() -> None:
-    transport = httpx.MockTransport(
-        lambda _request: httpx.Response(
+    posts = {"n": 0}
+
+    def handler(_request: httpx.Request) -> httpx.Response:
+        posts["n"] += 1
+        return httpx.Response(
             200,
             json={"message": {"content": '{"move":"right","reason":"ok"}'}},
         )
-    )
+
+    transport = httpx.MockTransport(handler)
     settings = isolated_settings()
     cancel = threading.Event()
     cancel.set()
@@ -221,6 +225,8 @@ def test_ollama_client_raises_when_cancel_already_set() -> None:
                 invalid_reply=False,
                 cancel=cancel,
             )
+    # Pre-set cancel aborts inside the attempt span before the HTTP POST.
+    assert posts["n"] == 0
 
 
 def test_ollama_client_cancel_interrupts_in_flight_post() -> None:
