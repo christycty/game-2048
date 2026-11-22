@@ -16,7 +16,7 @@ npm run lint      # oxlint
 npm run build     # production bundle
 ```
 
-The page calls same-origin `/suggest` (and `/client-events` for fail/429 beacons) by default. Vite proxies those paths to the API (`API_PROXY_TARGET`, or `http://127.0.0.1:${API_HOST_PORT:-8000}`). Set `VITE_API_BASE_URL` to an absolute origin only to bypass the proxy. CORS follows `CLIENT_HOST_PORT` for that case. See [runtime.md](runtime.md) for Compose, Docker, and worktree ports. Correlation: [telemetry.md](telemetry.md).
+The page calls same-origin `/suggest` (and `/client-events` for fail / spend `rate_limit` / capacity `model_busy` / cancel beacons) by default. Vite proxies those paths to the API (`API_PROXY_TARGET`, or `http://127.0.0.1:${API_HOST_PORT:-8000}`). Set `VITE_API_BASE_URL` to an absolute origin only to bypass the proxy. CORS follows `CLIENT_HOST_PORT` for that case. See [runtime.md](runtime.md) for Compose, Docker, and worktree ports. Correlation: [telemetry.md](telemetry.md).
 
 Stack: React 19, Vite, plain JavaScript. The page title is 2048. The app mounts from `index.html` into `#root` through `src/main.jsx`.
 
@@ -111,6 +111,8 @@ The grid is 4×4. Row 0 is the top. Column 0 is the left.
 `hasWon` is true when any tile value is ≥ `WIN_TILE` (2048).
 
 `tilesToBoard` builds the 4×4 value grid the API expects. Empty cells are `0`. Animation fields are dropped.
+
+`AUTO_PLAY_GAP_MS` (750) pauses between settled Auto Play moves. `AUTO_PLAY_CAPACITY_MAX_RETRIES` (3) caps how many capacity-busy `429`s Auto Play will retry before stopping.
 
 `random` defaults to `Math.random` and is an argument so tests can pin the spawn.
 

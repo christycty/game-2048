@@ -5,7 +5,7 @@
 
 ## Is this a security concern?
 
-**Yes, but narrowly.** `/client-events` is not RCE or data exfiltration — it is an **unauthenticated write path into ops metrics**. Anyone who can reach the API can inflate `client_suggest_outcome` (`fail` / `rate_limit` / later `cancel`) and lie to Grafana without spending LLM quota.
+**Yes, but narrowly.** `/client-events` is not RCE or data exfiltration — it is an **unauthenticated write path into ops metrics**. Anyone who can reach the API can inflate `client_suggest_outcome` (`fail` / `rate_limit` / `model_busy` / `cancel`) and lie to Grafana without spending LLM quota.
 
 For this interview exercise (loopback-published ports, unpublished prod API, no player auth), the practical risk is low. Interview-grade best practice still wants a short, honest story: **trust the browser only as far as the deployment boundary**, and show a cheap integrity control if the API were ever reachable beyond that.
 
@@ -30,7 +30,7 @@ Make client beacon series hard to spam casually, without standing up real user a
 | --- | --- |
 | Cap | Sliding window, e.g. 60 beacons / 60s (tunable via Settings) |
 | Over limit | `429` + `Retry-After`; client already ignores beacon failures |
-| Labels | Keep outcome enum closed (`fail` \| `rate_limit` \| `cancel`) — already done |
+| Labels | Keep outcome enum closed (`fail` \| `rate_limit` \| `model_busy` \| `cancel`) — already done |
 | Tracing | Stay excluded from Phoenix |
 | Docs | `telemetry.md`: client rates are best-effort under loopback; rate limit is the integrity control |
 

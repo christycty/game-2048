@@ -42,9 +42,9 @@ Excluded from tracing: `/health`, `/metrics`, `/client-events`, `/docs`, `/opena
 
 The browser does **not** run an OpenTelemetry SDK. Each `POST /suggest` from [`client/src/api.js`](../../client/src/api.js) sends a hand-rolled W3C `traceparent` header (`client/src/trace.js`). FastAPI’s OTel instrumentor extracts it so the HTTP + `suggest` + `ollama chat` spans share the client’s `trace_id` in Phoenix.
 
-Coarse client fail / rate-limit counts go to scrape metrics via `POST /client-events` (same-origin; Vite and nginx proxy it). Prompt forensics stay in Phoenix — do not duplicate them in the browser.
+Coarse client fail / spend `rate_limit` / capacity `model_busy` / cancel counts go to scrape metrics via `POST /client-events` (same-origin; Vite and nginx proxy it). Prompt forensics stay in Phoenix — do not duplicate them in the browser.
 
-App passes `shouldReportOutcome` so abandoned in-flight suggests (stale token after a board-changing move / New Game) do **not** beacon `fail` / `rate_limit`. Abort (`AbortError` / HTTP `499`, including abort across `response.json()`) beacons `cancel` (not `fail`); that path does not consult `shouldReportOutcome` because Stop/move already bumps the token before fetch rejects. Stale-token ignores that never aborted a fetch stay beacon-free.
+App passes `shouldReportOutcome` so abandoned in-flight suggests (stale token after a board-changing move / New Game) do **not** beacon `fail` / `rate_limit` / `model_busy`. Abort (`AbortError` / HTTP `499`, including abort across `response.json()`) beacons `cancel` (not `fail`); that path does not consult `shouldReportOutcome` because Stop/move already bumps the token before fetch rejects. Stale-token ignores that never aborted a fetch stay beacon-free.
 
 `/client-events` is unauthenticated like the rest of the API (no player auth yet). Prod keeps the API unpublished; published ports are loopback-only. Follow-up integrity gate (beacon rate limit): [client-events-integrity.md](../../plan/client-events-integrity.md).
 
