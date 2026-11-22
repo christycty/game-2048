@@ -184,7 +184,7 @@ function App() {
         try {
             const suggestion = await suggestMove(tilesToBoard(tilesRef.current), aiModeRef.current, {
                 signal: controller.signal,
-                // Stale-token ignores must not beacon fail/rate_limit (cancel beacon is a follow-up).
+                // Stale-token ignores must not beacon fail/rate_limit; abort beacons cancel itself.
                 shouldReportOutcome: () => suggestTokenRef.current === token,
             });
             if (suggestTokenRef.current !== token) return;

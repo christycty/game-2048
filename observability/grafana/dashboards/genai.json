@@ -1,5 +1,7 @@
 {
-  "annotations": { "list": [] },
+  "annotations": {
+    "list": []
+  },
   "editable": true,
   "fiscalYearStartMonth": 0,
   "graphTooltip": 1,
@@ -8,15 +10,23 @@
   "panels": [
     {
       "collapsed": false,
-      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 0 },
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 0
+      },
       "id": 10,
       "panels": [],
       "title": "API",
       "type": "row"
     },
     {
-      "datasource": { "type": "prometheus", "uid": "prometheus" },
-      "description": "All status codes on one chart. Unstacked lines — each series Y is absolute req/s (429 is not stacked on top of 200).",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "description": "All status codes on one chart. Unstacked lines \u2014 each series Y is absolute req/s (429 is not stacked on top of 200).",
       "fieldConfig": {
         "defaults": {
           "unit": "reqps",
@@ -25,17 +35,28 @@
             "lineInterpolation": "smooth",
             "fillOpacity": 10,
             "showPoints": "never",
-            "stacking": { "mode": "none", "group": "A" },
+            "stacking": {
+              "mode": "none",
+              "group": "A"
+            },
             "spanNulls": false
           }
         },
         "overrides": []
       },
-      "gridPos": { "h": 9, "w": 8, "x": 0, "y": 1 },
+      "gridPos": {
+        "h": 9,
+        "w": 8,
+        "x": 0,
+        "y": 1
+      },
       "id": 5,
       "targets": [
         {
-          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
           "expr": "sum by (http_status_code) (rate(http_server_duration_milliseconds_count{http_target=\"/suggest\"}[5m])) > 0",
           "legendFormat": "{{http_status_code}}",
           "refId": "A"
@@ -48,13 +69,21 @@
           "displayMode": "list",
           "placement": "bottom",
           "showLegend": true,
-          "calcs": ["lastNotNull"]
+          "calcs": [
+            "lastNotNull"
+          ]
         },
-        "tooltip": { "mode": "multi", "sort": "desc" }
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
       }
     },
     {
-      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
       "description": "API response source (not HTTP status). Unstacked.",
       "fieldConfig": {
         "defaults": {
@@ -64,17 +93,28 @@
             "lineInterpolation": "smooth",
             "fillOpacity": 10,
             "showPoints": "never",
-            "stacking": { "mode": "none", "group": "A" },
+            "stacking": {
+              "mode": "none",
+              "group": "A"
+            },
             "spanNulls": false
           }
         },
         "overrides": []
       },
-      "gridPos": { "h": 9, "w": 8, "x": 8, "y": 1 },
+      "gridPos": {
+        "h": 9,
+        "w": 8,
+        "x": 8,
+        "y": 1
+      },
       "id": 7,
       "targets": [
         {
-          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
           "expr": "sum by (suggest_source) (rate(suggest_source_total[5m])) > 0",
           "legendFormat": "{{suggest_source}}",
           "refId": "A"
@@ -87,13 +127,21 @@
           "displayMode": "list",
           "placement": "bottom",
           "showLegend": true,
-          "calcs": ["lastNotNull"]
+          "calcs": [
+            "lastNotNull"
+          ]
         },
-        "tooltip": { "mode": "multi", "sort": "desc" }
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
       }
     },
     {
-      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
       "description": "p50 / p95 wall time for /suggest.",
       "fieldConfig": {
         "defaults": {
@@ -103,23 +151,37 @@
             "lineInterpolation": "smooth",
             "fillOpacity": 10,
             "showPoints": "never",
-            "stacking": { "mode": "none", "group": "A" },
+            "stacking": {
+              "mode": "none",
+              "group": "A"
+            },
             "spanNulls": false
           }
         },
         "overrides": []
       },
-      "gridPos": { "h": 9, "w": 8, "x": 16, "y": 1 },
+      "gridPos": {
+        "h": 9,
+        "w": 8,
+        "x": 16,
+        "y": 1
+      },
       "id": 6,
       "targets": [
         {
-          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
           "expr": "histogram_quantile(0.95, sum by (le) (rate(http_server_duration_milliseconds_bucket{http_target=\"/suggest\"}[5m]))) and on() (sum(rate(http_server_duration_milliseconds_count{http_target=\"/suggest\"}[5m])) > 0)",
           "legendFormat": "p95",
           "refId": "A"
         },
         {
-          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
           "expr": "histogram_quantile(0.50, sum by (le) (rate(http_server_duration_milliseconds_bucket{http_target=\"/suggest\"}[5m]))) and on() (sum(rate(http_server_duration_milliseconds_count{http_target=\"/suggest\"}[5m])) > 0)",
           "legendFormat": "p50",
           "refId": "B"
@@ -132,14 +194,22 @@
           "displayMode": "list",
           "placement": "bottom",
           "showLegend": true,
-          "calcs": ["lastNotNull"]
+          "calcs": [
+            "lastNotNull"
+          ]
         },
-        "tooltip": { "mode": "multi", "sort": "none" }
+        "tooltip": {
+          "mode": "multi",
+          "sort": "none"
+        }
       }
     },
     {
-      "datasource": { "type": "prometheus", "uid": "prometheus" },
-      "description": "In-flight HTTP POSTs (health/metrics/client-events are not instrumented). Usually 0–1 for a single tab; spikes mean overlapping /suggest (multi-tab or a second client).",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "description": "Peak in-flight HTTP POSTs over the last minute (health/metrics/client-events are not instrumented). max_over_time keeps a scrape that landed mid-/suggest; the series is still often 0 while idle or when calls finish between scrapes. Usually 0\u20131 for a single tab; spikes mean overlapping /suggest (multi-tab or a second client).",
       "fieldConfig": {
         "defaults": {
           "unit": "short",
@@ -154,13 +224,21 @@
         },
         "overrides": []
       },
-      "gridPos": { "h": 9, "w": 24, "x": 0, "y": 10 },
+      "gridPos": {
+        "h": 9,
+        "w": 24,
+        "x": 0,
+        "y": 10
+      },
       "id": 14,
       "targets": [
         {
-          "datasource": { "type": "prometheus", "uid": "prometheus" },
-          "expr": "sum(http_server_active_requests{http_method=\"POST\"})",
-          "legendFormat": "in-flight POST",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "expr": "max_over_time(sum(http_server_active_requests{http_method=\"POST\"})[1m:])",
+          "legendFormat": "in-flight POST (1m max)",
           "refId": "A"
         }
       ],
@@ -171,22 +249,35 @@
           "displayMode": "list",
           "placement": "bottom",
           "showLegend": true,
-          "calcs": ["lastNotNull"]
+          "calcs": [
+            "lastNotNull"
+          ]
         },
-        "tooltip": { "mode": "single", "sort": "none" }
+        "tooltip": {
+          "mode": "single",
+          "sort": "none"
+        }
       }
     },
     {
       "collapsed": false,
-      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 19 },
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 19
+      },
       "id": 12,
       "panels": [],
       "title": "Client",
       "type": "row"
     },
     {
-      "datasource": { "type": "prometheus", "uid": "prometheus" },
-      "description": "Browser-reported suggest outcomes via POST /client-events. Cancel deferred until AbortSignal. Unstacked.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "description": "Browser-reported suggest outcomes via POST /client-events (fail / rate_limit / cancel). Unstacked.",
       "fieldConfig": {
         "defaults": {
           "unit": "reqps",
@@ -195,17 +286,28 @@
             "lineInterpolation": "smooth",
             "fillOpacity": 10,
             "showPoints": "never",
-            "stacking": { "mode": "none", "group": "A" },
+            "stacking": {
+              "mode": "none",
+              "group": "A"
+            },
             "spanNulls": false
           }
         },
         "overrides": []
       },
-      "gridPos": { "h": 9, "w": 24, "x": 0, "y": 20 },
+      "gridPos": {
+        "h": 9,
+        "w": 24,
+        "x": 0,
+        "y": 20
+      },
       "id": 13,
       "targets": [
         {
-          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
           "expr": "sum by (outcome) (rate(client_suggest_outcome_total[5m])) > 0",
           "legendFormat": "{{outcome}}",
           "refId": "A"
@@ -218,21 +320,34 @@
           "displayMode": "list",
           "placement": "bottom",
           "showLegend": true,
-          "calcs": ["lastNotNull"]
+          "calcs": [
+            "lastNotNull"
+          ]
         },
-        "tooltip": { "mode": "multi", "sort": "desc" }
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
       }
     },
     {
       "collapsed": false,
-      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 29 },
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 29
+      },
       "id": 11,
       "panels": [],
       "title": "LLM",
       "type": "row"
     },
     {
-      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
       "description": "Empty when idle (no request rate). Real 0% only when attempts exist and all fail.",
       "fieldConfig": {
         "defaults": {
@@ -249,12 +364,20 @@
         },
         "overrides": []
       },
-      "gridPos": { "h": 9, "w": 8, "x": 0, "y": 30 },
+      "gridPos": {
+        "h": 9,
+        "w": 8,
+        "x": 0,
+        "y": 30
+      },
       "id": 3,
       "targets": [
         {
-          "datasource": { "type": "prometheus", "uid": "prometheus" },
-          "expr": "(sum(rate(gen_ai_client_request_count_total{gen_ai_request_outcome=\"success\"}[5m])) / sum(rate(gen_ai_client_request_count_total[5m]))) and on() (sum(rate(gen_ai_client_request_count_total[5m])) > 0)",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "expr": "(sum(rate(gen_ai_client_request_count_total{gen_ai_request_outcome=\"success\"}[5m])) / sum(rate(gen_ai_client_request_count_total{gen_ai_request_outcome=~\"success|error|timeout\"}[5m]))) and on() (sum(rate(gen_ai_client_request_count_total{gen_ai_request_outcome=~\"success|error|timeout\"}[5m])) > 0)",
           "legendFormat": "success rate",
           "refId": "A"
         }
@@ -266,14 +389,22 @@
           "displayMode": "list",
           "placement": "bottom",
           "showLegend": true,
-          "calcs": ["lastNotNull"]
+          "calcs": [
+            "lastNotNull"
+          ]
         },
-        "tooltip": { "mode": "single", "sort": "none" }
+        "tooltip": {
+          "mode": "single",
+          "sort": "none"
+        }
       }
     },
     {
-      "datasource": { "type": "prometheus", "uid": "prometheus" },
-      "description": "Per-attempt outcomes. Unstacked so Y = that outcome's rate.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "description": "Per-attempt outcomes (success / error / timeout / cancelled). Unstacked so Y = that outcome's rate.",
       "fieldConfig": {
         "defaults": {
           "unit": "ops",
@@ -282,17 +413,28 @@
             "lineInterpolation": "smooth",
             "fillOpacity": 10,
             "showPoints": "never",
-            "stacking": { "mode": "none", "group": "A" },
+            "stacking": {
+              "mode": "none",
+              "group": "A"
+            },
             "spanNulls": false
           }
         },
         "overrides": []
       },
-      "gridPos": { "h": 9, "w": 8, "x": 8, "y": 30 },
+      "gridPos": {
+        "h": 9,
+        "w": 8,
+        "x": 8,
+        "y": 30
+      },
       "id": 4,
       "targets": [
         {
-          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
           "expr": "sum by (gen_ai_request_outcome) (rate(gen_ai_client_request_count_total[5m])) > 0",
           "legendFormat": "{{gen_ai_request_outcome}}",
           "refId": "A"
@@ -305,13 +447,21 @@
           "displayMode": "list",
           "placement": "bottom",
           "showLegend": true,
-          "calcs": ["lastNotNull"]
+          "calcs": [
+            "lastNotNull"
+          ]
         },
-        "tooltip": { "mode": "multi", "sort": "desc" }
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
       }
     },
     {
-      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
       "description": "Error outcomes only, broken down by error_type. Unstacked.",
       "fieldConfig": {
         "defaults": {
@@ -321,17 +471,28 @@
             "lineInterpolation": "smooth",
             "fillOpacity": 10,
             "showPoints": "never",
-            "stacking": { "mode": "none", "group": "A" },
+            "stacking": {
+              "mode": "none",
+              "group": "A"
+            },
             "spanNulls": false
           }
         },
         "overrides": []
       },
-      "gridPos": { "h": 9, "w": 8, "x": 16, "y": 30 },
+      "gridPos": {
+        "h": 9,
+        "w": 8,
+        "x": 16,
+        "y": 30
+      },
       "id": 8,
       "targets": [
         {
-          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
           "expr": "sum by (error_type) (rate(gen_ai_client_request_count_total{gen_ai_request_outcome=\"error\"}[5m])) > 0",
           "legendFormat": "{{error_type}}",
           "refId": "A"
@@ -344,13 +505,21 @@
           "displayMode": "list",
           "placement": "bottom",
           "showLegend": true,
-          "calcs": ["lastNotNull"]
+          "calcs": [
+            "lastNotNull"
+          ]
         },
-        "tooltip": { "mode": "multi", "sort": "desc" }
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
       }
     },
     {
-      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
       "fieldConfig": {
         "defaults": {
           "unit": "s",
@@ -359,24 +528,38 @@
             "lineInterpolation": "smooth",
             "fillOpacity": 10,
             "showPoints": "never",
-            "stacking": { "mode": "none", "group": "A" },
+            "stacking": {
+              "mode": "none",
+              "group": "A"
+            },
             "spanNulls": false
           }
         },
         "overrides": []
       },
       "description": "p50 / p95 wall time for Ollama body-path calls.",
-      "gridPos": { "h": 9, "w": 12, "x": 0, "y": 39 },
+      "gridPos": {
+        "h": 9,
+        "w": 12,
+        "x": 0,
+        "y": 39
+      },
       "id": 1,
       "targets": [
         {
-          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
           "expr": "histogram_quantile(0.95, sum by (le) (rate(gen_ai_client_operation_duration_seconds_bucket[5m]))) and on() (sum(rate(gen_ai_client_operation_duration_seconds_count[5m])) > 0)",
           "legendFormat": "p95",
           "refId": "A"
         },
         {
-          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
           "expr": "histogram_quantile(0.50, sum by (le) (rate(gen_ai_client_operation_duration_seconds_bucket[5m]))) and on() (sum(rate(gen_ai_client_operation_duration_seconds_count[5m])) > 0)",
           "legendFormat": "p50",
           "refId": "B"
@@ -389,13 +572,21 @@
           "displayMode": "list",
           "placement": "bottom",
           "showLegend": true,
-          "calcs": ["lastNotNull"]
+          "calcs": [
+            "lastNotNull"
+          ]
         },
-        "tooltip": { "mode": "multi", "sort": "none" }
+        "tooltip": {
+          "mode": "multi",
+          "sort": "none"
+        }
       }
     },
     {
-      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
       "description": "Input vs output token rates. Unstacked for direct comparison.",
       "fieldConfig": {
         "defaults": {
@@ -405,17 +596,28 @@
             "lineInterpolation": "smooth",
             "fillOpacity": 10,
             "showPoints": "never",
-            "stacking": { "mode": "none", "group": "A" },
+            "stacking": {
+              "mode": "none",
+              "group": "A"
+            },
             "spanNulls": false
           }
         },
         "overrides": []
       },
-      "gridPos": { "h": 9, "w": 12, "x": 12, "y": 39 },
+      "gridPos": {
+        "h": 9,
+        "w": 12,
+        "x": 12,
+        "y": 39
+      },
       "id": 2,
       "targets": [
         {
-          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
           "expr": "sum by (gen_ai_token_type) (rate(gen_ai_client_token_usage_sum[5m])) > 0",
           "legendFormat": "{{gen_ai_token_type}}",
           "refId": "A"
@@ -428,16 +630,30 @@
           "displayMode": "list",
           "placement": "bottom",
           "showLegend": true,
-          "calcs": ["lastNotNull"]
+          "calcs": [
+            "lastNotNull"
+          ]
         },
-        "tooltip": { "mode": "multi", "sort": "desc" }
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
       }
     }
   ],
   "schemaVersion": 39,
-  "tags": ["genai", "api", "game-2048"],
-  "templating": { "list": [] },
-  "time": { "from": "now-1h", "to": "now" },
+  "tags": [
+    "genai",
+    "api",
+    "game-2048"
+  ],
+  "templating": {
+    "list": []
+  },
+  "time": {
+    "from": "now-1h",
+    "to": "now"
+  },
   "timepicker": {},
   "timezone": "browser",
   "title": "GenAI ops",

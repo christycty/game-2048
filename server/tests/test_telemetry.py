@@ -211,6 +211,7 @@ def test_suggest_continues_client_traceparent() -> None:
 
 def test_client_events_increment_scrape_counter() -> None:
     from app.telemetry import (
+        CLIENT_OUTCOME_CANCEL,
         CLIENT_OUTCOME_FAIL,
         CLIENT_OUTCOME_RATE_LIMIT,
         record_client_suggest_outcome,
@@ -223,10 +224,10 @@ def test_client_events_increment_scrape_counter() -> None:
         client.post("/client-events", json={"outcome": CLIENT_OUTCOME_RATE_LIMIT}).status_code
         == 204
     )
-    assert client.post("/client-events", json={"outcome": "cancel"}).status_code == 422
+    assert client.post("/client-events", json={"outcome": CLIENT_OUTCOME_CANCEL}).status_code == 204
     # Defense in depth: unknown labels never touch the scrape counter.
-    record_client_suggest_outcome("cancel")
     record_client_suggest_outcome("not-an-outcome")
+    record_client_suggest_outcome("success")
 
     body = client.get("/metrics").text
     assert PROM_CLIENT_SUGGEST_OUTCOME in body
@@ -240,7 +241,10 @@ def test_client_events_increment_scrape_counter() -> None:
         )
         == 1.0
     )
-    assert _labeled_counter(body, PROM_CLIENT_SUGGEST_OUTCOME, 'outcome="cancel"') == 0.0
+    assert (
+        _labeled_counter(body, PROM_CLIENT_SUGGEST_OUTCOME, f'outcome="{CLIENT_OUTCOME_CANCEL}"')
+        == 1.0
+    )
 
 
 def test_http_body_size_metrics_dropped_active_and_duration_kept() -> None:
@@ -329,6 +333,206 @@ def test_metrics_counts_timed_out_llm_requests() -> None:
     assert 'gen_ai_request_outcome="timeout"' in body
     assert 'gen_ai_request_outcome="error"' not in body
     assert 'suggest_source="fallback"' in body
+
+
+def test_cancelled_llm_records_cancelled_not_error() -> None:
+    """Disconnect cancel mid-Ollama attempt → gen_ai cancelled + spans not ERROR."""
+    import threading
+
+    from app.telemetry import OUTPUT_VALUE
+
+    held: dict[str, threading.Event | None] = {"cancel": None}
+    posts = {"n": 0}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        posts["n"] += 1
+        # Trip cancel while the sync MockTransport POST is in flight; client then
+        # raises SuggestCancelled after the response (same as disconnect mid-call).
+        cancel = held["cancel"]
+        if cancel is not None:
+            cancel.set()
+        return _ollama_chat_json('{"move": "right", "reason": "ignored after cancel"}')
+
+    class HoldCancelLLM:
+        def __init__(self, inner: OllamaClient) -> None:
+            self._inner = inner
+
+        def suggest_move(
+            self,
+            board: list[list[int]],
+            *,
+            legal: list[str],
+            rejected: list[str],
+            invalid_reply: bool,
+            cancel: threading.Event | None = None,
+        ) -> ModelSuggestion:
+            held["cancel"] = cancel
+            return self._inner.suggest_move(
+                board,
+                legal=legal,
+                rejected=rejected,
+                invalid_reply=invalid_reply,
+                cancel=cancel,
+            )
+
+    exporter = InMemorySpanExporter()
+    settings = isolated_settings(
+        export_traces=True,
+        ollama_model="test-model",
+        llm_max_attempts=1,
+    )
+    transport = httpx.MockTransport(handler)
+    with httpx.Client(transport=transport, base_url="http://ollama.test") as http:
+        llm = OllamaClient(settings, client=http)
+        app = create_app(settings, HoldCancelLLM(llm), SimpleSpanProcessor(exporter))
+        client = TestClient(app)
+        response = client.post("/suggest", json={"board": OPEN_BOARD, "mode": "llm"})
+        body = client.get("/metrics").text
+
+    assert response.status_code == 499
+    assert response.json()["detail"] == "client cancelled"
+    assert posts["n"] == 1
+    assert PROM_REQUEST_COUNT in body
+    assert 'gen_ai_request_outcome="cancelled"' in body
+    assert 'gen_ai_request_outcome="error"' not in body
+    # Cancelled mid-pipeline: no completed suggest_source increment.
+    assert 'suggest_source="llm"' not in body
+    assert 'suggest_source="fallback"' not in body
+
+    spans = {span.name: span for span in exporter.get_finished_spans()}
+    assert "ollama chat" in spans
+    assert "suggest" in spans
+    assert spans["ollama chat"].status.status_code != StatusCode.ERROR
+    assert spans["suggest"].status.status_code != StatusCode.ERROR
+    assert "cancelled" in (spans["ollama chat"].attributes.get(OUTPUT_VALUE) or "")
+
+
+def test_cancel_already_set_records_cancelled_without_ollama_post() -> None:
+    """Attempt span opens, cancel already set → gen_ai cancelled, no HTTP to Ollama."""
+    import threading
+
+    from app.telemetry import OUTPUT_VALUE
+
+    posts = {"n": 0}
+
+    def handler(_request: httpx.Request) -> httpx.Response:
+        posts["n"] += 1
+        return _ollama_chat_json('{"move": "right", "reason": "should not run"}')
+
+    class PreSetCancelLLM:
+        def __init__(self, inner: OllamaClient) -> None:
+            self._inner = inner
+
+        def suggest_move(
+            self,
+            board: list[list[int]],
+            *,
+            legal: list[str],
+            rejected: list[str],
+            invalid_reply: bool,
+            cancel: threading.Event | None = None,
+        ) -> ModelSuggestion:
+            # Trip cancel after the LLM loop starts but before the Ollama POST.
+            if cancel is not None:
+                cancel.set()
+            return self._inner.suggest_move(
+                board,
+                legal=legal,
+                rejected=rejected,
+                invalid_reply=invalid_reply,
+                cancel=cancel,
+            )
+
+    exporter = InMemorySpanExporter()
+    settings = isolated_settings(
+        export_traces=True,
+        ollama_model="test-model",
+        llm_max_attempts=1,
+    )
+    transport = httpx.MockTransport(handler)
+    with httpx.Client(transport=transport, base_url="http://ollama.test") as http:
+        llm = OllamaClient(settings, client=http)
+        app = create_app(settings, PreSetCancelLLM(llm), SimpleSpanProcessor(exporter))
+        client = TestClient(app)
+        response = client.post("/suggest", json={"board": OPEN_BOARD, "mode": "llm"})
+        body = client.get("/metrics").text
+
+    assert response.status_code == 499
+    assert posts["n"] == 0
+    assert 'gen_ai_request_outcome="cancelled"' in body
+    assert 'gen_ai_request_outcome="error"' not in body
+    spans = {span.name: span for span in exporter.get_finished_spans()}
+    assert "ollama chat" in spans
+    assert spans["ollama chat"].status.status_code != StatusCode.ERROR
+    assert "cancelled" in (spans["ollama chat"].attributes.get(OUTPUT_VALUE) or "")
+
+
+def test_between_attempt_cancel_records_cancelled() -> None:
+    """Fail attempt 1, cancel before attempt 2 → cancelled (not a second error)."""
+    import threading
+
+    from app.telemetry import OUTPUT_VALUE
+
+    posts = {"n": 0}
+    calls = {"n": 0}
+
+    def handler(_request: httpx.Request) -> httpx.Response:
+        posts["n"] += 1
+        # Unusable body → LlmError → suggester retries.
+        return httpx.Response(200, json={"message": {"content": "not-json"}})
+
+    class CancelBeforeRetryLLM:
+        def __init__(self, inner: OllamaClient) -> None:
+            self._inner = inner
+
+        def suggest_move(
+            self,
+            board: list[list[int]],
+            *,
+            legal: list[str],
+            rejected: list[str],
+            invalid_reply: bool,
+            cancel: threading.Event | None = None,
+        ) -> ModelSuggestion:
+            calls["n"] += 1
+            if calls["n"] == 2 and cancel is not None:
+                cancel.set()
+            return self._inner.suggest_move(
+                board,
+                legal=legal,
+                rejected=rejected,
+                invalid_reply=invalid_reply,
+                cancel=cancel,
+            )
+
+    exporter = InMemorySpanExporter()
+    settings = isolated_settings(
+        export_traces=True,
+        ollama_model="test-model",
+        llm_max_attempts=3,
+    )
+    transport = httpx.MockTransport(handler)
+    with httpx.Client(transport=transport, base_url="http://ollama.test") as http:
+        llm = OllamaClient(settings, client=http)
+        app = create_app(settings, CancelBeforeRetryLLM(llm), SimpleSpanProcessor(exporter))
+        client = TestClient(app)
+        # Seed the request cancel Event: middleware creates it unset; the wrapper
+        # sets it on the second suggest_move so attempt 2 records cancelled.
+        response = client.post("/suggest", json={"board": OPEN_BOARD, "mode": "llm"})
+        body = client.get("/metrics").text
+
+    assert response.status_code == 499
+    assert calls["n"] == 2
+    assert posts["n"] == 1
+    assert 'gen_ai_request_outcome="cancelled"' in body
+    # First attempt still counts as a model error; cancel must not add another.
+    assert _labeled_counter(body, PROM_REQUEST_COUNT, 'gen_ai_request_outcome="error"') == 1.0
+    assert _labeled_counter(body, PROM_REQUEST_COUNT, 'gen_ai_request_outcome="cancelled"') == 1.0
+    spans = {span.name: span for span in exporter.get_finished_spans()}
+    assert spans["suggest"].status.status_code != StatusCode.ERROR
+    ollama_spans = [s for s in exporter.get_finished_spans() if s.name == "ollama chat"]
+    assert len(ollama_spans) == 2
+    assert any("cancelled" in (s.attributes.get(OUTPUT_VALUE) or "") for s in ollama_spans)
 
 
 def test_metrics_counts_expectimax_suggest_source() -> None:

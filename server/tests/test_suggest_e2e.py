@@ -6,8 +6,11 @@ live model lives in ``test_suggest_http_contract.py``.
 
 from __future__ import annotations
 
+import asyncio
+import json
 import os
 import re
+import threading
 
 import httpx
 import pytest
@@ -137,3 +140,102 @@ def test_metrics_expose_gen_ai_after_real_llm(suggest_client: TestClient) -> Non
     assert 'gen_ai_request_outcome="success"' in text
     assert 'suggest_source="llm"' in text
     assert "gen_ai_client_operation_duration_seconds" in text
+
+
+@pytest.mark.e2e
+def test_client_cancel_beacon_increments_scrape_counter(suggest_client: TestClient) -> None:
+    before = suggest_client.get("/metrics").text
+    prior = _labeled_counter(before, "client_suggest_outcome", 'outcome="cancel"')
+
+    assert suggest_client.post("/client-events", json={"outcome": "cancel"}).status_code == 204
+
+    after = suggest_client.get("/metrics").text
+    assert _labeled_counter(after, "client_suggest_outcome", 'outcome="cancel"') == prior + 1.0
+
+
+@pytest.mark.e2e
+def test_asgi_disconnect_cancels_real_ollama_and_records_cancelled(
+    suggest_client: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Live Ollama: client disconnect mid-suggest → 499 + gen_ai cancelled (not error)."""
+    from app.llm import OllamaClient
+
+    app = suggest_client.app
+    body = json.dumps({"board": MERGE_BOARD, "mode": "llm"}).encode()
+    before = suggest_client.get("/metrics").text
+    prior_cancelled = _labeled_counter(
+        before, "gen_ai_client_request_count", 'gen_ai_request_outcome="cancelled"'
+    )
+    prior_error = _labeled_counter(
+        before, "gen_ai_client_request_count", 'gen_ai_request_outcome="error"'
+    )
+
+    # Gate disconnect on the real Ollama POST starting — a fixed sleep races a fast reply.
+    ollama_started = threading.Event()
+    real_post_chat = OllamaClient._post_chat
+
+    def _post_chat_and_signal(self, payload, cancel):  # noqa: ANN001
+        ollama_started.set()
+        return real_post_chat(self, payload, cancel)
+
+    monkeypatch.setattr(OllamaClient, "_post_chat", _post_chat_and_signal)
+
+    async def one_cancelled_call() -> int | None:
+        scope = {
+            "type": "http",
+            "asgi": {"version": "3.0"},
+            "http_version": "1.1",
+            "method": "POST",
+            "scheme": "http",
+            "path": "/suggest",
+            "raw_path": b"/suggest",
+            "query_string": b"",
+            "headers": [
+                (b"host", b"test"),
+                (b"content-type", b"application/json"),
+                (b"content-length", str(len(body)).encode()),
+            ],
+            "client": ("127.0.0.1", 50001),
+            "server": ("test", 80),
+            "state": {},
+        }
+        messages: list[dict] = [{"type": "http.request", "body": body, "more_body": False}]
+        sent: list[dict] = []
+
+        async def receive() -> dict:
+            if messages:
+                return messages.pop(0)
+            assert await asyncio.to_thread(ollama_started.wait, 30)
+            return {"type": "http.disconnect"}
+
+        async def send(message: dict) -> None:
+            sent.append(message)
+
+        await app(scope, receive, send)
+        return next(
+            (m.get("status") for m in sent if m.get("type") == "http.response.start"),
+            None,
+        )
+
+    status = asyncio.run(asyncio.wait_for(one_cancelled_call(), timeout=60))
+    assert status == 499
+
+    text = suggest_client.get("/metrics").text
+    assert (
+        _labeled_counter(text, "gen_ai_client_request_count", 'gen_ai_request_outcome="cancelled"')
+        == prior_cancelled + 1.0
+    )
+    # Cancel must not be counted as a model error.
+    assert (
+        _labeled_counter(text, "gen_ai_client_request_count", 'gen_ai_request_outcome="error"')
+        == prior_error
+    )
+
+
+def _labeled_counter(body: str, metric: str, label_fragment: str) -> float:
+    prefix = f"{metric}_total{{"
+    for line in body.splitlines():
+        if line.startswith(prefix) and label_fragment in line:
+            return float(line.rsplit(" ", 1)[-1])
+    return 0.0
