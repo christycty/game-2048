@@ -2,6 +2,7 @@ name: ci
 
 on:
   pull_request:
+  workflow_dispatch:
 
 jobs:
   docs:
@@ -43,6 +44,26 @@ jobs:
         env:
           EXPORT_TRACES: "false"
         run: pytest
+
+
+  load:
+    # Opt-in FakeLLM soak — not on every PR. Trigger via Actions → Run workflow.
+    if: github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: server
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install
+        run: pip install -e ".[dev]"
+      - name: Load (FakeLLM)
+        env:
+          EXPORT_TRACES: "false"
+        run: pytest --load -m load
 
   client:
     runs-on: ubuntu-latest
