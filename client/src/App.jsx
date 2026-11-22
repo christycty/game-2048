@@ -256,12 +256,6 @@ function App() {
 
         autoPlayingRef.current = true;
         setAutoPlaying(true);
-        // LLM is capped for model spend; Expectimax owns the higher Auto Play bucket.
-        if (aiModeRef.current === "llm") {
-            aiModeRef.current = "expectimax";
-            setAiMode("expectimax");
-            setHint("Switched to Expectimax for Auto Play.");
-        }
 
         if (pendingMove) {
             autoApplyingRef.current = true;

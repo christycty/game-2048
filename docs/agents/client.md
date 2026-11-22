@@ -45,8 +45,8 @@ Bottom of the page:
 
 - **New Game** starts over and stops Auto Play.
 - **AI** requests a suggestion. While the request is in flight the label is **Thinking…** and the button is disabled. **AI** is also disabled while Auto Play is running.
-- **Auto Play** starts the suggest → apply → settle → `AUTO_PLAY_GAP_MS` pause → suggest loop. Starting from **LLM** switches the mode to **Expectimax** (and shows a status line) so the loop uses the higher rate-limit bucket. While running the label is **Stop** and `aria-pressed` is true. **Stop** is always available during the loop.
-- **AI mode** radios: **LLM** (default) or **Expectimax**. The fieldset is disabled while a request is in flight or Auto Play is running.
+- **Auto Play** starts the suggest → apply → settle → `AUTO_PLAY_GAP_MS` pause → suggest loop using the currently selected mode. While running the label is **Stop** and `aria-pressed` is true. **Stop** is always available during the loop.
+- **AI mode** radios: **LLM** (default) or **Expectimax**. The fieldset is disabled while Auto Play is running (usable during Thinking so a mode switch can abort).
 - A status line under the modes shows the result or an error. During Auto Play the latest hint stays visible through the slide and through the next Thinking request.
 - **Play {Direction}** appears only after a usable suggestion when Auto Play is off. The move is not applied until the player presses it.
 
@@ -85,7 +85,7 @@ A manual board-changing move while Auto Play is running stops Auto Play.
 
 After an Auto Play move settles, if Auto Play is still on and the game is not lost, `App` waits `AUTO_PLAY_GAP_MS` (750ms) then calls `handleSuggest` again. The gap keeps `busy` true so **AI** stays inactive through the pause; **Stop** clears that hold immediately when nothing else is in flight. Loss, **Stop**, **New Game**, a manual move, a blocked auto-applied move, or an unusable suggestion ends the loop (including during the gap).
 
-Changing the mode clears a pending suggestion and aborts an in-flight suggest when Thinking. Choosing the same mode again is a no-op. **Play {Direction}** calls `handleMove` with that direction, so confirm shares the swipe and key path. Starting Auto Play switches **LLM** → **Expectimax** when needed, applies a pending suggestion first when one exists, then continues the loop after settle.
+Changing the mode clears a pending suggestion and aborts an in-flight suggest when Thinking. Choosing the same mode again is a no-op. **Play {Direction}** calls `handleMove` with that direction, so confirm shares the swipe and key path. Starting Auto Play keeps the selected mode, applies a pending suggestion first when one exists, then continues the loop after settle.
 
 The UI does not show the response `mode` or `source` fields beyond treating `"fallback"` as failure. Expectimax reasons are the server score line and appear in the same hint as LLM reasons.
 
@@ -127,7 +127,7 @@ A swipe starts on pointer down (left button only for a mouse), captures the poin
 - `src/game.test.js` covers the deal, ids, slides, single merges, blocked moves, spawn timing, loss, and `tilesToBoard`.
 - `src/swipe.test.js` covers the threshold and axis choice.
 - `src/api.test.js` covers the default same-origin `/suggest` URL, success body, `SuggestError` statuses including 429 (unusable JSON body path is implemented but not covered), posting board/mode, passing `AbortSignal`, preserving `AbortError` (not wrapping as `SuggestError`), mapping a non-`AbortError` to `AbortError` when the signal is already aborted, and HTTP / network failures.
-- `src/App.test.jsx` covers score timing, shared swipe and key paths, best score across a new game, a cancelled slide, a lost game ignoring input, suggest-then-confirm, Auto Play apply/gap/loop/stop (including Stop during the gap re-enabling AI, and Stop during Thinking aborting the fetch), LLM→Expectimax switch, hint kept through the next Thinking step, pending-start and in-loop blocked apply, loss / rate limit / New Game exits, fallback/manual takeover, mode selection (including mode change during Thinking aborting the fetch), fallback / rate-limit / failed requests, dropping a stale suggestion after a board-changing move (asserts `signal.aborted`), New Game during Thinking aborting the fetch, and unmount aborting an in-flight suggest.
+- `src/App.test.jsx` covers score timing, shared swipe and key paths, best score across a new game, a cancelled slide, a lost game ignoring input, suggest-then-confirm, Auto Play apply/gap/loop/stop (including Stop during the gap re-enabling AI, Stop during Thinking aborting the fetch, and keeping the selected LLM mode), hint kept through the next Thinking step, pending-start and in-loop blocked apply, loss / rate limit / New Game exits, fallback/manual takeover, mode selection (including mode change during Thinking aborting the fetch), fallback / rate-limit / failed requests, dropping a stale suggestion after a board-changing move (asserts `signal.aborted`), New Game during Thinking aborting the fetch, and unmount aborting an in-flight suggest.
 - `src/components/Board.test.jsx` covers the slide, overlay stacking, and pointer capture.
 - `src/components/ScoreCard.test.jsx` covers opening and closing help.
 

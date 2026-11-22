@@ -587,6 +587,7 @@ test("auto play applies a suggestion without waiting for Play", async () => {
     });
 
     render(<App />);
+    fireEvent.click(screen.getByRole("radio", { name: "Expectimax" }));
     fireEvent.click(screen.getByRole("button", { name: "Auto Play" }));
 
     await act(async () => {
@@ -613,7 +614,7 @@ test("auto play applies a suggestion without waiting for Play", async () => {
     );
 });
 
-test("auto play switches from LLM to Expectimax before the first request", async () => {
+test("auto play keeps the selected LLM mode for the first request", async () => {
     let finishSuggest;
     suggestMove.mockImplementation(
         () =>
@@ -633,14 +634,14 @@ test("auto play switches from LLM to Expectimax before the first request", async
     expect(screen.getByRole("radio", { name: "LLM" }).checked).toBe(true);
     fireEvent.click(screen.getByRole("button", { name: "Auto Play" }));
 
-    expect(screen.getByRole("radio", { name: "Expectimax" }).checked).toBe(true);
-    expect(screen.getByRole("status").textContent).toBe("Switched to Expectimax for Auto Play.");
+    expect(screen.getByRole("radio", { name: "LLM" }).checked).toBe(true);
+    expect(screen.queryByRole("status")).toBeNull();
 
     await act(async () => {
         finishSuggest({
             move: "right",
-            mode: "expectimax",
-            source: "expectimax",
+            mode: "llm",
+            source: "llm",
             reason: null,
         });
         await Promise.resolve();
@@ -653,10 +654,11 @@ test("auto play switches from LLM to Expectimax before the first request", async
             [0, 0, 0, 0],
             [0, 0, 0, 0],
         ],
-        "expectimax",
+        "llm",
         expect.objectContaining({ signal: expect.any(AbortSignal) }),
     );
     expect(screen.getByRole("status").textContent).toBe("Suggested: Right.");
+    expect(screen.getByRole("radio", { name: "LLM" }).checked).toBe(true);
 });
 
 test("auto play requests another suggestion after the slide settles", async () => {
@@ -866,8 +868,8 @@ test("stopping auto play during Thinking aborts the suggest request", async () =
         "false",
     );
     expect(screen.getByRole("button", { name: "AI" }).disabled).toBe(false);
-    // Abort is silent: keep the Auto Play mode-switch line, no failure hint / Play.
-    expect(screen.getByRole("status").textContent).toBe("Switched to Expectimax for Auto Play.");
+    // Abort is silent: no failure hint / Play.
+    expect(screen.queryByRole("status")).toBeNull();
     expect(applyMove).not.toHaveBeenCalled();
 
     await act(async () => {
@@ -878,7 +880,7 @@ test("stopping auto play during Thinking aborts the suggest request", async () =
 
     expect(applyMove).not.toHaveBeenCalled();
     expect(screen.queryByRole("button", { name: /Play / })).toBeNull();
-    expect(screen.getByRole("status").textContent).toBe("Switched to Expectimax for Auto Play.");
+    expect(screen.queryByRole("status")).toBeNull();
 });
 
 test("a manual move during auto play stops the loop", async () => {
@@ -968,7 +970,7 @@ test("auto play applies a pending suggestion then continues", async () => {
     fireEvent.click(screen.getByRole("button", { name: "Auto Play" }));
 
     expect(applyMove).toHaveBeenCalledWith(opening, "right");
-    expect(screen.getByRole("radio", { name: "Expectimax" }).checked).toBe(true);
+    expect(screen.getByRole("radio", { name: "LLM" }).checked).toBe(true);
     expect(screen.queryByRole("button", { name: /Play / })).toBeNull();
 
     await act(async () => {
@@ -984,7 +986,7 @@ test("auto play applies a pending suggestion then continues", async () => {
             [0, 0, 0, 0],
             [0, 0, 0, 0],
         ],
-        "expectimax",
+        "llm",
         expect.objectContaining({ signal: expect.any(AbortSignal) }),
     );
     expect(applyMove).toHaveBeenLastCalledWith(afterPending, "down");
