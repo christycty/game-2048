@@ -69,7 +69,7 @@ The API caps suggestions **per mode** for the whole process (shared window via `
 | LLM | `SUGGEST_RATE_LIMIT_REQUESTS` | 5 |
 | Expectimax | `SUGGEST_RATE_LIMIT_EXPECTIMAX_REQUESTS` | 30 |
 
-Over the limit returns `429` with `Retry-After`. The cap is not per browser: in prod the only caller is nginx. The LLM bucket bounds model time; Expectimax is higher so Auto Play can run without spending the LLM quota.
+Over the limit returns `429` with `Retry-After`. The cap is not per browser: in prod the only caller is nginx. The LLM bucket bounds model time; Expectimax is higher so Auto Play can run without spending the LLM quota. A mid-run cancel (`499`) releases **that request’s** rate-limit token so Stop/disconnect does not burn the mode cap or a sibling’s hit.
 
 ### Metrics profile
 

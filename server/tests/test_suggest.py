@@ -54,6 +54,7 @@ class FakeLLM:
         legal: list[str],
         rejected: list[str],
         invalid_reply: bool,
+        cancel=None,
     ) -> ModelSuggestion:
         self.calls += 1
         self.legal = legal
@@ -311,7 +312,7 @@ def test_expectimax_drops_an_illegal_search_move(monkeypatch: pytest.MonkeyPatch
 
     monkeypatch.setattr(
         "app.suggester.choose_move",
-        lambda _board: Choice(
+        lambda _board, **_kwargs: Choice(
             "up", "Score of each direction: Left = N/A, Right = 1.0, Up = 2.0, Down = 1.0"
         ),
     )
@@ -329,7 +330,7 @@ def test_expectimax_drops_an_illegal_search_move(monkeypatch: pytest.MonkeyPatch
 
 def test_expectimax_falls_back_when_search_returns_none(monkeypatch: pytest.MonkeyPatch) -> None:
     # Budget expired before any depth, or search aborted — not a scored move.
-    monkeypatch.setattr("app.suggester.choose_move", lambda _board: None)
+    monkeypatch.setattr("app.suggester.choose_move", lambda _board, **_kwargs: None)
     response = _client(FakeLLM([])).post(
         "/suggest", json={"board": OPEN_BOARD, "mode": "expectimax"}
     )
@@ -667,13 +668,13 @@ def test_time_budget_stops_further_attempts() -> None:
 
 def test_lifespan_closes_the_owned_client(monkeypatch: pytest.MonkeyPatch) -> None:
     closed: list[int] = []
+    real_close = OllamaClient.close
 
-    class Spy(httpx.Client):
-        def close(self) -> None:
-            closed.append(1)
-            super().close()
+    def spy_close(self: OllamaClient) -> None:
+        closed.append(1)
+        real_close(self)
 
-    monkeypatch.setattr("app.llm.httpx.Client", Spy)
+    monkeypatch.setattr(OllamaClient, "close", spy_close)
     app = create_app(isolated_settings())
     with TestClient(app):
         assert closed == []

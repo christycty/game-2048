@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import Board from "./components/Board";
 import ScoreCard from "./components/ScoreCard";
 import ActionPanel from "./components/ActionPanel";
-import { suggestMove, SuggestError } from "./api";
+import { suggestMove, SuggestError, isAbortError } from "./api";
 import {
     applyMove,
     AUTO_PLAY_GAP_MS,
@@ -43,11 +43,23 @@ function App() {
     const autoApplyingRef = useRef(false);
     const moveTokenRef = useRef(0);
     const suggestTokenRef = useRef(0);
+    const suggestAbortRef = useRef(null);
     const aiModeRef = useRef(aiMode);
 
     function clearSuggestion() {
         setPendingMove(null);
         setHint(null);
+    }
+
+    // Abort the fetch and drop the token so a late response cannot land.
+    // Busy/suggesting cleanup is owned by the caller (Stop vs move vs New Game).
+    function abortInFlightSuggest() {
+        suggestAbortRef.current?.abort();
+        suggestAbortRef.current = null;
+        if (!suggestingRef.current) return;
+        suggestTokenRef.current += 1;
+        suggestingRef.current = false;
+        setSuggesting(false);
     }
 
     function stopAutoPlay() {
@@ -64,6 +76,7 @@ function App() {
     function startGame() {
         const nextTiles = createInitialTiles();
         moveTokenRef.current += 1;
+        abortInFlightSuggest();
         suggestTokenRef.current += 1;
         animatingRef.current = false;
         suggestingRef.current = false;
@@ -98,9 +111,7 @@ function App() {
 
         // A move that changes the board drops an in-flight suggestion so it cannot land on a stale board.
         if (suggestingRef.current) {
-            suggestTokenRef.current += 1;
-            suggestingRef.current = false;
-            setSuggesting(false);
+            abortInFlightSuggest();
         }
 
         const token = moveTokenRef.current + 1;
@@ -158,6 +169,8 @@ function App() {
 
         const token = suggestTokenRef.current + 1;
         suggestTokenRef.current = token;
+        const controller = new AbortController();
+        suggestAbortRef.current = controller;
         suggestingRef.current = true;
         setSuggesting(true);
         setBusy(true);
@@ -169,7 +182,9 @@ function App() {
         }
 
         try {
-            const suggestion = await suggestMove(tilesToBoard(tilesRef.current), aiModeRef.current);
+            const suggestion = await suggestMove(tilesToBoard(tilesRef.current), aiModeRef.current, {
+                signal: controller.signal,
+            });
             if (suggestTokenRef.current !== token) return;
             // "fallback" is a fixed move order, not a model choice.
             if (suggestion.source === "fallback") {
@@ -201,7 +216,13 @@ function App() {
             setPendingMove(suggestion.move);
             setHint(hintText);
         } catch (error) {
+            // Stale after local abort/supersede: caller already owns Auto Play / busy cleanup.
             if (suggestTokenRef.current !== token) return;
+            // Token-matched abort (e.g. HTTP 499 without a local abort): stay silent but end the loop.
+            if (isAbortError(error)) {
+                stopAutoPlay();
+                return;
+            }
             setPendingMove(null);
             setHint(
                 error instanceof SuggestError && error.status === 429
@@ -210,6 +231,9 @@ function App() {
             );
             stopAutoPlay();
         } finally {
+            if (suggestAbortRef.current === controller) {
+                suggestAbortRef.current = null;
+            }
             if (suggestTokenRef.current === token) {
                 suggestingRef.current = false;
                 setSuggesting(false);
@@ -225,6 +249,11 @@ function App() {
 
     function handleAutoPlayToggle() {
         if (autoPlayingRef.current) {
+            // Stop during Thinking aborts the fetch so the server can cancel the run.
+            if (suggestingRef.current) {
+                abortInFlightSuggest();
+                if (!animatingRef.current) setBusy(false);
+            }
             stopAutoPlay();
             return;
         }
@@ -233,12 +262,6 @@ function App() {
 
         autoPlayingRef.current = true;
         setAutoPlaying(true);
-        // LLM is capped for model spend; Expectimax owns the higher Auto Play bucket.
-        if (aiModeRef.current === "llm") {
-            aiModeRef.current = "expectimax";
-            setAiMode("expectimax");
-            setHint("Switched to Expectimax for Auto Play.");
-        }
 
         if (pendingMove) {
             autoApplyingRef.current = true;
@@ -258,7 +281,11 @@ function App() {
         if (mode === aiModeRef.current) return;
         aiModeRef.current = mode;
         setAiMode(mode);
-        // The pending move belongs to the previous mode.
+        // Previous mode's in-flight fetch or pending Play must not land.
+        if (suggestingRef.current) {
+            abortInFlightSuggest();
+            if (!animatingRef.current) setBusy(false);
+        }
         clearSuggestion();
     }
 
@@ -271,7 +298,13 @@ function App() {
         }
 
         window.addEventListener("keydown", onKeyDown);
-        return () => window.removeEventListener("keydown", onKeyDown);
+        return () => {
+            window.removeEventListener("keydown", onKeyDown);
+            suggestAbortRef.current?.abort();
+            suggestAbortRef.current = null;
+            // Match Stop/move/New Game: drop the token so a late resolve cannot land.
+            suggestTokenRef.current += 1;
+        };
     }, []);
 
     const canSuggest = !lost && !busy && hasMoves(tiles);
