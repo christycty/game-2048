@@ -42,7 +42,7 @@ docker compose --profile prod up   # nginx client; API unpublished
 docker compose --profile dev --profile metrics up
 ```
 
-`docker compose up` with no profile starts nothing. Published ports are loopback-only. Defaults are API `8000` and client `5173` (override with `API_HOST_PORT` / `CLIENT_HOST_PORT`); with `metrics`, also Prometheus / Grafana (`PROMETHEUS_HOST_PORT` / `GRAFANA_HOST_PORT`). Prod publishes only the client; nginx forwards `/suggest`.
+`docker compose up` with no profile starts nothing. Published ports are loopback-only. Defaults are API `8000` and client `5173` (override with `API_HOST_PORT` / `CLIENT_HOST_PORT`); with `metrics`, also Prometheus / Grafana (`PROMETHEUS_HOST_PORT` / `GRAFANA_HOST_PORT`). Prod publishes only the client; nginx forwards `/suggest` and `/client-events`.
 
 ## It worked if…
 
