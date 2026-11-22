@@ -244,7 +244,7 @@ test("suggestMove re-checks shouldReportOutcome after the suggest await", async 
     );
 });
 
-test("suggestMove treats abort during json of a bad body as AbortError and does not beacon", async () => {
+test("suggestMove treats abort during json of a bad body as AbortError and beacons cancel", async () => {
     // Abort across await response.json() must not beacon fail for an unusable body.
     const controller = new AbortController();
     const calls = [];
@@ -267,13 +267,18 @@ test("suggestMove treats abort during json of a bad body as AbortError and does 
         () => suggestMove(BOARD, "llm", { fetch: fetchImpl, signal: controller.signal }),
         (error) => isAbortError(error) && !(error instanceof SuggestError),
     );
-    assert.equal(calls.some((c) => c.url === "/client-events"), false);
+    const beacon = calls.find((c) => c.url === "/client-events");
+    assert.ok(beacon);
+    assert.deepEqual(JSON.parse(beacon.options.body), { outcome: "cancel" });
 });
 
-test("suggestMove preserves AbortError instead of wrapping it and does not beacon", async () => {
+test("suggestMove preserves AbortError and beacons cancel", async () => {
     const calls = [];
     const fetchImpl = async (url, options) => {
         calls.push({ url, options });
+        if (url.endsWith("/client-events")) {
+            return { ok: true, status: 204, async json() { return {}; } };
+        }
         throw new DOMException("The operation was aborted.", "AbortError");
     };
 
@@ -281,15 +286,21 @@ test("suggestMove preserves AbortError instead of wrapping it and does not beaco
         () => suggestMove(BOARD, "llm", { fetch: fetchImpl }),
         (error) => isAbortError(error) && !(error instanceof SuggestError),
     );
-    assert.equal(calls.some((c) => c.url === "/client-events"), false);
+    const beacon = calls.find((c) => c.url === "/client-events");
+    assert.ok(beacon);
+    assert.equal(beacon.options.keepalive, true);
+    assert.deepEqual(JSON.parse(beacon.options.body), { outcome: "cancel" });
 });
 
-test("suggestMove maps a non-AbortError to AbortError when the signal is already aborted", async () => {
+test("suggestMove maps a non-AbortError to AbortError when the signal is already aborted and beacons cancel", async () => {
     const calls = [];
     const controller = new AbortController();
     controller.abort();
     const fetchImpl = async (url, options) => {
         calls.push({ url, options });
+        if (url.endsWith("/client-events")) {
+            return { ok: true, status: 204, async json() { return {}; } };
+        }
         throw new TypeError("Failed to fetch");
     };
 
@@ -297,10 +308,12 @@ test("suggestMove maps a non-AbortError to AbortError when the signal is already
         () => suggestMove(BOARD, "llm", { fetch: fetchImpl, signal: controller.signal }),
         (error) => isAbortError(error) && !(error instanceof SuggestError),
     );
-    assert.equal(calls.some((c) => c.url === "/client-events"), false);
+    const beacon = calls.find((c) => c.url === "/client-events");
+    assert.ok(beacon);
+    assert.deepEqual(JSON.parse(beacon.options.body), { outcome: "cancel" });
 });
 
-test("suggestMove treats HTTP 499 as AbortError and does not beacon", async () => {
+test("suggestMove treats HTTP 499 as AbortError and beacons cancel", async () => {
     const calls = [];
     const fetchImpl = async (url, options) => {
         calls.push({ url, options });
@@ -314,10 +327,12 @@ test("suggestMove treats HTTP 499 as AbortError and does not beacon", async () =
         () => suggestMove(BOARD, "llm", { fetch: fetchImpl }),
         (error) => isAbortError(error) && !(error instanceof SuggestError),
     );
-    assert.equal(calls.some((c) => c.url === "/client-events"), false);
+    const beacon = calls.find((c) => c.url === "/client-events");
+    assert.ok(beacon);
+    assert.deepEqual(JSON.parse(beacon.options.body), { outcome: "cancel" });
 });
 
-test("suggestMove treats a resolved response as AbortError when the signal is aborted", async () => {
+test("suggestMove treats a resolved response as AbortError when the signal is aborted and beacons cancel", async () => {
     const calls = [];
     const controller = new AbortController();
     controller.abort();
@@ -339,5 +354,31 @@ test("suggestMove treats a resolved response as AbortError when the signal is ab
         () => suggestMove(BOARD, "llm", { fetch: fetchImpl, signal: controller.signal }),
         (error) => isAbortError(error) && !(error instanceof SuggestError),
     );
-    assert.equal(calls.some((c) => c.url === "/client-events"), false);
+    const beacon = calls.find((c) => c.url === "/client-events");
+    assert.ok(beacon);
+    assert.deepEqual(JSON.parse(beacon.options.body), { outcome: "cancel" });
+});
+
+test("suggestMove abort still beacons cancel when shouldReportOutcome is false", async () => {
+    // Stop/move bumps the token before fetch rejects; cancel must still count.
+    const calls = [];
+    const fetchImpl = async (url, options) => {
+        calls.push({ url, options });
+        if (url.endsWith("/client-events")) {
+            return { ok: true, status: 204, async json() { return {}; } };
+        }
+        throw new DOMException("The operation was aborted.", "AbortError");
+    };
+
+    await assert.rejects(
+        () =>
+            suggestMove(BOARD, "llm", {
+                fetch: fetchImpl,
+                shouldReportOutcome: () => false,
+            }),
+        (error) => isAbortError(error) && !(error instanceof SuggestError),
+    );
+    const beacon = calls.find((c) => c.url === "/client-events");
+    assert.ok(beacon);
+    assert.deepEqual(JSON.parse(beacon.options.body), { outcome: "cancel" });
 });
