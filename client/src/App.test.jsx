@@ -538,6 +538,39 @@ test("changing AI mode clears the pending suggestion", async () => {
     expect(screen.queryByRole("button", { name: "Play Right" })).toBeNull();
 });
 
+test("changing AI mode during Thinking aborts the in-flight suggest", async () => {
+    let seenSignal;
+    suggestMove.mockImplementation(
+        (_board, _mode, options = {}) =>
+            new Promise((_resolve, reject) => {
+                seenSignal = options.signal;
+                options.signal?.addEventListener("abort", () => {
+                    reject(new DOMException("Aborted", "AbortError"));
+                });
+            }),
+    );
+
+    render(<App />);
+    fireEvent.click(screen.getByRole("button", { name: "AI" }));
+    expect(seenSignal).toBeInstanceOf(AbortSignal);
+    expect(seenSignal.aborted).toBe(false);
+
+    fireEvent.click(screen.getByRole("radio", { name: "Expectimax" }));
+
+    expect(seenSignal.aborted).toBe(true);
+    expect(screen.getByRole("radio", { name: "Expectimax" }).checked).toBe(true);
+    expect(screen.getByRole("button", { name: "AI" }).disabled).toBe(false);
+    expect(screen.queryByRole("button", { name: /Play / })).toBeNull();
+    expect(screen.queryByRole("status")).toBeNull();
+
+    await act(async () => {
+        await Promise.resolve();
+    });
+
+    expect(screen.queryByRole("status")).toBeNull();
+    expect(screen.getByRole("button", { name: "AI" }).disabled).toBe(false);
+});
+
 test("auto play applies a suggestion without waiting for Play", async () => {
     suggestMove.mockResolvedValue({
         move: "right",

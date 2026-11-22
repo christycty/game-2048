@@ -32,7 +32,7 @@ export async function suggestMove(
             signal,
         });
     } catch (error) {
-        // Abort must stay AbortError so the UI can stay silent (Stop, New Game, move).
+        // Abort must stay AbortError so the UI can stay silent (Stop, New Game, move, mode).
         if (isAbortError(error) || signal?.aborted) {
             const abortError = isAbortError(error) ? error : new DOMException("Aborted", "AbortError");
             throw abortError;

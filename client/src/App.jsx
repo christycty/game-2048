@@ -281,7 +281,11 @@ function App() {
         if (mode === aiModeRef.current) return;
         aiModeRef.current = mode;
         setAiMode(mode);
-        // The pending move belongs to the previous mode.
+        // Previous mode's in-flight fetch or pending Play must not land.
+        if (suggestingRef.current) {
+            abortInFlightSuggest();
+            if (!animatingRef.current) setBusy(false);
+        }
         clearSuggestion();
     }
 
