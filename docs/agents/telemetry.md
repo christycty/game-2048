@@ -31,8 +31,8 @@ We intentionally **do not** scrape TTFT / time-per-output-token / prompt text: t
 
 **Grafana charting:**
 - **API row:** `/suggest` by status (all codes), Suggest by source, Latency (p50/p95), in-flight HTTP POSTs.
-- **Client row:** suggest outcomes (`fail` / `rate_limit` from `/client-events`).
-- **LLM row:** success rate, outcomes, error types, duration (p50/p95), tokens.
+- **Client row:** suggest outcomes (`fail` / `rate_limit` / `cancel` from `/client-events`).
+- **LLM row:** success rate (excludes cancelled), outcomes (incl. cancelled), error types, duration (p50/p95), tokens.
 - Multi-series **rate** panels use **unstacked** lines (each series Y is absolute). Stacked areas make a smaller series look “above” a larger one.
 - Legends use **Last \*** = last non-null sample. Rate queries drop `== 0` samples (`> 0`) so idle series do not show a fake `0`; latency / success-rate panels stay empty when there is no traffic.
 
@@ -44,7 +44,7 @@ The browser does **not** run an OpenTelemetry SDK. Each `POST /suggest` from [`c
 
 Coarse client fail / rate-limit counts go to scrape metrics via `POST /client-events` (same-origin; Vite and nginx proxy it). Prompt forensics stay in Phoenix — do not duplicate them in the browser.
 
-App passes `shouldReportOutcome` so abandoned in-flight suggests (stale token after a board-changing move / New Game) do **not** beacon `fail` / `rate_limit`. Abort (`AbortError` / HTTP `499`, including abort across `response.json()`) stays silent and does not beacon fail either. **Follow-on:** a dedicated `cancel` beacon outcome (see cancel-observability plan). Do not emit cancel from stale-token ignores.
+App passes `shouldReportOutcome` so abandoned in-flight suggests (stale token after a board-changing move / New Game) do **not** beacon `fail` / `rate_limit`. Abort (`AbortError` / HTTP `499`, including abort across `response.json()`) beacons `cancel` (not `fail`); that path does not consult `shouldReportOutcome` because Stop/move already bumps the token before fetch rejects. Stale-token ignores that never aborted a fetch stay beacon-free.
 
 `/client-events` is unauthenticated like the rest of the API (no player auth yet). Prod keeps the API unpublished; published ports are loopback-only. Follow-up integrity gate (beacon rate limit): [client-events-integrity.md](../../plan/client-events-integrity.md).
 
@@ -57,8 +57,8 @@ App passes `shouldReportOutcome` so abandoned in-flight suggests (stale token af
 | TTFT, provider total/eval, time-per-output-token | **Phoenix** (span events) | Kept off scrape series on purpose |
 | HTTP status rates, API latency | **Grafana** | Aggregates from FastAPI HTTP scrape series |
 | Suggest `source` (`llm` / `fallback` / …) | **Grafana** | API-level scrape counter (HTTP 200 ≠ model win) |
-| Client fail / rate_limit rates | **Grafana** | `client_suggest_outcome_total` from `/client-events` |
-| LLM success / error / timeout rate | **Grafana** | Per-attempt `request_count` scrape series |
+| Client fail / rate_limit / cancel rates | **Grafana** | `client_suggest_outcome_total` from `/client-events` |
+| LLM success / error / timeout / cancelled rate | **Grafana** | Per-attempt `request_count` scrape series |
 | LLM duration p50/p95, token burn | **Grafana** | GenAI histogram scrape series |
 | Ad-hoc PromQL / “is scrape up?” | Prometheus Graph | Not a product dashboard |
 
@@ -117,9 +117,9 @@ Every panel on the provisioned dashboard and the **exact** Prom series suffix it
 | Suggest by source | `suggest_source_total` | `sum by (suggest_source)` · `llm` \| `fallback` \| `expectimax` · rate `> 0` |
 | POST /suggest latency | `http_server_duration_milliseconds_bucket` | `histogram_quantile` p50 + p95 · empty when no `/suggest` traffic |
 | In-flight HTTP requests | `http_server_active_requests` | `sum` · `http_method="POST"` (proxy for `/suggest`; single-tab Auto Play is serial — spikes mean multi-tab/overlap; `/health`/`/metrics`/`/client-events` not instrumented) |
-| Client suggest outcomes | `client_suggest_outcome_total` | `sum by (outcome)` · `fail` \| `rate_limit` · rate `> 0` |
-| LLM request success rate | `gen_ai_client_request_count_total` | `success` rate / total rate; empty when idle (`total rate == 0`) |
-| LLM requests by outcome | `gen_ai_client_request_count_total` | `sum by (gen_ai_request_outcome)` · `success` \| `error` \| `timeout` · rate `> 0` |
+| Client suggest outcomes | `client_suggest_outcome_total` | `sum by (outcome)` · `fail` \| `rate_limit` \| `cancel` · rate `> 0` |
+| LLM request success rate | `gen_ai_client_request_count_total` | `success` / (`success`+`error`+`timeout`); cancelled excluded; empty when idle |
+| LLM requests by outcome | `gen_ai_client_request_count_total` | `sum by (gen_ai_request_outcome)` · `success` \| `error` \| `timeout` \| `cancelled` · rate `> 0` |
 | LLM errors by type | `gen_ai_client_request_count_total` | `sum by (error_type)` where outcome=`error` · `request` \| `response` \| `parse` \| `illegal_move` · rate `> 0` |
 | LLM call duration | `gen_ai_client_operation_duration_seconds_bucket` | `histogram_quantile` p50 + p95 · empty when no body-path calls (excludes timeout/request failures) |
 | Token usage rate by type | `gen_ai_client_token_usage_sum` | `sum by (gen_ai_token_type)` · `input` \| `output` · rate `> 0` |
@@ -151,8 +151,9 @@ Not incremented on 429 (rate limit) or 409 (no legal move).
 | `success` | Parsed legal move with non-blank reason |
 | `error` | Non-timeout failure (`error_type` set) |
 | `timeout` | `httpx.TimeoutException` on the Ollama call |
+| `cancelled` | Client disconnect / abort interrupted the Ollama attempt (not a model failure) |
 
-Histograms for duration/tokens record only when usage mapping runs (successful Ollama body path), including attempts that later fail parse/illegal — those attempts still get `request_count` `error`.
+Histograms for duration/tokens record only when usage mapping runs (successful Ollama body path), including attempts that later fail parse/illegal — those attempts still get `request_count` `error`. Cancelled attempts do not increment `suggest_source`. Expectimax-only cancel has no GenAI series (HTTP `499` + chain span only).
 
 **`client_suggest_outcome` (one increment per browser `POST /client-events`):**
 
@@ -160,8 +161,9 @@ Histograms for duration/tokens record only when usage mapping runs (successful O
 |---|---|
 | `fail` | Network error, non-429 HTTP failure, or unusable suggest body |
 | `rate_limit` | Suggest returned HTTP 429 |
+| `cancel` | Client abort (`AbortError`) or HTTP `499` (server saw disconnect) |
 
-Not emitted on success. `cancel` is reserved for a follow-up cancel-observability slice (AbortSignal + server disconnect already land from `suggest-cancel`).
+Not emitted on success. Stale-token ignores that never aborted do not beacon.
 
 ### Tests (scrape contract)
 
@@ -171,10 +173,11 @@ Not emitted on success. `cancel` is reserved for a follow-up cancel-observabilit
 |---|---|
 | LLM success path | `gen_ai_request_outcome=success`, duration + token histograms, `suggest_source=llm` |
 | LLM failures | `error` + `error_type` = `request` \| `response` \| `parse` \| `illegal_move`; `timeout`; `suggest_source=fallback` |
+| LLM cancel | `cancelled` (not `error`); ollama/suggest spans not ERROR; no `suggest_source` |
 | Suggest sources | `llm` / `fallback` / `expectimax` (expectimax does not open Ollama) |
 | HTTP `/suggest` | `http_server_duration_milliseconds_count` for status `200` / `422` / `409` / `429` (429 does not bump `suggest_source`) |
 | Client `traceparent` | Fixed header → `/suggest` spans share that `trace_id` and parent span id |
-| Client beacons | `client_suggest_outcome_total` for `fail` / `rate_limit`; `/client-events` not traced |
+| Client beacons | `client_suggest_outcome_total` for `fail` / `rate_limit` / `cancel`; `/client-events` not traced |
 
 ---
 

@@ -76,7 +76,7 @@ Over the limit returns `429` with `Retry-After`. The cap is not per browser: in 
 `GET /metrics` on the API is always on (Prometheus text). Pair `--profile metrics` with `dev` or `prod` to scrape it:
 
 - Prometheus scrapes Compose DNS `api:8000` (`dev` and `prod` both publish that alias).
-- Grafana **GenAI ops** (`/d/game2048-genai`): API row (`/suggest` by status, suggest by source, latency p50/p95, in-flight POSTs), Client row (fail / rate_limit beacons), and LLM row (success rate, outcomes, error types, duration p50/p95, tokens). Unstacked rate lines; legend **Last \*** skips idle zeros. Inventory: [telemetry.md](telemetry.md).
+- Grafana **GenAI ops** (`/d/game2048-genai`): API row (`/suggest` by status, suggest by source, latency p50/p95, in-flight POSTs), Client row (fail / rate_limit / cancel beacons), and LLM row (success rate excluding cancelled, outcomes incl. cancelled, error types, duration p50/p95, tokens). Unstacked rate lines; legend **Last \*** skips idle zeros. Inventory: [telemetry.md](telemetry.md).
 - Anonymous Viewer access on loopback; no Alertmanager or retention stack. Prometheus Graph is ad-hoc only.
 
 Config lives under `observability/` (`prometheus.yml`, Grafana provisioning).

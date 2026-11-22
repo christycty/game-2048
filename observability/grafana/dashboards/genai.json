@@ -186,7 +186,7 @@
     },
     {
       "datasource": { "type": "prometheus", "uid": "prometheus" },
-      "description": "Browser-reported suggest outcomes via POST /client-events. Cancel deferred until AbortSignal. Unstacked.",
+      "description": "Browser-reported suggest outcomes via POST /client-events (fail / rate_limit / cancel). Unstacked.",
       "fieldConfig": {
         "defaults": {
           "unit": "reqps",
@@ -254,7 +254,7 @@
       "targets": [
         {
           "datasource": { "type": "prometheus", "uid": "prometheus" },
-          "expr": "(sum(rate(gen_ai_client_request_count_total{gen_ai_request_outcome=\"success\"}[5m])) / sum(rate(gen_ai_client_request_count_total[5m]))) and on() (sum(rate(gen_ai_client_request_count_total[5m])) > 0)",
+          "expr": "(sum(rate(gen_ai_client_request_count_total{gen_ai_request_outcome=\"success\"}[5m])) / sum(rate(gen_ai_client_request_count_total{gen_ai_request_outcome=~\"success|error|timeout\"}[5m]))) and on() (sum(rate(gen_ai_client_request_count_total{gen_ai_request_outcome=~\"success|error|timeout\"}[5m])) > 0)",
           "legendFormat": "success rate",
           "refId": "A"
         }
@@ -273,7 +273,7 @@
     },
     {
       "datasource": { "type": "prometheus", "uid": "prometheus" },
-      "description": "Per-attempt outcomes. Unstacked so Y = that outcome's rate.",
+      "description": "Per-attempt outcomes (success / error / timeout / cancelled). Unstacked so Y = that outcome's rate.",
       "fieldConfig": {
         "defaults": {
           "unit": "ops",
