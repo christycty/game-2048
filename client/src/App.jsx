@@ -2,9 +2,10 @@ import { useEffect, useRef, useState } from "react";
 import Board from "./components/Board";
 import ScoreCard from "./components/ScoreCard";
 import ActionPanel from "./components/ActionPanel";
-import { suggestMove, SuggestError, isAbortError } from "./api";
+import { suggestMove, SuggestError, isAbortError, LIMIT_CAPACITY } from "./api";
 import {
     applyMove,
+    AUTO_PLAY_CAPACITY_MAX_RETRIES,
     AUTO_PLAY_GAP_MS,
     createInitialTiles,
     hasMoves,
@@ -47,10 +48,15 @@ function App() {
     const suggestTokenRef = useRef(0);
     const suggestAbortRef = useRef(null);
     const aiModeRef = useRef(aiMode);
+    const capacityRetriesRef = useRef(0);
 
     function clearSuggestion() {
         setPendingMove(null);
         setHint(null);
+    }
+
+    function resetCapacityRetries() {
+        capacityRetriesRef.current = 0;
     }
 
     // Abort the fetch and drop the token so a late response cannot land.
@@ -68,6 +74,7 @@ function App() {
         if (!autoPlayingRef.current) return;
         autoPlayingRef.current = false;
         setAutoPlaying(false);
+        resetCapacityRetries();
         // The post-settle gap keeps busy true so AI stays inactive through the pause.
         // Stopping must release that hold when nothing else is in flight.
         if (!animatingRef.current && !suggestingRef.current) {
@@ -84,6 +91,7 @@ function App() {
         suggestingRef.current = false;
         autoPlayingRef.current = false;
         autoApplyingRef.current = false;
+        resetCapacityRetries();
         tilesRef.current = nextTiles;
         scoreRef.current = 0;
         lostRef.current = false;
@@ -187,13 +195,16 @@ function App() {
             clearSuggestion();
         }
 
+        let scheduleCapacityRetry = false;
+        let capacityRetryDelayMs = 1000;
         try {
             const suggestion = await suggestMove(tilesToBoard(tilesRef.current), aiModeRef.current, {
                 signal: controller.signal,
-                // Stale-token ignores must not beacon fail/rate_limit; abort beacons cancel itself.
+                // Stale-token ignores must not beacon fail/rate_limit/model_busy; abort beacons cancel.
                 shouldReportOutcome: () => suggestTokenRef.current === token,
             });
             if (suggestTokenRef.current !== token) return;
+            resetCapacityRetries();
             // "fallback" is a fixed move order, not a model choice.
             if (suggestion.source === "fallback") {
                 setHint("AI could not suggest a move");
@@ -232,11 +243,34 @@ function App() {
                 return;
             }
             setPendingMove(null);
-            setHint(
-                error instanceof SuggestError && error.status === 429
-                    ? "Too many suggestions. Wait a moment and try again."
-                    : "AI could not suggest a move",
-            );
+            const isCapacityBusy =
+                error instanceof SuggestError &&
+                error.status === 429 &&
+                error.limitReason === LIMIT_CAPACITY;
+            const isSpendCap =
+                error instanceof SuggestError &&
+                error.status === 429 &&
+                !isCapacityBusy;
+
+            if (
+                isCapacityBusy &&
+                autoPlayingRef.current &&
+                capacityRetriesRef.current < AUTO_PLAY_CAPACITY_MAX_RETRIES
+            ) {
+                capacityRetriesRef.current += 1;
+                capacityRetryDelayMs = Math.max(1, error.retryAfter ?? 1) * 1000;
+                setHint("Model busy. Retrying…");
+                scheduleCapacityRetry = true;
+                return;
+            }
+
+            if (isCapacityBusy) {
+                setHint("Model busy. Wait a moment and try again.");
+            } else if (isSpendCap) {
+                setHint("Too many suggestions. Wait a moment and try again.");
+            } else {
+                setHint("AI could not suggest a move");
+            }
             stopAutoPlay();
         } finally {
             if (suggestAbortRef.current === controller) {
@@ -245,7 +279,19 @@ function App() {
             if (suggestTokenRef.current === token) {
                 suggestingRef.current = false;
                 setSuggesting(false);
-                if (!animatingRef.current) setBusy(false);
+                if (scheduleCapacityRetry) {
+                    // Keep busy through the Retry-After wait (same idea as AUTO_PLAY_GAP_MS).
+                    window.setTimeout(() => {
+                        if (suggestTokenRef.current !== token) return;
+                        if (!autoPlayingRef.current) {
+                            if (!animatingRef.current) setBusy(false);
+                            return;
+                        }
+                        void handleSuggest();
+                    }, capacityRetryDelayMs);
+                } else if (!animatingRef.current) {
+                    setBusy(false);
+                }
             }
         }
     }

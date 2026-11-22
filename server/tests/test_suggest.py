@@ -11,7 +11,15 @@ from pydantic import ValidationError
 from app.cancel import SuggestCancelled
 from app.llm import LlmError, ModelSuggestion, OllamaClient, _prompt, parse_move
 from app.main import create_app
-from app.rate_limit import LlmInFlightGate, SuggestRateLimiter
+from app.rate_limit import (
+    DETAIL_MODEL_BUSY,
+    DETAIL_SPEND_CAP,
+    HEADER_SUGGEST_LIMIT,
+    LIMIT_REASON_CAPACITY,
+    LIMIT_REASON_SPEND,
+    LlmInFlightGate,
+    SuggestRateLimiter,
+)
 from app.schemas import MAX_TILE
 from app.suggester import MoveSuggester
 from helpers import (
@@ -140,8 +148,9 @@ def test_suggest_rate_limit_stops_before_the_model() -> None:
 
     blocked = _suggest(client)
     assert blocked.status_code == 429
-    assert blocked.json()["detail"] == "too many suggestions"
+    assert blocked.json()["detail"] == DETAIL_SPEND_CAP
     assert blocked.headers["retry-after"] == "60"
+    assert blocked.headers[HEADER_SUGGEST_LIMIT.lower()] == LIMIT_REASON_SPEND
     assert llm.calls == 2
 
     clock.now = 60
@@ -230,8 +239,9 @@ def test_llm_in_flight_blocks_second_call_while_first_holds() -> None:
     with TestClient(app) as client:
         blocked = client.post("/suggest", json=body)
         assert blocked.status_code == 429
-        assert blocked.json()["detail"] == "too many suggestions"
+        assert blocked.json()["detail"] == DETAIL_MODEL_BUSY
         assert blocked.headers["retry-after"] == "1"
+        assert blocked.headers[HEADER_SUGGEST_LIMIT.lower()] == LIMIT_REASON_CAPACITY
         assert llm.calls == 1
 
         llm.release.set()
@@ -293,11 +303,14 @@ def test_capacity_reject_does_not_burn_hard_ceiling() -> None:
     with TestClient(app) as client:
         busy = client.post("/suggest", json=body)
         assert busy.status_code == 429
+        assert busy.json()["detail"] == DETAIL_MODEL_BUSY
         assert busy.headers["retry-after"] == "1"
+        assert busy.headers[HEADER_SUGGEST_LIMIT.lower()] == LIMIT_REASON_CAPACITY
         # If the busy call burned a hard-window hit, the window would be full (2/2)
         # and this third call would get Retry-After from the window (60), not capacity (1).
         again = client.post("/suggest", json=body)
         assert again.status_code == 429
+        assert again.json()["detail"] == DETAIL_MODEL_BUSY
         assert again.headers["retry-after"] == "1"
 
     llm.release.set()

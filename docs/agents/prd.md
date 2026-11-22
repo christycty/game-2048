@@ -55,7 +55,8 @@ The player can switch modes before asking. Changing mode drops any suggestion th
 3. On success, the page shows the suggested direction and, when available, a short reason. A **Play {Direction}** control appears.
 4. Nothing moves until the player presses **Play**, or until they ignore the suggestion and move themselves (keys/swipe). Taking their own move clears the pending suggestion.
 5. If the suggestion cannot be used (service failure, or a fallback that is not treated as a real recommendation), the page says **AI could not suggest a move** and does not offer **Play**.
-6. If the API rate-limits the request, the page says **Too many suggestions. Wait a moment and try again.** and does not offer **Play**.
+6. If the API hits the **spend** hard ceiling (`429` / `too many suggestions`), the page says **Too many suggestions. Wait a moment and try again.** and does not offer **Play**.
+7. If the API hits the **capacity** gate (`429` / `model busy`), the page says **Model busy. Wait a moment and try again.** and does not offer **Play** (manual AI does not auto-retry).
 
 AI is unavailable when the game is over, while a move animation is playing, while a request is already in flight, while Auto Play is running, or when the board has no legal move.
 
@@ -64,7 +65,7 @@ AI is unavailable when the game is over, while a move animation is playing, whil
 1. Player presses **Auto Play**. The control becomes **Stop** (`aria-pressed` true). Auto Play uses the currently selected mode (**LLM** or **Expectimax**).
 2. If a usable suggestion is already pending, Auto Play applies it immediately. Otherwise it requests one.
 3. On a usable suggestion, the client applies the move without waiting for **Play**, keeps the hint visible during the slide, waits a short pause after the slide settles, then requests the next suggestion.
-4. Auto Play stops when the player presses **Stop**, starts **New Game**, loses, takes a manual key/swipe move, or when a suggestion is unusable (fallback, rate limit, or transport failure). **Stop** (and other takeover paths) abort an in-flight suggest so the client does not wait on a late response and the server can cancel that run. Abort is silent (no failure hint); a server-side cancel that still reaches the client as abort (e.g. HTTP `499`) also ends Auto Play so the loop cannot stall. Fallback/transport shows **AI could not suggest a move**; rate limit shows **Too many suggestions. Wait a moment and try again.** The board is unchanged for that step.
+4. Auto Play stops when the player presses **Stop**, starts **New Game**, loses, takes a manual key/swipe move, or when a suggestion is unusable (fallback, spend hard ceiling, exhausted capacity retries, or transport failure). **Stop** (and other takeover paths) abort an in-flight suggest so the client does not wait on a late response and the server can cancel that run. Abort is silent (no failure hint); a server-side cancel that still reaches the client as abort (e.g. HTTP `499`) also ends Auto Play so the loop cannot stall. Fallback/transport shows **AI could not suggest a move**; spend ceiling shows **Too many suggestions. Wait a moment and try again.** Capacity busy shows **Model busy. Retrying…** and retries a few times with short backoff before stopping with **Model busy. Wait a moment and try again.** The board is unchanged for that step.
 5. Auto Play does not invent moves on a timer without asking the API. Each applied move comes from a fresh suggestion for the current board.
 
 ### Product rules for suggestions

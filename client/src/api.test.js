@@ -1,6 +1,15 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { suggestMove, SuggestError, isAbortError } from "./api.js";
+import {
+    suggestMove,
+    SuggestError,
+    isAbortError,
+    classifySuggestLimit,
+    LIMIT_CAPACITY,
+    LIMIT_SPEND,
+    DETAIL_MODEL_BUSY,
+    DETAIL_SPEND_CAP,
+} from "./api.js";
 
 const BOARD = [
     [2, 0, 0, 0],
@@ -64,19 +73,41 @@ test("suggestMove passes an AbortSignal through to fetch", async () => {
     assert.equal(seen, controller.signal);
 });
 
-test("suggestMove beacons rate_limit on 429", async () => {
+test("classifySuggestLimit prefers header then detail; unknown is spend", () => {
+    assert.equal(classifySuggestLimit(DETAIL_MODEL_BUSY, null), LIMIT_CAPACITY);
+    assert.equal(classifySuggestLimit(DETAIL_SPEND_CAP, "capacity"), LIMIT_CAPACITY);
+    assert.equal(classifySuggestLimit(DETAIL_SPEND_CAP, "spend"), LIMIT_SPEND);
+    assert.equal(classifySuggestLimit(null, null), LIMIT_SPEND);
+});
+
+test("suggestMove beacons rate_limit on spend 429", async () => {
     const calls = [];
+    const headers = new Headers({
+        "retry-after": "60",
+        "x-suggest-limit": "spend",
+    });
     const fetchImpl = async (url, options) => {
         calls.push({ url, options });
         if (url.endsWith("/client-events")) {
             return { ok: true, status: 204, async json() { return {}; } };
         }
-        return { ok: false, status: 429, async json() { return {}; } };
+        return {
+            ok: false,
+            status: 429,
+            headers,
+            async json() {
+                return { detail: DETAIL_SPEND_CAP };
+            },
+        };
     };
 
     await assert.rejects(
         () => suggestMove(BOARD, "llm", { fetch: fetchImpl }),
-        (error) => error instanceof SuggestError && error.status === 429,
+        (error) =>
+            error instanceof SuggestError &&
+            error.status === 429 &&
+            error.limitReason === LIMIT_SPEND &&
+            error.retryAfter === 60,
     );
 
     const beacon = calls.find((c) => c.url === "/client-events");
@@ -84,6 +115,41 @@ test("suggestMove beacons rate_limit on 429", async () => {
     assert.equal(beacon.options.method, "POST");
     assert.equal(beacon.options.keepalive, true);
     assert.deepEqual(JSON.parse(beacon.options.body), { outcome: "rate_limit" });
+});
+
+test("suggestMove beacons model_busy on capacity 429", async () => {
+    const calls = [];
+    const headers = new Headers({
+        "retry-after": "1",
+        "x-suggest-limit": "capacity",
+    });
+    const fetchImpl = async (url, options) => {
+        calls.push({ url, options });
+        if (url.endsWith("/client-events")) {
+            return { ok: true, status: 204, async json() { return {}; } };
+        }
+        return {
+            ok: false,
+            status: 429,
+            headers,
+            async json() {
+                return { detail: DETAIL_MODEL_BUSY };
+            },
+        };
+    };
+
+    await assert.rejects(
+        () => suggestMove(BOARD, "llm", { fetch: fetchImpl }),
+        (error) =>
+            error instanceof SuggestError &&
+            error.status === 429 &&
+            error.limitReason === LIMIT_CAPACITY &&
+            error.retryAfter === 1,
+    );
+
+    const beacon = calls.find((c) => c.url === "/client-events");
+    assert.ok(beacon);
+    assert.deepEqual(JSON.parse(beacon.options.body), { outcome: "model_busy" });
 });
 
 test("suggestMove beacons fail on non-429 HTTP errors", async () => {
@@ -193,7 +259,14 @@ test("suggestMove skips beacons when shouldReportOutcome is false", async () => 
         if (url.endsWith("/client-events")) {
             return { ok: true, status: 204, async json() { return {}; } };
         }
-        return { ok: false, status: 429, async json() { return {}; } };
+        return {
+            ok: false,
+            status: 429,
+            headers: new Headers({ "retry-after": "1" }),
+            async json() {
+                return { detail: DETAIL_SPEND_CAP };
+            },
+        };
     };
 
     await assert.rejects(
@@ -224,7 +297,14 @@ test("suggestMove re-checks shouldReportOutcome after the suggest await", async 
         await new Promise((resolve) => {
             releaseSuggest = resolve;
         });
-        return { ok: false, status: 429, async json() { return {}; } };
+        return {
+            ok: false,
+            status: 429,
+            headers: new Headers({ "retry-after": "1" }),
+            async json() {
+                return { detail: DETAIL_MODEL_BUSY };
+            },
+        };
     };
 
     const pending = suggestMove(BOARD, "llm", {
