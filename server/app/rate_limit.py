@@ -61,6 +61,8 @@ class LlmInFlightGate:
 
     Default max is 1: one in-flight Ollama call at a time. Non-blocking; a full
     gate returns Retry-After like the sliding-window limiter (v1: no queue).
+    Held tokens are tracked so release only frees that request's slot (same
+    cancel-safe pattern as SuggestRateLimiter under max_in_flight > 1).
     """
 
     # Busy clients should retry soon; we do not know when the holder finishes.
@@ -69,20 +71,22 @@ class LlmInFlightGate:
     def __init__(self, max_in_flight: int) -> None:
         if max_in_flight < 1:
             raise ValueError("max_in_flight must be >= 1")
-        self._sem = threading.BoundedSemaphore(max_in_flight)
+        self._max_in_flight = max_in_flight
+        self._held: set[object] = set()
+        self._lock = threading.Lock()
 
     def acquire(self) -> GateDecision:
         """Take a slot, or return Retry-After when every slot is held."""
-        if self._sem.acquire(blocking=False):
-            return GateDecision(token=object(), retry_after=None)
-        return GateDecision(token=None, retry_after=self._RETRY_AFTER_SECONDS)
+        with self._lock:
+            if len(self._held) >= self._max_in_flight:
+                return GateDecision(token=None, retry_after=self._RETRY_AFTER_SECONDS)
+            token = object()
+            self._held.add(token)
+            return GateDecision(token=token, retry_after=None)
 
     def release(self, token: object) -> None:
-        """Free the slot acquired with ``token`` (ignore unknown tokens)."""
+        """Free the slot acquired with ``token`` (ignore unknown / double release)."""
         if token is None:
             return
-        try:
-            self._sem.release()
-        except ValueError:
-            # Extra release past the bound — ignore so a double-finally is safe.
-            pass
+        with self._lock:
+            self._held.discard(token)

@@ -30,7 +30,7 @@ Package name: `game-2048-server`. Entry: `app.main:app`. Python ≥ 3.11 (images
 | `app/moves.py` | Slide/merge rules for legal moves and the fallback order. |
 | `app/llm.py` | Ollama chat client, prompt, JSON parse; per-attempt `AsyncClient` with `task.cancel()` on disconnect (sync MockTransport path for tests). |
 | `app/cancel.py` | `SuggestCancelled` — per-request stop (not process-wide). |
-| `app/rate_limit.py` | Per-mode sliding-window hard ceiling (`SuggestRateLimiter.release` refunds after cancel) + `LlmInFlightGate` capacity semaphore for LLM. |
+| `app/rate_limit.py` | Per-mode sliding-window hard ceiling (`SuggestRateLimiter.release` refunds after cancel) + `LlmInFlightGate` token-tracked capacity gate for LLM. |
 | `app/config.py` | Env-backed settings. |
 | `app/telemetry.py` | Phoenix OTLP traces + Prometheus `/metrics` (GenAI histograms + request_count). |
 
