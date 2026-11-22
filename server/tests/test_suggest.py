@@ -14,6 +14,7 @@ from app.suggester import MoveSuggester
 from helpers import (
     COLUMN_PAIR,
     E2E_BOARD_COUNT,
+    E2E_RATE_LIMIT_REQUESTS,
     E2E_RUN_COUNT,
     E2E_SUGGEST_CALLS,
     SORTED_ROW,
@@ -141,7 +142,8 @@ def test_default_llm_rate_limit_blocks_the_sixth_call() -> None:
     assert Settings.model_fields["suggest_rate_limit_requests"].default == 5
     assert Settings.model_fields["suggest_rate_limit_expectimax_requests"].default == 30
     assert E2E_SUGGEST_CALLS == E2E_BOARD_COUNT * E2E_RUN_COUNT
-    assert E2E_SUGGEST_CALLS > 5
+    assert E2E_RATE_LIMIT_REQUESTS > E2E_SUGGEST_CALLS
+    assert E2E_RATE_LIMIT_REQUESTS > 5
 
     llm = FakeLLM(["right"] * 6)
     client = TestClient(create_app(isolated_settings(), llm))
@@ -173,14 +175,14 @@ def test_expectimax_rate_limit_is_separate_from_llm() -> None:
     assert llm.calls == 1
 
 
-def test_e2e_rate_limit_covers_parametrized_volume() -> None:
-    """A shared app sized like the e2e fixture survives the full parametrized volume."""
-    llm = FakeLLM(["right"] * E2E_SUGGEST_CALLS)
-    settings = isolated_settings(suggest_rate_limit_requests=E2E_SUGGEST_CALLS)
+def test_e2e_rate_limit_covers_shared_fixture_budget() -> None:
+    """A shared app sized like the e2e fixture survives its rate-limit budget."""
+    llm = FakeLLM(["right"] * E2E_RATE_LIMIT_REQUESTS)
+    settings = isolated_settings(suggest_rate_limit_requests=E2E_RATE_LIMIT_REQUESTS)
     client = TestClient(create_app(settings, llm))
-    for _ in range(E2E_SUGGEST_CALLS):
+    for _ in range(E2E_RATE_LIMIT_REQUESTS):
         assert _suggest(client).status_code == 200
-    assert llm.calls == E2E_SUGGEST_CALLS
+    assert llm.calls == E2E_RATE_LIMIT_REQUESTS
 
 
 def test_health_stays_ok_when_ollama_is_down() -> None:

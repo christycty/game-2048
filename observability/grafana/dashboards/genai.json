@@ -138,8 +138,94 @@
       }
     },
     {
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "description": "In-flight HTTP POSTs (health/metrics/client-events are not instrumented). Usually 0–1 for a single tab; spikes mean overlapping /suggest (multi-tab or a second client).",
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "decimals": 0,
+          "custom": {
+            "drawStyle": "line",
+            "lineInterpolation": "smooth",
+            "fillOpacity": 10,
+            "showPoints": "never",
+            "spanNulls": false
+          }
+        },
+        "overrides": []
+      },
+      "gridPos": { "h": 9, "w": 24, "x": 0, "y": 10 },
+      "id": 14,
+      "targets": [
+        {
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "expr": "sum(http_server_active_requests{http_method=\"POST\"})",
+          "legendFormat": "in-flight POST",
+          "refId": "A"
+        }
+      ],
+      "title": "In-flight HTTP requests",
+      "type": "timeseries",
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true,
+          "calcs": ["lastNotNull"]
+        },
+        "tooltip": { "mode": "single", "sort": "none" }
+      }
+    },
+    {
       "collapsed": false,
-      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 10 },
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 19 },
+      "id": 12,
+      "panels": [],
+      "title": "Client",
+      "type": "row"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "description": "Browser-reported suggest outcomes via POST /client-events. Cancel deferred until AbortSignal. Unstacked.",
+      "fieldConfig": {
+        "defaults": {
+          "unit": "reqps",
+          "custom": {
+            "drawStyle": "line",
+            "lineInterpolation": "smooth",
+            "fillOpacity": 10,
+            "showPoints": "never",
+            "stacking": { "mode": "none", "group": "A" },
+            "spanNulls": false
+          }
+        },
+        "overrides": []
+      },
+      "gridPos": { "h": 9, "w": 24, "x": 0, "y": 20 },
+      "id": 13,
+      "targets": [
+        {
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "expr": "sum by (outcome) (rate(client_suggest_outcome_total[5m])) > 0",
+          "legendFormat": "{{outcome}}",
+          "refId": "A"
+        }
+      ],
+      "title": "Client suggest outcomes",
+      "type": "timeseries",
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true,
+          "calcs": ["lastNotNull"]
+        },
+        "tooltip": { "mode": "multi", "sort": "desc" }
+      }
+    },
+    {
+      "collapsed": false,
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 29 },
       "id": 11,
       "panels": [],
       "title": "LLM",
@@ -163,7 +249,7 @@
         },
         "overrides": []
       },
-      "gridPos": { "h": 9, "w": 8, "x": 0, "y": 11 },
+      "gridPos": { "h": 9, "w": 8, "x": 0, "y": 30 },
       "id": 3,
       "targets": [
         {
@@ -202,7 +288,7 @@
         },
         "overrides": []
       },
-      "gridPos": { "h": 9, "w": 8, "x": 8, "y": 11 },
+      "gridPos": { "h": 9, "w": 8, "x": 8, "y": 30 },
       "id": 4,
       "targets": [
         {
@@ -241,7 +327,7 @@
         },
         "overrides": []
       },
-      "gridPos": { "h": 9, "w": 8, "x": 16, "y": 11 },
+      "gridPos": { "h": 9, "w": 8, "x": 16, "y": 30 },
       "id": 8,
       "targets": [
         {
@@ -280,7 +366,7 @@
         "overrides": []
       },
       "description": "p50 / p95 wall time for Ollama body-path calls.",
-      "gridPos": { "h": 9, "w": 12, "x": 0, "y": 20 },
+      "gridPos": { "h": 9, "w": 12, "x": 0, "y": 39 },
       "id": 1,
       "targets": [
         {
@@ -325,7 +411,7 @@
         },
         "overrides": []
       },
-      "gridPos": { "h": 9, "w": 12, "x": 12, "y": 20 },
+      "gridPos": { "h": 9, "w": 12, "x": 12, "y": 39 },
       "id": 2,
       "targets": [
         {

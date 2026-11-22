@@ -13,11 +13,12 @@ from app.cancel import SuggestCancelled
 from app.config import Settings
 from app.llm import LlmClient, OllamaClient
 from app.rate_limit import SuggestRateLimiter
-from app.schemas import HealthResponse, SuggestRequest, SuggestResponse
+from app.schemas import ClientEventRequest, HealthResponse, SuggestRequest, SuggestResponse
 from app.suggester import MoveSuggester, NoLegalMove
 from app.telemetry import (
     mark_chain_io,
     mark_span_error,
+    record_client_suggest_outcome,
     set_json_io,
     setup_telemetry,
     shutdown_telemetry,
@@ -131,6 +132,12 @@ def create_app(
     @app.get("/health", response_model=HealthResponse)
     def health() -> HealthResponse:
         return HealthResponse(status="ok")
+
+    # Thin client beacons: fail / rate_limit counts for Grafana. Not traced
+    # (see _EXCLUDED_URLS). Cancel outcome waits on AbortSignal.
+    @app.post("/client-events", status_code=204, include_in_schema=False)
+    def client_events(body: ClientEventRequest) -> None:
+        record_client_suggest_outcome(body.outcome)
 
     @app.post("/suggest", response_model=SuggestResponse)
     async def suggest(request: Request, body: SuggestRequest) -> SuggestResponse:

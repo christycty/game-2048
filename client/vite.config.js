@@ -21,6 +21,9 @@ export default defineConfig(({ mode }) => {
         '/suggest': {
           target: process.env.API_PROXY_TARGET || `http://127.0.0.1:${apiPort}`,
         },
+        '/client-events': {
+          target: process.env.API_PROXY_TARGET || `http://127.0.0.1:${apiPort}`,
+        },
       },
       watch: {
         usePolling: process.env.CHOKIDAR_USEPOLLING === 'true',

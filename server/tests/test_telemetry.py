@@ -22,6 +22,7 @@ from app.telemetry import (
     LLM_TOKEN_COUNT_PROMPT,
     OPENINFERENCE_SPAN_KIND,
     OUTPUT_VALUE,
+    PROM_CLIENT_SUGGEST_OUTCOME,
     PROM_OPERATION_DURATION,
     PROM_REQUEST_COUNT,
     PROM_SUGGEST_SOURCE,
@@ -165,6 +166,7 @@ def test_health_and_asgi_noise_are_not_traced() -> None:
     client = TestClient(app)
     assert client.get("/health").status_code == 200
     assert client.get("/metrics").status_code == 200
+    assert client.post("/client-events", json={"outcome": "fail"}).status_code == 204
     assert exporter.get_finished_spans() == ()
 
     response = client.post("/suggest", json={"board": OPEN_BOARD, "mode": "llm"})
@@ -177,6 +179,81 @@ def test_health_and_asgi_noise_are_not_traced() -> None:
     assert root.attributes[OPENINFERENCE_SPAN_KIND] == SPAN_KIND_CHAIN
     assert '"mode": "llm"' in root.attributes[INPUT_VALUE]
     assert '"source": "llm"' in root.attributes[OUTPUT_VALUE]
+
+
+def test_suggest_continues_client_traceparent() -> None:
+    """Browser W3C traceparent must join the server HTTP + suggest spans."""
+    exporter = InMemorySpanExporter()
+    app = create_app(
+        isolated_settings(export_traces=True),
+        _QuietLLM(),
+        SimpleSpanProcessor(exporter),
+    )
+    # Fixed ids from the W3C Trace Context examples.
+    trace_id_hex = "4bf92f3577b34da6a3ce929d0e0e4736"
+    parent_span_hex = "00f067aa0ba902b7"
+    response = TestClient(app).post(
+        "/suggest",
+        json={"board": OPEN_BOARD, "mode": "llm"},
+        headers={"traceparent": f"00-{trace_id_hex}-{parent_span_hex}-01"},
+    )
+    assert response.status_code == 200
+
+    finished = exporter.get_finished_spans()
+    assert {span.name for span in finished} == {"POST /suggest", "suggest"}
+    expected_trace_id = int(trace_id_hex, 16)
+    assert all(span.context.trace_id == expected_trace_id for span in finished)
+
+    root = next(span for span in finished if span.name == "POST /suggest")
+    assert root.parent is not None
+    assert root.parent.span_id == int(parent_span_hex, 16)
+
+
+def test_client_events_increment_scrape_counter() -> None:
+    from app.telemetry import (
+        CLIENT_OUTCOME_FAIL,
+        CLIENT_OUTCOME_RATE_LIMIT,
+        record_client_suggest_outcome,
+    )
+
+    app = create_app(isolated_settings(export_traces=False), _QuietLLM())
+    client = TestClient(app)
+    assert client.post("/client-events", json={"outcome": CLIENT_OUTCOME_FAIL}).status_code == 204
+    assert (
+        client.post("/client-events", json={"outcome": CLIENT_OUTCOME_RATE_LIMIT}).status_code
+        == 204
+    )
+    assert client.post("/client-events", json={"outcome": "cancel"}).status_code == 422
+    # Defense in depth: unknown labels never touch the scrape counter.
+    record_client_suggest_outcome("cancel")
+    record_client_suggest_outcome("not-an-outcome")
+
+    body = client.get("/metrics").text
+    assert PROM_CLIENT_SUGGEST_OUTCOME in body
+    assert (
+        _labeled_counter(body, PROM_CLIENT_SUGGEST_OUTCOME, f'outcome="{CLIENT_OUTCOME_FAIL}"')
+        == 1.0
+    )
+    assert (
+        _labeled_counter(
+            body, PROM_CLIENT_SUGGEST_OUTCOME, f'outcome="{CLIENT_OUTCOME_RATE_LIMIT}"'
+        )
+        == 1.0
+    )
+    assert _labeled_counter(body, PROM_CLIENT_SUGGEST_OUTCOME, 'outcome="cancel"') == 0.0
+
+
+def test_http_body_size_metrics_dropped_active_and_duration_kept() -> None:
+    """Scrape surface matches GenAI ops: drop size histograms, keep duration + active."""
+    app = create_app(isolated_settings(export_traces=False), _QuietLLM())
+    client = TestClient(app)
+    assert client.post("/suggest", json={"board": OPEN_BOARD, "mode": "llm"}).status_code == 200
+
+    body = client.get("/metrics").text
+    assert "http_server_duration_milliseconds" in body
+    assert "http_server_active_requests" in body
+    assert "http_server_request_size_bytes" not in body
+    assert "http_server_response_size_bytes" not in body
 
 
 def test_metrics_exposes_gen_ai_series_after_suggest() -> None:
