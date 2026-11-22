@@ -49,7 +49,7 @@ function ActionPanel({
             >
                 {autoPlaying ? "Stop" : "Auto Play"}
             </button>
-            <fieldset className="ai-mode" disabled={suggesting || autoPlaying}>
+            <fieldset className="ai-mode" disabled={autoPlaying}>
                 <legend className="ai-mode-legend">AI mode</legend>
                 <div className="ai-mode-options" role="radiogroup" aria-label="AI mode">
                     {MODES.map((option) => (

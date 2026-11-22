@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { suggestMove, SuggestError } from "./api.js";
+import { suggestMove, SuggestError, isAbortError } from "./api.js";
 
 const BOARD = [
     [2, 0, 0, 0],
@@ -45,6 +45,23 @@ test("suggestMove posts the board and mode with traceparent, then returns the bo
     assert.match(calls[0].options.headers.traceparent, TRACEPARENT_RE);
     assert.deepEqual(JSON.parse(calls[0].options.body), { board: BOARD, mode: "llm" });
     assert.deepEqual(body, { move: "left", mode: "llm", source: "llm", reason: "Merges." });
+});
+
+test("suggestMove passes an AbortSignal through to fetch", async () => {
+    const controller = new AbortController();
+    let seen;
+    const fetchImpl = async (_url, options) => {
+        seen = options.signal;
+        return {
+            ok: true,
+            async json() {
+                return { move: "left", mode: "llm", source: "llm", reason: "ok" };
+            },
+        };
+    };
+
+    await suggestMove(BOARD, "llm", { fetch: fetchImpl, signal: controller.signal });
+    assert.equal(seen, controller.signal);
 });
 
 test("suggestMove beacons rate_limit on 429", async () => {
@@ -224,5 +241,58 @@ test("suggestMove re-checks shouldReportOutcome after the suggest await", async 
     assert.equal(
         calls.some((c) => c.url === "/client-events"),
         false,
+    );
+});
+
+test("suggestMove preserves AbortError instead of wrapping it and does not beacon", async () => {
+    const calls = [];
+    const fetchImpl = async (url, options) => {
+        calls.push({ url, options });
+        throw new DOMException("The operation was aborted.", "AbortError");
+    };
+
+    await assert.rejects(
+        () => suggestMove(BOARD, "llm", { fetch: fetchImpl }),
+        (error) => isAbortError(error) && !(error instanceof SuggestError),
+    );
+    assert.equal(calls.some((c) => c.url === "/client-events"), false);
+});
+
+test("suggestMove maps a non-AbortError to AbortError when the signal is already aborted", async () => {
+    const controller = new AbortController();
+    controller.abort();
+    const fetchImpl = async () => {
+        throw new TypeError("Failed to fetch");
+    };
+
+    await assert.rejects(
+        () => suggestMove(BOARD, "llm", { fetch: fetchImpl, signal: controller.signal }),
+        (error) => isAbortError(error) && !(error instanceof SuggestError),
+    );
+});
+
+test("suggestMove treats HTTP 499 as AbortError", async () => {
+    const fetchImpl = async () => ({ ok: false, status: 499, async json() { return {}; } });
+
+    await assert.rejects(
+        () => suggestMove(BOARD, "llm", { fetch: fetchImpl }),
+        (error) => isAbortError(error) && !(error instanceof SuggestError),
+    );
+});
+
+test("suggestMove treats a resolved response as AbortError when the signal is aborted", async () => {
+    const controller = new AbortController();
+    controller.abort();
+    const fetchImpl = async () => ({
+        ok: true,
+        status: 200,
+        async json() {
+            return { move: "left", mode: "llm", source: "llm", reason: "late" };
+        },
+    });
+
+    await assert.rejects(
+        () => suggestMove(BOARD, "llm", { fetch: fetchImpl, signal: controller.signal }),
+        (error) => isAbortError(error) && !(error instanceof SuggestError),
     );
 });

@@ -58,6 +58,7 @@ class _QuietLLM:
         legal: list[str],
         rejected: list[str],
         invalid_reply: bool,
+        cancel=None,
     ) -> ModelSuggestion:
         return ModelSuggestion(legal[0], "ok")
 

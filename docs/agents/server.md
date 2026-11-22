@@ -23,13 +23,14 @@ Package name: `game-2048-server`. Entry: `app.main:app`. Python ≥ 3.11 (images
 
 | Path | Role |
 |---|---|
-| `app/main.py` | App factory, CORS, rate limit gate, `/health`, `/suggest`, `/client-events`, `/metrics`. |
+| `app/main.py` | App factory, CORS, rate limit gate, disconnect-cancel middleware, `/health`, `/suggest` (async), `/client-events`, `/metrics`. |
 | `app/schemas.py` | Request and response models. Tile and mode validation. |
-| `app/suggester.py` | Mode dispatch, LLM retries, fallback, expectimax search. |
-| `app/expectimax.py` | Depth-limited expectimax with spawn chance nodes. |
+| `app/suggester.py` | Mode dispatch, LLM retries, fallback, expectimax search; honors per-request cancel. |
+| `app/expectimax.py` | Depth-limited expectimax with spawn chance nodes; checks cancel between depths and inside chance/max nodes. |
 | `app/moves.py` | Slide/merge rules for legal moves and the fallback order. |
-| `app/llm.py` | Ollama chat client, prompt, JSON parse. |
-| `app/rate_limit.py` | Process-wide sliding-window cap for `/suggest`. |
+| `app/llm.py` | Ollama chat client, prompt, JSON parse; per-attempt `AsyncClient` with `task.cancel()` on disconnect (sync MockTransport path for tests). |
+| `app/cancel.py` | `SuggestCancelled` — per-request stop (not process-wide). |
+| `app/rate_limit.py` | Process-wide sliding-window cap for `/suggest`; `release(token)` refunds that request’s hit after cancel. |
 | `app/config.py` | Env-backed settings. |
 | `app/telemetry.py` | Phoenix OTLP traces + Prometheus `/metrics` (GenAI histograms + request_count). |
 
@@ -39,8 +40,10 @@ Package name: `game-2048-server`. Entry: `app.main:app`. Python ≥ 3.11 (images
 |---|---|---|---|
 | `GET` | `/health` | `{"status":"ok"}` | Never calls Ollama. |
 | `GET` | `/metrics` | Prometheus text | Always on. GenAI + FastAPI HTTP series; inventory in [telemetry.md](telemetry.md). Not traced. |
-| `POST` | `/suggest` | `SuggestResponse` | Handler order: Pydantic `422` (before the rate-limit gate; does not consume either mode’s cap) → that mode’s process rate limit `429` + `Retry-After` + `detail: "too many suggestions"` (before suggester / any mode) → `409` when no legal move → `200` with `SuggestResponse`. Accepts W3C `traceparent` (FastAPI OTel extract). |
+| `POST` | `/suggest` | `SuggestResponse` | Handler order: Pydantic `422` (before the rate-limit gate; does not consume either mode’s cap) → that mode’s process rate limit `429` + `Retry-After` + `detail: "too many suggestions"` (before suggester / any mode) → `409` when no legal move → `200` with `SuggestResponse`. Accepts W3C `traceparent` (FastAPI OTel extract). `499` when the client disconnects / cancels mid-run (best-effort if already gone); that request’s rate-limit token is released so Stop/disconnect does not burn the mode cap or refund a sibling. |
 | `POST` | `/client-events` | empty `204` | Browser beacon `{ "outcome": "fail" \| "rate_limit" }` → `client_suggest_outcome_total`. Not traced. |
+
+Concurrent clients share one process (FastAPI threadpool + process-wide rate limiters). Cancel is **per request**: `DisconnectCancelMiddleware` tees ASGI receive for `/suggest` and sets that request’s `threading.Event` on `http.disconnect`. Each Ollama attempt uses its own `httpx.AsyncClient`; cancel cancels that attempt’s asyncio task so a blocked `post` unblocks without touching sibling suggests.
 
 CORS allows `http://localhost:${CLIENT_HOST_PORT}` and `http://127.0.0.1:${CLIENT_HOST_PORT}` (default 5173), methods `GET` and `POST`. Same-origin `/suggest` through Vite or nginx does not need CORS; the allowlist remains for builds that set `VITE_API_BASE_URL` to the API origin.
 
@@ -99,7 +102,7 @@ Expectimax depth: open boards (≥8 empties) search to depth 1; tighter boards t
 
 `POST {OLLAMA_BASE_URL}/api/chat` with `OLLAMA_MODEL`, non-streaming. The prompt lists the board, legal moves, any rejected moves, and asks for JSON `{"move":"...","reason":"..."}` only.
 
-When `OLLAMA_STRUCTURED_OUTPUT` is true and `APP_ENV` is not `prod`, the request also sends a JSON schema that constrains `move` to the legal set. Prod always omits that schema so the model must follow the prompt text alone.
+`OLLAMA_STRUCTURED_OUTPUT` is off by default. When opted in and `APP_ENV` is not `prod`, the request also sends a JSON schema that constrains `move` to the legal set. Prod always omits that schema so the model must follow the prompt text alone.
 
 `parse_move` requires JSON with a known direction and a non-blank reason, then trims the reason to at most 50 words and 400 characters.
 
@@ -112,7 +115,7 @@ Loaded from the environment and optional `server/.env` (Compose does not use tha
 | `APP_ENV` | `dev` | `dev` or `prod` |
 | `OLLAMA_BASE_URL` | `http://localhost:11434` | Host process default |
 | `OLLAMA_MODEL` | `gemma4:latest` | |
-| `OLLAMA_STRUCTURED_OUTPUT` | `true` | Forced off in prod |
+| `OLLAMA_STRUCTURED_OUTPUT` | `false` | Opt in; forced off in prod |
 | `LLM_MAX_ATTEMPTS` | `3` | 1–5 |
 | `LLM_ATTEMPT_TIMEOUT_SECONDS` | `20` | >0, ≤20 |
 | `LLM_SUGGEST_BUDGET_SECONDS` | `40` | >0, ≤40; raised to 2× attempt timeout when lower |
@@ -134,6 +137,7 @@ Typical LLM tree: FastAPI `POST /suggest` → `suggest` chain → sibling `ollam
 
 - `tests/test_helpers.py` asserts `isolated_settings` pins every `Settings` field and ignores hostile `SUGGEST_RATE_LIMIT_*` env.
 - `tests/test_suggest.py` covers health, CORS, per-mode rate limits before the suggester (including the **default** 5-call LLM cap and a separate Expectimax bucket), LLM success and reason, illegal-move retry, exhausted fallback, expectimax search + score reason, illegal-search fallback, stuck-board 409, bad payload 422, Ollama HTTP failures, prod schema omission, attempt bounds, and the time budget stop.
+- `tests/test_cancel.py` covers per-request cancel through suggester / expectimax (pre-set and mid-search via `_check`) / Ollama client (pre-set, mid-flight hanging POST with `task.cancel`, and single-POST when the caller already has a running loop), concurrent isolation (cancel A, B still completes), endpoint `499` mapping, disconnect middleware, concurrent ASGI disconnect cancelling A while B completes (LLM and expectimax), rate-limit token refund after cancel, and concurrent release not popping a sibling’s hit.
 - `tests/test_expectimax.py` covers legality, spawn odds, depth/budget cutoffs, and the reason format.
 - `tests/test_moves.py` covers the slide and merge rules used for legality.
 - `tests/test_telemetry.py` covers Phoenix URL/header rules, per-app exporters, excluded `/health` / `/metrics` / `/client-events`, client `traceparent` continuation, client beacon counters, HTTP body-size series dropped (duration + active kept), span nesting, retries, errors, stuck-board span shape, GenAI series on `/metrics` after a suggest (success / request / response / parse / illegal_move / timeout + suggest sources), and HTTP scrape status codes for `/suggest` (200 / 422 / 409 / 429).
