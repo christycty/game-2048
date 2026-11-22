@@ -184,6 +184,8 @@ function App() {
         try {
             const suggestion = await suggestMove(tilesToBoard(tilesRef.current), aiModeRef.current, {
                 signal: controller.signal,
+                // Stale-token ignores must not beacon fail/rate_limit (cancel beacon is a follow-up).
+                shouldReportOutcome: () => suggestTokenRef.current === token,
             });
             if (suggestTokenRef.current !== token) return;
             // "fallback" is a fixed move order, not a model choice.

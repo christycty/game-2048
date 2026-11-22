@@ -23,7 +23,7 @@ Package name: `game-2048-server`. Entry: `app.main:app`. Python ≥ 3.11 (images
 
 | Path | Role |
 |---|---|
-| `app/main.py` | App factory, CORS, hard-ceiling + LLM in-flight gates, disconnect-cancel middleware, `/health`, `/suggest` (async), `/metrics`. |
+| `app/main.py` | App factory, CORS, hard-ceiling + LLM in-flight gates, disconnect-cancel middleware, `/health`, `/suggest` (async), `/client-events`, `/metrics`. |
 | `app/schemas.py` | Request and response models. Tile and mode validation. |
 | `app/suggester.py` | Mode dispatch, LLM retries, fallback, expectimax search; honors per-request cancel. |
 | `app/expectimax.py` | Depth-limited expectimax with spawn chance nodes; checks cancel between depths and inside chance/max nodes. |
@@ -40,7 +40,8 @@ Package name: `game-2048-server`. Entry: `app.main:app`. Python ≥ 3.11 (images
 |---|---|---|---|
 | `GET` | `/health` | `{"status":"ok"}` | Never calls Ollama. |
 | `GET` | `/metrics` | Prometheus text | Always on. GenAI + FastAPI HTTP series; inventory in [telemetry.md](telemetry.md). Not traced. |
-| `POST` | `/suggest` | `SuggestResponse` | Handler order: Pydantic `422` (before either gate; does not consume caps) → that mode’s hard-ceiling sliding window `429` + `Retry-After` + `detail: "too many suggestions"` → **LLM only:** in-flight capacity acquire `429` + `Retry-After` (refunds the hard-ceiling hit if capacity is full) → suggester → `409` when no legal move → `200` with `SuggestResponse`. `499` when the client disconnects / cancels mid-run (best-effort if already gone); that request’s hard-ceiling token is released and its in-flight slot is freed in `finally`. |
+| `POST` | `/suggest` | `SuggestResponse` | Handler order: Pydantic `422` (before either gate; does not consume caps) → that mode’s hard-ceiling sliding window `429` + `Retry-After` + `detail: "too many suggestions"` → **LLM only:** in-flight capacity acquire `429` + `Retry-After` (refunds the hard-ceiling hit if capacity is full) → suggester → `409` when no legal move → `200` with `SuggestResponse`. Accepts W3C `traceparent` (FastAPI OTel extract). `499` when the client disconnects / cancels mid-run (best-effort if already gone); that request’s hard-ceiling token is released and its in-flight slot is freed in `finally`. |
+| `POST` | `/client-events` | empty `204` | Browser beacon `{ "outcome": "fail" \| "rate_limit" }` → `client_suggest_outcome_total`. Not traced. |
 
 Concurrent clients share one process (FastAPI threadpool + process-wide rate limiters + LLM in-flight gate). Cancel is **per request**: `DisconnectCancelMiddleware` tees ASGI receive for `/suggest` and sets that request’s `threading.Event` on `http.disconnect`. Each Ollama attempt uses its own `httpx.AsyncClient`; cancel cancels that attempt’s asyncio task so a blocked `post` unblocks without touching sibling suggests.
 
@@ -131,7 +132,7 @@ Loaded from the environment and optional `server/.env` (Compose does not use tha
 
 Phoenix = forensics (spans, prompts, retries, TTFT events). Grafana = ops aggregates from Prometheus scrapes of `GET /metrics`. Prometheus stores the time series; Grafana only queries them. Full inventory (every span, event, series, label, and Phoenix vs Grafana ownership): [telemetry.md](telemetry.md). Compose scrape UI: [runtime.md](runtime.md).
 
-Typical LLM tree: FastAPI `POST /suggest` → `suggest` chain → sibling `ollama chat` spans per attempt. Expectimax opens `suggest` without LLM children. Stuck board (`409`) is a single HTTP span (no nested `suggest`). Auto HTTP spans skip `/health`, `/metrics`, `/docs`, `/openapi.json`, `/redoc`. Retry/fallback detail may appear as span-only `failures` output (not in the API body).
+Typical LLM tree: FastAPI `POST /suggest` → `suggest` chain → sibling `ollama chat` spans per attempt. Expectimax opens `suggest` without LLM children. Stuck board (`409`) is a single HTTP span (no nested `suggest`). Auto HTTP spans skip `/health`, `/metrics`, `/client-events`, `/docs`, `/openapi.json`, `/redoc`. Retry/fallback detail may appear as span-only `failures` output (not in the API body).
 
 ## Tests
 
@@ -141,8 +142,9 @@ Typical LLM tree: FastAPI `POST /suggest` → `suggest` chain → sibling `ollam
 - `tests/test_cancel.py` covers per-request cancel through suggester / expectimax (pre-set and mid-search via `_check`) / Ollama client (pre-set, mid-flight hanging POST with `task.cancel`, and single-POST when the caller already has a running loop), concurrent isolation (cancel A, B still completes; LLM isolation raises `LLM_MAX_IN_FLIGHT`), endpoint `499` mapping, disconnect middleware, concurrent ASGI disconnect cancelling A while B completes (LLM and expectimax), rate-limit token refund and in-flight slot release after cancel, and concurrent release not popping a sibling’s hit.
 - `tests/test_expectimax.py` covers legality, spawn odds, depth/budget cutoffs, and the reason format.
 - `tests/test_moves.py` covers the slide and merge rules used for legality.
-- `tests/test_telemetry.py` covers Phoenix URL/header rules, per-app exporters, excluded `/health` and `/metrics`, span nesting, retries, errors, stuck-board span shape, GenAI series on `/metrics` after a suggest (success / request / response / parse / illegal_move / timeout + suggest sources), and HTTP scrape status codes for `/suggest` (200 / 422 / 409 / 429).
-- `tests/test_suggest_e2e.py` is marked `e2e` for real Ollama under `APP_ENV=prod`. It sizes `SUGGEST_RATE_LIMIT_REQUESTS` from its parametrized call volume, asserts `source == "llm"` with a short reason, and includes a non-e2e expectimax HTTP smoke that does not need Ollama.
+- `tests/test_telemetry.py` covers Phoenix URL/header rules, per-app exporters, excluded `/health` / `/metrics` / `/client-events`, client `traceparent` continuation, client beacon counters, HTTP body-size series dropped (duration + active kept), span nesting, retries, errors, stuck-board span shape, GenAI series on `/metrics` after a suggest (success / request / response / parse / illegal_move / timeout + suggest sources), and HTTP scrape status codes for `/suggest` (200 / 422 / 409 / 429).
+- `tests/test_suggest_e2e.py` marks real-Ollama cases `e2e` under `APP_ENV=prod` (parametrized legal move + reason, `traceparent` header smoke, GenAI `/metrics` after success; shared fixture rate-limit is a loose budget above the matrix).
+- `tests/test_suggest_http_contract.py` covers health, `/metrics`, `422` (no rate-limit spend), stuck-board `409`, LLM-bucket `429` + `Retry-After`, expectimax search, unreachable-Ollama `fallback`, and `/client-events` beacons → `client_suggest_outcome` scrape series (default suite / CI).
 
 ## Not built yet
 

@@ -1,4 +1,13 @@
+"""Real-Ollama suggest paths (opt-in with ``pytest --e2e``).
+
+Needs a local Ollama + configured model. HTTP contract coverage without a
+live model lives in ``test_suggest_http_contract.py``.
+"""
+
+from __future__ import annotations
+
 import os
+import re
 
 import httpx
 import pytest
@@ -8,9 +17,9 @@ from app.main import create_app
 from app.moves import legal_moves
 from helpers import (
     E2E_BOARD_COUNT,
+    E2E_RATE_LIMIT_REQUESTS,
     E2E_RUN_COUNT,
     E2E_SUGGEST_CALLS,
-    SORTED_ROW,
     isolated_settings,
 )
 
@@ -28,13 +37,18 @@ CORNER_BOARD = [
     [0, 0, 0, 0],
 ]
 
-# One module-scoped app serves every parametrized case. Size the rate limit
-# from this list so adding a board or run cannot silently hit the default cap.
+# One module-scoped app serves every parametrized case. Rate limit is a loose
+# budget (helpers.E2E_RATE_LIMIT_REQUESTS), not an exact post count.
 E2E_BOARDS = [MERGE_BOARD, CORNER_BOARD]
 E2E_RUN_IDS = [1, 2, 3]
 assert len(E2E_BOARDS) == E2E_BOARD_COUNT
 assert len(E2E_RUN_IDS) == E2E_RUN_COUNT
 assert len(E2E_BOARDS) * len(E2E_RUN_IDS) == E2E_SUGGEST_CALLS
+assert E2E_RATE_LIMIT_REQUESTS > E2E_SUGGEST_CALLS
+
+TRACEPARENT_RE = re.compile(
+    r"^00-[0-9a-f]{32}-[0-9a-f]{16}-0[01]$",
+)
 
 
 def _unavailable(base_url: str, model: str) -> str | None:
@@ -49,10 +63,15 @@ def _unavailable(base_url: str, model: str) -> str | None:
     return None
 
 
-@pytest.fixture(scope="module")
-def suggest_client() -> TestClient:
+def _ollama_env() -> tuple[str, str]:
     model = os.environ.get("OLLAMA_MODEL", "gemma4:latest")
     base_url = os.environ.get("OLLAMA_BASE_URL", "http://localhost:11434")
+    return model, base_url
+
+
+@pytest.fixture(scope="module")
+def suggest_client() -> TestClient:
+    model, base_url = _ollama_env()
     reason = _unavailable(base_url, model)
     if reason:
         pytest.skip(reason)
@@ -62,7 +81,7 @@ def suggest_client() -> TestClient:
         ollama_base_url=base_url,
         llm_max_attempts=3,
         # Default process cap is 5; this suite shares one app for more posts.
-        suggest_rate_limit_requests=E2E_SUGGEST_CALLS,
+        suggest_rate_limit_requests=E2E_RATE_LIMIT_REQUESTS,
         suggest_rate_limit_window_seconds=60,
     )
     # Prod parses the prompt's JSON. The schema format stays off.
@@ -88,21 +107,33 @@ def test_gemma_returns_a_legal_move_and_a_short_reason(
     assert 1 <= len(words) <= 50
 
 
-class _UnusedLLM:
-    def suggest_move(self, *args, **kwargs):
-        raise AssertionError("expectimax must not call the model")
-
-
-def test_expectimax_returns_a_legal_search_move() -> None:
-    # Search never talks to Ollama. Keep the smoke next to the LLM e2e tests
-    # so both suggest modes are wired here; do not mark it e2e or CI skips it.
-    client = TestClient(create_app(isolated_settings(app_env="prod"), _UnusedLLM()))
-    response = client.post("/suggest", json={"board": SORTED_ROW, "mode": "expectimax"})
+@pytest.mark.e2e
+def test_llm_suggest_with_client_traceparent_header(suggest_client: TestClient) -> None:
+    # Smoke: real Ollama path tolerates the browser's hand-rolled W3C header.
+    # Span continuation (shared trace_id) is asserted in test_telemetry.py.
+    traceparent = "00-" + ("a" * 32) + "-" + ("b" * 16) + "-01"
+    assert TRACEPARENT_RE.match(traceparent)
+    response = suggest_client.post(
+        "/suggest",
+        json={"board": CORNER_BOARD, "mode": "llm"},
+        headers={"traceparent": traceparent},
+    )
     assert response.status_code == 200
     body = response.json()
-    assert body["mode"] == "expectimax"
-    assert body["source"] == "expectimax"
-    assert body["move"] == "right"
-    assert body["move"] in legal_moves(SORTED_ROW)
-    assert body["reason"].startswith("Score of each direction: ")
-    assert "Left = N/A" in body["reason"]
+    assert body["source"] == "llm"
+    assert body["move"] in legal_moves(CORNER_BOARD)
+
+
+@pytest.mark.e2e
+def test_metrics_expose_gen_ai_after_real_llm(suggest_client: TestClient) -> None:
+    response = suggest_client.post("/suggest", json={"board": MERGE_BOARD, "mode": "llm"})
+    assert response.status_code == 200
+    assert response.json()["source"] == "llm"
+
+    metrics = suggest_client.get("/metrics")
+    assert metrics.status_code == 200
+    text = metrics.text
+    assert "gen_ai_client_request_count_total" in text
+    assert 'gen_ai_request_outcome="success"' in text
+    assert 'suggest_source="llm"' in text
+    assert "gen_ai_client_operation_duration_seconds" in text
