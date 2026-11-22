@@ -26,7 +26,7 @@ Human docs are orientation only. **Implementation truth is under `docs/agents/`.
 
 ## Server
 
-- Python FastAPI + Pydantic. Prefer clear types and solid tests. Tracing is wired (Phoenix / OpenInference OTLP via `app/telemetry.py`; traces only—no scrape `/metrics` on mainline; see [docs/agents/server.md](docs/agents/server.md)). Keep a proper client abstraction for the model.
+- Python FastAPI + Pydantic. Prefer clear types and solid tests. Tracing is wired (Phoenix / OpenInference OTLP via `app/telemetry.py`). Always-on `GET /metrics` for Prometheus scrape; optional Compose Grafana via `--profile metrics` (see [docs/agents/server.md](docs/agents/server.md) and [docs/agents/telemetry.md](docs/agents/telemetry.md)). Keep a proper client abstraction for the model.
 
 ## Pull requests
 
