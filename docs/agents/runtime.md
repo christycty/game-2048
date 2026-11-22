@@ -75,7 +75,7 @@ Two layers for **LLM**; Expectimax keeps a separate cheap window.
 
 Either layer returns `429` with the same `detail` today; clients can still tell them apart via `Retry-After` (capacity = `1`; hard ceiling = remaining window, often `60`). Distinct detail/labels are a multi-client follow-up. The caps are not per browser: in prod the only caller is nginx. A mid-run cancel (`499`) releases **that request’s** hard-ceiling token and its in-flight slot so Stop/disconnect does not burn the mode cap, a sibling’s hit, or capacity. Auto Play may still hit the hard ceiling only as a safety net; under normal serial play the capacity gate dominates.
 
-**Verify (no code reading):** from `server/`, `pytest tests/test_rate_limit.py tests/test_suggest.py tests/test_cancel.py -q` — expect gate unit tests, capacity/hard-ceiling HTTP cases, cancel frees the in-flight slot, and concurrent LLM isolation with `LLM_MAX_IN_FLIGHT=2`. Broader load/checklist follow-up: parent `plan/verification-ladder.md`.
+**Verify (no code reading):** from `server/`, `pytest tests/test_rate_limit.py tests/test_suggest.py tests/test_suggest_http_contract.py tests/test_cancel.py -q` — expect gate unit tests, hard-ceiling vs capacity HTTP contract (`Retry-After`), cancel frees the in-flight slot, and concurrent LLM isolation with `LLM_MAX_IN_FLIGHT=2`. Full ladder (incl. opt-in `--load` + image smokes): [server.md](server.md#verification-checklist) / parent `plan/verification-ladder.md`.
 
 ### Metrics profile
 

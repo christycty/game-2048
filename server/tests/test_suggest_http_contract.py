@@ -231,19 +231,6 @@ def test_unreachable_ollama_falls_back_with_null_reason() -> None:
     assert body["move"] in legal_moves(CORNER_BOARD)
 
 
-def test_cancel_maps_to_499_detail() -> None:
-    class InstantCancel:
-        def suggest_move(self, *args: object, **kwargs: object):
-            from app.cancel import SuggestCancelled
-
-            raise SuggestCancelled()
-
-    client = TestClient(create_app(isolated_settings(), InstantCancel()))
-    response = client.post("/suggest", json={"board": OPEN_BOARD, "mode": "llm"})
-    assert response.status_code == 499
-    assert response.json()["detail"] == "client cancelled"
-
-
 def test_client_events_beacons_and_metrics() -> None:
     client = TestClient(create_app(isolated_settings(app_env="prod"), _UnusedLLM()))
     assert client.post("/client-events", json={"outcome": "fail"}).status_code == 204

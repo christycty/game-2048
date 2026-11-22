@@ -286,41 +286,6 @@ def test_capacity_reject_does_not_burn_hard_ceiling() -> None:
     holder.join(timeout=3)
 
 
-def test_llm_in_flight_two_slots_third_blocked_until_one_finishes() -> None:
-    """max_in_flight=2 admits two holders; a third gets capacity 429 until one releases."""
-    llm = BlockingLLM()
-    settings = isolated_settings(suggest_rate_limit_requests=20, llm_max_in_flight=2)
-    app = create_app(settings, llm)
-    body = {"board": OPEN_BOARD, "mode": "llm"}
-    results: dict[str, int] = {}
-
-    def hold(name: str) -> None:
-        with TestClient(app) as client:
-            results[name] = client.post("/suggest", json=body).status_code
-
-    a = threading.Thread(target=hold, args=("a",))
-    b = threading.Thread(target=hold, args=("b",))
-    a.start()
-    b.start()
-    deadline = time.monotonic() + 2
-    while llm.calls < 2 and time.monotonic() < deadline:
-        time.sleep(0.01)
-    assert llm.calls == 2
-
-    with TestClient(app) as client:
-        blocked = client.post("/suggest", json=body)
-        assert blocked.status_code == 429
-        assert blocked.headers["retry-after"] == "1"
-        assert llm.calls == 2
-
-        llm.release.set()
-        a.join(timeout=3)
-        b.join(timeout=3)
-        assert results == {"a": 200, "b": 200}
-        assert client.post("/suggest", json=body).status_code == 200
-        assert llm.calls == 3
-
-
 def test_invalid_body_and_stuck_board_do_not_leak_capacity() -> None:
     """422 never takes a slot; 409 releases the slot so the next LLM suggest admits."""
     llm = FakeLLM(["right", "right"])
