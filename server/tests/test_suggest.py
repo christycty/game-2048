@@ -8,7 +8,6 @@ import pytest
 from fastapi.testclient import TestClient
 from pydantic import ValidationError
 
-from app.cancel import SuggestCancelled
 from app.llm import LlmError, ModelSuggestion, OllamaClient, _prompt, parse_move
 from app.main import create_app
 from app.rate_limit import LlmInFlightGate, SuggestRateLimiter
@@ -19,16 +18,12 @@ from helpers import (
     E2E_BOARD_COUNT,
     E2E_RUN_COUNT,
     E2E_SUGGEST_CALLS,
+    OPEN_BOARD,
     SORTED_ROW,
+    BlockingLLM,
+    FakeLLM,
     isolated_settings,
 )
-
-OPEN_BOARD = [
-    [2, 0, 0, 0],
-    [0, 0, 0, 0],
-    [0, 0, 0, 0],
-    [0, 0, 0, 0],
-]
 
 MERGE_BOARD = [
     [2, 2, 0, 0],
@@ -43,61 +38,6 @@ STUCK_BOARD = [
     [512, 1024, 2048, 4096],
     [8192, 16384, 32768, 65536],
 ]
-
-
-class FakeLLM:
-    def __init__(self, replies: list) -> None:
-        self._replies = list(replies)
-        self.calls = 0
-
-    def suggest_move(
-        self,
-        board: list[list[int]],
-        *,
-        legal: list[str],
-        rejected: list[str],
-        invalid_reply: bool,
-        cancel=None,
-    ) -> ModelSuggestion:
-        self.calls += 1
-        self.legal = legal
-        self.rejected = list(rejected)
-        self.invalid_reply = invalid_reply
-        reply = self._replies.pop(0)
-        if isinstance(reply, Exception):
-            raise reply
-        if isinstance(reply, str):
-            return ModelSuggestion(reply, "ok")
-        return reply
-
-
-class _BlockingLLM:
-    """Blocks until cancel fires or release is set (for capacity-gate tests)."""
-
-    def __init__(self) -> None:
-        self.started = threading.Event()
-        self.release = threading.Event()
-        self.calls = 0
-        self._lock = threading.Lock()
-
-    def suggest_move(
-        self,
-        board: list[list[int]],
-        *,
-        legal: list[str],
-        rejected: list[str],
-        invalid_reply: bool,
-        cancel: threading.Event | None = None,
-    ) -> ModelSuggestion:
-        with self._lock:
-            self.calls += 1
-        self.started.set()
-        while True:
-            if cancel is not None and cancel.is_set():
-                raise SuggestCancelled()
-            if self.release.is_set():
-                return ModelSuggestion("right", "ok")
-            time.sleep(0.01)
 
 
 def _client(llm: FakeLLM, env: str = "dev") -> TestClient:
@@ -211,7 +151,7 @@ def test_expectimax_rate_limit_is_separate_from_llm() -> None:
 
 def test_llm_in_flight_blocks_second_call_while_first_holds() -> None:
     """Capacity gate (default 1): a second LLM /suggest gets 429 until the first finishes."""
-    llm = _BlockingLLM()
+    llm = BlockingLLM()
     settings = isolated_settings(suggest_rate_limit_requests=10, llm_max_in_flight=1)
     app = create_app(settings, llm)
     body = {"board": OPEN_BOARD, "mode": "llm"}
@@ -239,9 +179,51 @@ def test_llm_in_flight_blocks_second_call_while_first_holds() -> None:
         assert llm.calls == 2
 
 
+def test_llm_in_flight_two_admits_two_blocks_third() -> None:
+    """Capacity gate at 2: two holders pass; a third gets Retry-After 1; drain frees slots."""
+    llm = BlockingLLM()
+    gate = LlmInFlightGate(2)
+    settings = isolated_settings(suggest_rate_limit_requests=20, llm_max_in_flight=2)
+    app = create_app(settings, llm, llm_in_flight=gate)
+    body = {"board": OPEN_BOARD, "mode": "llm"}
+    results: dict[str, int] = {}
+
+    def hold(name: str) -> None:
+        with TestClient(app) as client:
+            results[name] = client.post("/suggest", json=body).status_code
+
+    first = threading.Thread(target=hold, args=("first",))
+    second = threading.Thread(target=hold, args=("second",))
+    first.start()
+    second.start()
+    assert llm.started.wait(2)
+    deadline = time.monotonic() + 2
+    while llm.calls < 2 and time.monotonic() < deadline:
+        time.sleep(0.01)
+    assert llm.calls == 2
+
+    with TestClient(app) as client:
+        blocked = client.post("/suggest", json=body)
+        assert blocked.status_code == 429
+        assert blocked.json()["detail"] == "too many suggestions"
+        assert blocked.headers["retry-after"] == "1"
+        assert llm.calls == 2
+
+    llm.release.set()
+    first.join(timeout=3)
+    second.join(timeout=3)
+    assert results == {"first": 200, "second": 200}
+    # No leaked slots after drain.
+    probe = gate.acquire()
+    assert probe.retry_after is None and probe.token is not None
+    gate.release(probe.token)
+    with TestClient(app) as client:
+        assert client.post("/suggest", json=body).status_code == 200
+
+
 def test_expectimax_unaffected_by_llm_in_flight_gate() -> None:
     """Expectimax does not take an LLM capacity slot."""
-    llm = _BlockingLLM()
+    llm = BlockingLLM()
     settings = isolated_settings(suggest_rate_limit_requests=10, llm_max_in_flight=1)
     app = create_app(settings, llm)
     body_llm = {"board": OPEN_BOARD, "mode": "llm"}
@@ -267,7 +249,7 @@ def test_expectimax_unaffected_by_llm_in_flight_gate() -> None:
 
 def test_capacity_reject_does_not_burn_hard_ceiling() -> None:
     """A 429 from the in-flight gate must refund the sliding-window hit."""
-    llm = _BlockingLLM()
+    llm = BlockingLLM()
     clock = _Clock()
     # Cap 2: holder uses one hit. Capacity reject must not fill the second.
     limiter = SuggestRateLimiter(2, 60, clock)

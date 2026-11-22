@@ -1,4 +1,9 @@
+import threading
+import time
+
+from app.cancel import SuggestCancelled
 from app.config import Settings
+from app.llm import ModelSuggestion
 
 # Right-hand column. Left only slides it, which is also the fallback direction.
 COLUMN_PAIR = [
@@ -15,6 +20,13 @@ SORTED_ROW = [
     [0, 0, 0, 0],
     [0, 0, 0, 0],
     [2, 0, 0, 0],
+]
+
+OPEN_BOARD = [
+    [2, 0, 0, 0],
+    [0, 0, 0, 0],
+    [0, 0, 0, 0],
+    [0, 0, 0, 0],
 ]
 
 # test_suggest_e2e shares one app across every parametrized /suggest.
@@ -49,3 +61,82 @@ def isolated_settings(**overrides: object) -> Settings:
     values = dict(ISOLATED_SETTINGS_DEFAULTS)
     values.update(overrides)
     return Settings(**values)
+
+
+class FakeLLM:
+    """Queued replies for unit/API tests. Optional delay creates capacity contention."""
+
+    def __init__(
+        self,
+        replies: list | None = None,
+        *,
+        delay_seconds: float = 0.0,
+        forever_move: str | None = None,
+    ) -> None:
+        self._replies = None if replies is None else list(replies)
+        self._delay_seconds = delay_seconds
+        self._forever_move = forever_move
+        self.calls = 0
+        self._lock = threading.Lock()
+
+    def suggest_move(
+        self,
+        board: list[list[int]],
+        *,
+        legal: list[str],
+        rejected: list[str],
+        invalid_reply: bool,
+        cancel: threading.Event | None = None,
+    ) -> ModelSuggestion:
+        with self._lock:
+            self.calls += 1
+        self.legal = legal
+        self.rejected = list(rejected)
+        self.invalid_reply = invalid_reply
+        if self._delay_seconds > 0:
+            deadline = time.monotonic() + self._delay_seconds
+            while time.monotonic() < deadline:
+                if cancel is not None and cancel.is_set():
+                    raise SuggestCancelled()
+                time.sleep(0.005)
+        if self._forever_move is not None:
+            return ModelSuggestion(self._forever_move, "ok")
+        if self._replies is None:
+            raise AssertionError("FakeLLM has no replies and no forever_move")
+        reply = self._replies.pop(0)
+        if isinstance(reply, Exception):
+            raise reply
+        if isinstance(reply, str):
+            return ModelSuggestion(reply, "ok")
+        return reply
+
+
+class BlockingLLM:
+    """Blocks until cancel fires or release is set. Records which Event cancelled it."""
+
+    def __init__(self) -> None:
+        self.started = threading.Event()
+        self.release = threading.Event()
+        self.cancelled_with: threading.Event | None = None
+        self.calls = 0
+        self._lock = threading.Lock()
+
+    def suggest_move(
+        self,
+        board: list[list[int]],
+        *,
+        legal: list[str],
+        rejected: list[str],
+        invalid_reply: bool,
+        cancel: threading.Event | None = None,
+    ) -> ModelSuggestion:
+        with self._lock:
+            self.calls += 1
+        self.started.set()
+        while True:
+            if cancel is not None and cancel.is_set():
+                self.cancelled_with = cancel
+                raise SuggestCancelled()
+            if self.release.is_set():
+                return ModelSuggestion("right", "ok")
+            time.sleep(0.01)

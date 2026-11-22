@@ -17,47 +17,9 @@ from app.cancel import SuggestCancelled
 from app.expectimax import Choice, choose_move
 from app.llm import ModelSuggestion, OllamaClient
 from app.main import DisconnectCancelMiddleware, create_app
-from app.rate_limit import SuggestRateLimiter
+from app.rate_limit import LlmInFlightGate, SuggestRateLimiter
 from app.suggester import MoveSuggester
-from helpers import isolated_settings
-
-OPEN_BOARD = [
-    [2, 0, 0, 0],
-    [0, 0, 0, 0],
-    [0, 0, 0, 0],
-    [0, 0, 0, 0],
-]
-
-
-class BlockingLLM:
-    """Blocks until cancel fires or release is set. Records which Event cancelled it."""
-
-    def __init__(self) -> None:
-        self.started = threading.Event()
-        self.release = threading.Event()
-        self.cancelled_with: threading.Event | None = None
-        self.calls = 0
-        self._lock = threading.Lock()
-
-    def suggest_move(
-        self,
-        board: list[list[int]],
-        *,
-        legal: list[str],
-        rejected: list[str],
-        invalid_reply: bool,
-        cancel: threading.Event | None = None,
-    ) -> ModelSuggestion:
-        with self._lock:
-            self.calls += 1
-        self.started.set()
-        while True:
-            if cancel is not None and cancel.is_set():
-                self.cancelled_with = cancel
-                raise SuggestCancelled()
-            if self.release.is_set():
-                return ModelSuggestion("right", "ok")
-            time.sleep(0.01)
+from helpers import OPEN_BOARD, BlockingLLM, isolated_settings
 
 
 class BlockingExpectimax:
@@ -397,16 +359,18 @@ def test_disconnect_middleware_sets_cancel_on_disconnect() -> None:
 
 
 def test_asgi_disconnect_cancels_blocking_llm() -> None:
-    """Full stack: disconnect A while both run → A gets 499, concurrent B still 200."""
+    """Disconnect A while B holds (max_in_flight=2): A 499, B 200; A's slot frees mid-flight."""
     llm = BlockingLLM()
+    in_flight = LlmInFlightGate(2)
     settings = isolated_settings(
         suggest_rate_limit_requests=10,
         suggest_rate_limit_expectimax_requests=10,
         # Isolation test needs two LLM slots; production default is 1.
         llm_max_in_flight=2,
     )
-    app = create_app(settings, llm)
+    app = create_app(settings, llm, llm_in_flight=in_flight)
     body = json.dumps({"board": OPEN_BOARD, "mode": "llm"}).encode()
+    json_body = {"board": OPEN_BOARD, "mode": "llm"}
 
     async def one_call(*, disconnect_gate: asyncio.Event | None) -> int | None:
         scope = {
@@ -460,9 +424,36 @@ def test_asgi_disconnect_cancels_blocking_llm() -> None:
         status_a = await asyncio.wait_for(task_a, timeout=3)
         assert llm.cancelled_with is not None
         assert status_a == 499
+
+        # While B still holds: exactly one free slot (third admits, fourth capacity-429).
+        third_status: dict[str, int] = {}
+
+        def hold_third() -> None:
+            with TestClient(app) as client:
+                third_status["code"] = client.post("/suggest", json=json_body).status_code
+
+        third = threading.Thread(target=hold_third)
+        third.start()
+        entered = time.monotonic() + 2
+        while llm.calls < 3 and time.monotonic() < entered:
+            await asyncio.sleep(0.01)
+        assert llm.calls == 3
+
+        with TestClient(app) as client:
+            fourth = client.post("/suggest", json=json_body)
+            assert fourth.status_code == 429
+            assert fourth.json()["detail"] == "too many suggestions"
+            assert fourth.headers["retry-after"] == "1"
+
         llm.release.set()
+        third.join(timeout=3)
+        assert third_status.get("code") == 200
         status_b = await asyncio.wait_for(task_b, timeout=3)
         assert status_b == 200
+
+        probe = in_flight.acquire()
+        assert probe.retry_after is None and probe.token is not None
+        in_flight.release(probe.token)
 
     asyncio.run(run())
 
