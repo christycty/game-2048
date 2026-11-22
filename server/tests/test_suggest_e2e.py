@@ -10,7 +10,7 @@ import asyncio
 import json
 import os
 import re
-import time
+import threading
 
 import httpx
 import pytest
@@ -156,8 +156,11 @@ def test_client_cancel_beacon_increments_scrape_counter(suggest_client: TestClie
 @pytest.mark.e2e
 def test_asgi_disconnect_cancels_real_ollama_and_records_cancelled(
     suggest_client: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Live Ollama: client disconnect mid-suggest → 499 + gen_ai cancelled (not error)."""
+    from app.llm import OllamaClient
+
     app = suggest_client.app
     body = json.dumps({"board": MERGE_BOARD, "mode": "llm"}).encode()
     before = suggest_client.get("/metrics").text
@@ -167,6 +170,16 @@ def test_asgi_disconnect_cancels_real_ollama_and_records_cancelled(
     prior_error = _labeled_counter(
         before, "gen_ai_client_request_count", 'gen_ai_request_outcome="error"'
     )
+
+    # Gate disconnect on the real Ollama POST starting — a fixed sleep races a fast reply.
+    ollama_started = threading.Event()
+    real_post_chat = OllamaClient._post_chat
+
+    def _post_chat_and_signal(self, payload, cancel):  # noqa: ANN001
+        ollama_started.set()
+        return real_post_chat(self, payload, cancel)
+
+    monkeypatch.setattr(OllamaClient, "_post_chat", _post_chat_and_signal)
 
     async def one_cancelled_call() -> int | None:
         scope = {
@@ -189,15 +202,11 @@ def test_asgi_disconnect_cancels_real_ollama_and_records_cancelled(
         }
         messages: list[dict] = [{"type": "http.request", "body": body, "more_body": False}]
         sent: list[dict] = []
-        disconnect_at = time.monotonic() + 0.15
 
         async def receive() -> dict:
             if messages:
                 return messages.pop(0)
-            # Give the threadpool a moment to open the Ollama attempt, then disconnect.
-            delay = disconnect_at - time.monotonic()
-            if delay > 0:
-                await asyncio.sleep(delay)
+            assert await asyncio.to_thread(ollama_started.wait, 30)
             return {"type": "http.disconnect"}
 
         async def send(message: dict) -> None:

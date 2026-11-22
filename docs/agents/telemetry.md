@@ -151,9 +151,9 @@ Not incremented on 429 (rate limit) or 409 (no legal move).
 | `success` | Parsed legal move with non-blank reason |
 | `error` | Non-timeout failure (`error_type` set) |
 | `timeout` | `httpx.TimeoutException` on the Ollama call |
-| `cancelled` | Client disconnect / abort interrupted the Ollama attempt (not a model failure) |
+| `cancelled` | Client disconnect / abort after an Ollama attempt span opened (including cancel before the HTTP POST); not a model failure |
 
-Histograms for duration/tokens record only when usage mapping runs (successful Ollama body path), including attempts that later fail parse/illegal — those attempts still get `request_count` `error`. Cancelled attempts do not increment `suggest_source`. Expectimax-only cancel has no GenAI series (HTTP `499` + chain span only).
+Histograms for duration/tokens record only when usage mapping runs (successful Ollama body path), including attempts that later fail parse/illegal — those attempts still get `request_count` `error`. Cancelled attempts do not increment `suggest_source`. Cancel before the LLM loop starts (or expectimax-only cancel) has no GenAI series (HTTP `499` + chain span only).
 
 **`client_suggest_outcome` (one increment per browser `POST /client-events`):**
 
@@ -173,7 +173,7 @@ Not emitted on success. Stale-token ignores that never aborted do not beacon.
 |---|---|
 | LLM success path | `gen_ai_request_outcome=success`, duration + token histograms, `suggest_source=llm` |
 | LLM failures | `error` + `error_type` = `request` \| `response` \| `parse` \| `illegal_move`; `timeout`; `suggest_source=fallback` |
-| LLM cancel | `cancelled` (not `error`); ollama/suggest spans not ERROR; no `suggest_source` |
+| LLM cancel | `cancelled` (not `error`); ollama/suggest spans not ERROR; no `suggest_source`; includes pre-POST and between-attempt abort once an attempt span opened |
 | Suggest sources | `llm` / `fallback` / `expectimax` (expectimax does not open Ollama) |
 | HTTP `/suggest` | `http_server_duration_milliseconds_count` for status `200` / `422` / `409` / `429` (429 does not bump `suggest_source`) |
 | Client `traceparent` | Fixed header → `/suggest` spans share that `trace_id` and parent span id |

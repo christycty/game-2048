@@ -61,9 +61,8 @@ class OllamaClient:
         invalid_reply: bool,
         cancel: threading.Event | None = None,
     ) -> ModelSuggestion:
-        if cancel is not None and cancel.is_set():
-            raise SuggestCancelled()
-
+        # Cancel already set is handled inside the span via _post_chat so the
+        # attempt still records gen_ai cancelled (not a silent pre-span raise).
         prompt = _prompt(
             board,
             legal=legal,
