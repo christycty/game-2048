@@ -883,6 +883,33 @@ test("stopping auto play during Thinking aborts the suggest request", async () =
     expect(screen.queryByRole("status")).toBeNull();
 });
 
+test("a token-matched AbortError during Auto Play Thinking stops the loop", async () => {
+    // Simulates HTTP 499 / disconnect mapped to AbortError without a local abort() (token still current).
+    let rejectSuggest;
+    suggestMove.mockImplementation(
+        () =>
+            new Promise((_resolve, reject) => {
+                rejectSuggest = reject;
+            }),
+    );
+
+    render(<App />);
+    fireEvent.click(screen.getByRole("button", { name: "Auto Play" }));
+    expect(screen.getByRole("button", { name: "Stop" }).getAttribute("aria-pressed")).toBe("true");
+
+    await act(async () => {
+        rejectSuggest(new DOMException("Aborted", "AbortError"));
+        await Promise.resolve();
+    });
+
+    expect(screen.getByRole("button", { name: "Auto Play" }).getAttribute("aria-pressed")).toBe(
+        "false",
+    );
+    expect(screen.getByRole("button", { name: "AI" }).disabled).toBe(false);
+    expect(screen.queryByRole("status")).toBeNull();
+    expect(applyMove).not.toHaveBeenCalled();
+});
+
 test("a manual move during auto play stops the loop", async () => {
     let finishSuggest;
     suggestMove.mockImplementation(

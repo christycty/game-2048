@@ -216,7 +216,13 @@ function App() {
             setPendingMove(suggestion.move);
             setHint(hintText);
         } catch (error) {
-            if (isAbortError(error) || suggestTokenRef.current !== token) return;
+            // Stale after local abort/supersede: caller already owns Auto Play / busy cleanup.
+            if (suggestTokenRef.current !== token) return;
+            // Token-matched abort (e.g. HTTP 499 without a local abort): stay silent but end the loop.
+            if (isAbortError(error)) {
+                stopAutoPlay();
+                return;
+            }
             setPendingMove(null);
             setHint(
                 error instanceof SuggestError && error.status === 429
