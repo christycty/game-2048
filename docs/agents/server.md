@@ -12,8 +12,9 @@ From `server/`:
 # copy server/.env.example if you want local overrides
 uv sync --extra dev          # or: pip install -e ".[dev]"
 uvicorn app.main:app --reload --host 127.0.0.1 --port "${API_HOST_PORT:-8000}"
-pytest                       # unit tests; skips e2e
+pytest                       # unit/API/concurrency; skips e2e + load
 pytest --e2e                 # needs a local Ollama and the configured model
+pytest --load -m load        # opt-in FakeLLM soak (not required PR CI)
 ruff format --check . && ruff check .
 ```
 
@@ -138,15 +139,36 @@ Typical LLM tree: FastAPI `POST /suggest` → `suggest` chain → sibling `ollam
 
 ## Tests
 
+Shared Fake/Blocking LLM doubles and `asgi_suggest` live in `tests/helpers.py` (used by suggest, cancel, contract, and load).
+
 - `tests/test_helpers.py` asserts `isolated_settings` pins every `Settings` field and ignores hostile `SUGGEST_RATE_LIMIT_*` / `LLM_MAX_IN_FLIGHT` / `CLIENT_EVENTS_RATE_LIMIT_*` env.
 - `tests/test_rate_limit.py` covers `LlmInFlightGate` admit/block, token-safe release under `max_in_flight > 1`, and invalid max.
 - `tests/test_suggest.py` covers health, CORS, per-mode hard ceilings before the suggester (including the **default** 60-call LLM hard ceiling and a separate Expectimax bucket), LLM in-flight capacity (second call `model busy` 429 while first holds; two slots then third blocked; capacity reject does not burn the hard ceiling; expectimax unaffected; 422/409 and pre-suggester failure do not leak slots; held-slot overlap gets fail-fast 429 then frees), LLM success and reason, illegal-move retry, exhausted fallback, expectimax search + score reason, illegal-search fallback, stuck-board 409, bad payload 422, Ollama HTTP failures, prod schema omission, attempt bounds, and the time budget stop.
-- `tests/test_cancel.py` covers per-request cancel through suggester / expectimax (pre-set and mid-search via `_check`) / Ollama client (pre-set, mid-flight hanging POST with `task.cancel`, and single-POST when the caller already has a running loop), concurrent isolation (cancel A, B still completes; LLM isolation raises `LLM_MAX_IN_FLIGHT`), endpoint `499` mapping, disconnect middleware, concurrent ASGI disconnect cancelling A while B completes (LLM and expectimax), rate-limit token refund and in-flight slot release after cancel, and concurrent release not popping a sibling’s hit.
+- `tests/test_suggest_http_contract.py` covers health, `/metrics`, `422` (no rate-limit spend), stuck-board `409`, spend `429` (`too many suggestions` + `X-Suggest-Limit: spend`) vs capacity `429` (`model busy` + `X-Suggest-Limit: capacity`), spend `Retry-After` collapse to `1` near window end, expectimax search, unreachable-Ollama `fallback`, `/client-events` beacons (`fail` / `rate_limit` / `model_busy` / `cancel`) → scrape series, beacon `422` (no integrity-cap spend), beacon-cap exhaust → `429` with counter unchanged, and independence from the suggest bucket (default suite / CI). Cancel `499` lives in `test_cancel.py`.
+- `tests/test_cancel.py` covers per-request cancel through suggester / expectimax (pre-set and mid-search via `_check`) / Ollama client (pre-set, mid-flight hanging POST with `task.cancel`, and single-POST when the caller already has a running loop), concurrent isolation (cancel A, B still completes; LLM isolation raises `LLM_MAX_IN_FLIGHT`), endpoint `499` mapping, disconnect middleware, concurrent ASGI disconnect cancelling A while B completes (LLM and expectimax) **and mid-flight occupancy** (after A’s 499 with `max_in_flight=2`, a third `/suggest` admits while B holds and a fourth is capacity-429), rate-limit token refund and in-flight slot release after cancel, and concurrent release not popping a sibling’s hit.
+- `tests/test_load_suggest.py` is marked `load` (opt-in soak): **sustained** capacity hold while workers hammer `429`, then drain + completes at `LLM_MAX_IN_FLIGHT` 1 then 2; mixed hard-ceiling + capacity `429` on **one** app with a frozen clock; ASGI disconnect-under-capacity waves with a mid-hold capacity probe; asserts accounting and no slot leak after drain.
 - `tests/test_expectimax.py` covers legality, spawn odds, win-at-2048 preference, depth/budget cutoffs, and the reason format.
 - `tests/test_moves.py` covers the slide and merge rules used for legality.
 - `tests/test_telemetry.py` covers Phoenix URL/header rules, per-app exporters, excluded `/health` / `/metrics` / `/client-events`, client `traceparent` continuation, client beacon counters (incl. `cancel` / `model_busy`), HTTP body-size series dropped (duration + active kept), span nesting, retries, errors, cancel → `gen_ai_request_outcome=cancelled` (mid-POST, pre-POST, between-attempt; spans not ERROR), stuck-board span shape, GenAI series on `/metrics` after a suggest (success / request / response / parse / illegal_move / timeout + suggest sources), and HTTP scrape status codes for `/suggest` (200 / 422 / 409 / 429).
 - `tests/test_suggest_e2e.py` marks real-Ollama cases `e2e` under `APP_ENV=prod` (parametrized legal move + reason, `traceparent` header smoke, GenAI `/metrics` after success, cancel beacon scrape, ASGI disconnect gated on Ollama POST start → `gen_ai_request_outcome=cancelled`; shared fixture rate-limit is a loose budget above the matrix).
-- `tests/test_suggest_http_contract.py` covers health, `/metrics`, `422` (no rate-limit spend), stuck-board `409`, spend `429` (`too many suggestions` + `X-Suggest-Limit: spend`) vs capacity `429` (`model busy` + `X-Suggest-Limit: capacity`), expectimax search, unreachable-Ollama `fallback`, `/client-events` beacons (`fail` / `rate_limit` / `model_busy` / `cancel`) → scrape series, beacon `422` (no integrity-cap spend), beacon-cap exhaust → `429` with counter unchanged, and independence from the suggest bucket (default suite / CI).
+
+## Verification checklist
+
+Run from `server/` after `pip install -e ".[dev]"` (or `uv sync --extra dev`). Goal: conclude the suggest path is solid **without reading implementation files**.
+
+**Scope:** Feature coverage (moves, expectimax, suggest/fallback, cancel, telemetry, client gameplay) already lives in default `pytest` / `npm test`. This checklist **names those layers** and adds gaps around **concurrent LLM admission** (two `429` layers, slot leak, opt-in load) plus **image smokes**. It does not re-test every product feature.
+
+| Layer | Command | Pass if |
+|---|---|---|
+| Unit + API + concurrency + contract | `pytest` (and `cd ../client && npm test` for UI) | All green; e2e and load skipped |
+| Light chaos (disconnect mid-flight) | (included in default `pytest` via `test_cancel.py`) | Cancel A leaves B; while B holds at `max_in_flight=2`, third admits / fourth capacity-429; slot + hard-ceiling token refunded |
+| Image smokes (CI `docker run` topology, no Ollama) | CI docker job: `APP_ENV=prod` API + client, then `bash scripts/smoke_api_images.sh` | `/health` ok; `/docs` + `/openapi.json` 404; expectimax via nginx `:5173/suggest`; `/client-events` → 204; `GET /metrics` has `suggest_source=expectimax`, a **joined** `/suggest`+`200` sample line, and `outcome="fail"`; nginx does **not** proxy `/health` or `/metrics` |
+| E2E (real Ollama) | `pytest --e2e` | Local Ollama up with `OLLAMA_MODEL`; asserts `source == "llm"` |
+| Load / soak (sustained capacity hold + cancel waves) | `pytest --load -m load` | Workers join under hold; accounting closes (incl. cancels + mixed `429` layers); final suggest / gate probe OK. Also: Actions → **Run workflow** (`run_load`; optional `load_only`) |
+
+**`429` layers:** spend uses `detail: "too many suggestions"` + `X-Suggest-Limit: spend`; capacity uses `detail: "model busy"` + `X-Suggest-Limit: capacity` + `Retry-After: 1`. Spend `Retry-After` is remaining window seconds (often `60` when just filled) but collapses to `1` near window end — prefer detail / header over `Retry-After` alone. Covered in default CI (`test_suggest_http_contract`, incl. collapse case) and opt-in load.
+
+**Optional Grafana / Phoenix spot-checks** (when series exist): after a local Compose `--profile metrics` drill, confirm `/suggest` status rates and GenAI success/error lines move; Phoenix shows a `suggest` chain for a live LLM call. Not required to trust FakeLLM CI.
 
 ## Not built yet
 

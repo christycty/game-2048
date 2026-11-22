@@ -37,6 +37,7 @@ pythonpath = [".", "tests"]
 testpaths = ["tests"]
 markers = [
     "e2e: calls a local Ollama model; run with pytest --e2e",
+    "load: opt-in FakeLLM load/soak; run with pytest --load",
 ]
 
 [tool.ruff]

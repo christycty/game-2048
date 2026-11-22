@@ -1,4 +1,14 @@
+from __future__ import annotations
+
+import asyncio
+import threading
+import time
+from dataclasses import dataclass
+from typing import Any
+
+from app.cancel import SuggestCancelled
 from app.config import Settings
+from app.llm import ModelSuggestion
 
 # Right-hand column. Left only slides it, which is also the fallback direction.
 COLUMN_PAIR = [
@@ -15,6 +25,13 @@ SORTED_ROW = [
     [0, 0, 0, 0],
     [0, 0, 0, 0],
     [2, 0, 0, 0],
+]
+
+OPEN_BOARD = [
+    [2, 0, 0, 0],
+    [0, 0, 0, 0],
+    [0, 0, 0, 0],
+    [0, 0, 0, 0],
 ]
 
 # test_suggest_e2e shares one app across every parametrized /suggest.
@@ -57,3 +74,148 @@ def isolated_settings(**overrides: object) -> Settings:
     values = dict(ISOLATED_SETTINGS_DEFAULTS)
     values.update(overrides)
     return Settings(**values)
+
+
+class FrozenClock:
+    """Injectable clock for rate-limit tests. Advance ``now`` to control Retry-After."""
+
+    def __init__(self, now: float = 0.0) -> None:
+        self.now = now
+
+    def __call__(self) -> float:
+        return self.now
+
+
+@dataclass(frozen=True)
+class AsgiSuggestResult:
+    status: int | None
+    headers: dict[str, str]
+    body: bytes
+
+    def json(self) -> Any:
+        import json
+
+        return json.loads(self.body)
+
+
+async def asgi_suggest(
+    app: Any,
+    raw_body: bytes,
+    *,
+    disconnect_gate: asyncio.Event | None = None,
+) -> AsgiSuggestResult:
+    """POST /suggest via raw ASGI (no TestClient lifespan).
+
+    Use this while other /suggest calls are in flight on the same app — a
+    ``with TestClient(app)`` would run lifespan shutdown and call
+    ``shutdown_telemetry`` mid-request.
+    """
+    scope = {
+        "type": "http",
+        "asgi": {"version": "3.0"},
+        "http_version": "1.1",
+        "method": "POST",
+        "scheme": "http",
+        "path": "/suggest",
+        "raw_path": b"/suggest",
+        "query_string": b"",
+        "headers": [
+            (b"host", b"test"),
+            (b"content-type", b"application/json"),
+            (b"content-length", str(len(raw_body)).encode()),
+        ],
+        "client": ("127.0.0.1", 50000),
+        "server": ("test", 80),
+        "state": {},
+    }
+    messages: list[dict] = [{"type": "http.request", "body": raw_body, "more_body": False}]
+    sent: list[dict] = []
+
+    async def receive() -> dict:
+        if messages:
+            return messages.pop(0)
+        if disconnect_gate is not None:
+            await disconnect_gate.wait()
+            return {"type": "http.disconnect"}
+        await asyncio.sleep(60)
+        return {"type": "http.disconnect"}
+
+    async def send(message: dict) -> None:
+        sent.append(message)
+
+    await app(scope, receive, send)
+    status: int | None = None
+    headers: dict[str, str] = {}
+    body = b""
+    for message in sent:
+        if message.get("type") == "http.response.start":
+            status = message.get("status")
+            headers = {
+                key.decode().lower(): value.decode() for key, value in message.get("headers", [])
+            }
+        elif message.get("type") == "http.response.body":
+            body += message.get("body") or b""
+    return AsgiSuggestResult(status=status, headers=headers, body=body)
+
+
+class FakeLLM:
+    """Queued replies for unit/API tests. Use BlockingLLM when you need a held slot."""
+
+    def __init__(self, replies: list) -> None:
+        self._replies = list(replies)
+        self.calls = 0
+        self._lock = threading.Lock()
+
+    def suggest_move(
+        self,
+        board: list[list[int]],
+        *,
+        legal: list[str],
+        rejected: list[str],
+        invalid_reply: bool,
+        cancel: threading.Event | None = None,
+    ) -> ModelSuggestion:
+        with self._lock:
+            self.calls += 1
+        self.legal = legal
+        self.rejected = list(rejected)
+        self.invalid_reply = invalid_reply
+        if cancel is not None and cancel.is_set():
+            raise SuggestCancelled()
+        reply = self._replies.pop(0)
+        if isinstance(reply, Exception):
+            raise reply
+        if isinstance(reply, str):
+            return ModelSuggestion(reply, "ok")
+        return reply
+
+
+class BlockingLLM:
+    """Blocks until cancel fires or release is set. Records which Event cancelled it."""
+
+    def __init__(self) -> None:
+        self.started = threading.Event()
+        self.release = threading.Event()
+        self.cancelled_with: threading.Event | None = None
+        self.calls = 0
+        self._lock = threading.Lock()
+
+    def suggest_move(
+        self,
+        board: list[list[int]],
+        *,
+        legal: list[str],
+        rejected: list[str],
+        invalid_reply: bool,
+        cancel: threading.Event | None = None,
+    ) -> ModelSuggestion:
+        with self._lock:
+            self.calls += 1
+        self.started.set()
+        while True:
+            if cancel is not None and cancel.is_set():
+                self.cancelled_with = cancel
+                raise SuggestCancelled()
+            if self.release.is_set():
+                return ModelSuggestion("right", "ok")
+            time.sleep(0.01)

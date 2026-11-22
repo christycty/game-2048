@@ -1,6 +1,11 @@
 """Suggest HTTP contract without a live Ollama model.
 
 Runs in the default suite (CI). Real-model cases live in ``test_suggest_e2e.py``.
+
+Capacity vs spend use distinct ``detail`` / ``X-Suggest-Limit`` values. Spend
+``Retry-After`` is remaining window seconds (often ``60`` when just filled) but
+also collapses to ``1`` near window end — do not treat ``Retry-After: 1`` alone
+as capacity-only when classifying without the header/detail.
 """
 
 from __future__ import annotations
@@ -9,7 +14,6 @@ import threading
 
 from fastapi.testclient import TestClient
 
-from app.llm import ModelSuggestion
 from app.main import create_app
 from app.moves import legal_moves
 from app.rate_limit import (
@@ -22,7 +26,14 @@ from app.rate_limit import (
     SuggestRateLimiter,
 )
 from app.telemetry import PROM_CLIENT_SUGGEST_OUTCOME, PROM_SUGGEST_LIMIT_REJECT
-from helpers import SORTED_ROW, isolated_settings
+from helpers import (
+    OPEN_BOARD,
+    SORTED_ROW,
+    BlockingLLM,
+    FakeLLM,
+    FrozenClock,
+    isolated_settings,
+)
 
 
 def _labeled_counter(body: str, metric: str, label_fragment: str) -> float:
@@ -40,13 +51,6 @@ CORNER_BOARD = [
     [0, 0, 0, 0],
 ]
 
-OPEN_BOARD = [
-    [2, 0, 0, 0],
-    [0, 0, 0, 0],
-    [0, 0, 0, 0],
-    [0, 0, 0, 0],
-]
-
 STUCK_BOARD = [
     [2, 4, 8, 16],
     [32, 64, 128, 256],
@@ -58,19 +62,6 @@ STUCK_BOARD = [
 class _UnusedLLM:
     def suggest_move(self, *args, **kwargs):
         raise AssertionError("expectimax / stuck / validation must not call the model")
-
-
-class _BlockingLLM:
-    """Holds the capacity slot until ``release`` is set."""
-
-    def __init__(self) -> None:
-        self.started = threading.Event()
-        self.release = threading.Event()
-
-    def suggest_move(self, *args, **kwargs) -> ModelSuggestion:
-        self.started.set()
-        assert self.release.wait(5)
-        return ModelSuggestion("right", "ok")
 
 
 def test_health_ok_without_ollama() -> None:
@@ -141,7 +132,7 @@ def test_suggest_rate_limit_is_429_with_retry_after() -> None:
 
 def test_capacity_429_uses_model_busy_detail() -> None:
     """Capacity full is distinct from spend: detail + X-Suggest-Limit + short Retry-After."""
-    llm = _BlockingLLM()
+    llm = BlockingLLM()
     settings = isolated_settings(
         app_env="prod",
         suggest_rate_limit_requests=10,
@@ -150,15 +141,16 @@ def test_capacity_429_uses_model_busy_detail() -> None:
     app = create_app(settings, llm, llm_in_flight=LlmInFlightGate(1))
     body = {"board": OPEN_BOARD, "mode": "llm"}
 
-    def hold() -> None:
-        with TestClient(app) as client:
+    # One TestClient lifespan for holder + probe (nested clients shut down telemetry).
+    with TestClient(app) as client:
+
+        def hold() -> None:
             client.post("/suggest", json=body)
 
-    holder = threading.Thread(target=hold)
-    holder.start()
-    assert llm.started.wait(2)
+        holder = threading.Thread(target=hold)
+        holder.start()
+        assert llm.started.wait(2)
 
-    with TestClient(app) as client:
         blocked = client.post("/suggest", json=body)
         assert blocked.status_code == 429
         assert blocked.json()["detail"] == DETAIL_MODEL_BUSY
@@ -167,17 +159,18 @@ def test_capacity_429_uses_model_busy_detail() -> None:
         metrics = client.get("/metrics").text
         assert PROM_SUGGEST_LIMIT_REJECT in metrics
         assert f'reason="{LIMIT_REASON_CAPACITY}"' in metrics
+        assert not getattr(app.state, "telemetry_shutdown", False)
 
-    llm.release.set()
-    holder.join(timeout=3)
-    assert not holder.is_alive()
+        llm.release.set()
+        holder.join(timeout=3)
+        assert not holder.is_alive()
 
 
 def test_capacity_and_spend_429_have_distinct_details() -> None:
     """One scenario surfaces both layers; clients must not treat every 429 alike."""
-    clock = _MutableClock()
+    clock = FrozenClock()
     limiter = SuggestRateLimiter(2, 60, clock)
-    llm = _BlockingLLM()
+    llm = BlockingLLM()
     app = create_app(
         isolated_settings(app_env="prod", suggest_rate_limit_requests=2, llm_max_in_flight=1),
         llm,
@@ -186,26 +179,26 @@ def test_capacity_and_spend_429_have_distinct_details() -> None:
     )
     body = {"board": OPEN_BOARD, "mode": "llm"}
 
-    def hold() -> None:
-        with TestClient(app) as client:
+    with TestClient(app) as client:
+
+        def hold() -> None:
             client.post("/suggest", json=body)
 
-    holder = threading.Thread(target=hold)
-    holder.start()
-    assert llm.started.wait(2)
+        holder = threading.Thread(target=hold)
+        holder.start()
+        assert llm.started.wait(2)
 
-    with TestClient(app) as client:
         capacity = client.post("/suggest", json=body)
         assert capacity.status_code == 429
         assert capacity.json()["detail"] == DETAIL_MODEL_BUSY
         assert capacity.headers["retry-after"] == "1"
         assert capacity.headers[HEADER_SUGGEST_LIMIT.lower()] == LIMIT_REASON_CAPACITY
+        assert not getattr(app.state, "telemetry_shutdown", False)
 
-    llm.release.set()
-    holder.join(timeout=3)
-    assert not holder.is_alive()
+        llm.release.set()
+        holder.join(timeout=3)
+        assert not holder.is_alive()
 
-    with TestClient(app) as client:
         assert client.post("/suggest", json=body).status_code == 200
         spend = client.post("/suggest", json=body)
         assert spend.status_code == 429
@@ -216,12 +209,44 @@ def test_capacity_and_spend_429_have_distinct_details() -> None:
     assert capacity.json()["detail"] != spend.json()["detail"]
 
 
-class _MutableClock:
-    def __init__(self) -> None:
-        self.now = 0.0
+def test_hard_ceiling_429_uses_window_retry_after() -> None:
+    llm = FakeLLM(["right", "right"])
+    clock = FrozenClock()
+    limiter = SuggestRateLimiter(1, 60, clock)
+    client = TestClient(
+        create_app(
+            isolated_settings(),
+            llm,
+            rate_limiters={"llm": limiter, "expectimax": SuggestRateLimiter(30, 60, clock)},
+        )
+    )
+    assert client.post("/suggest", json={"board": OPEN_BOARD, "mode": "llm"}).status_code == 200
+    blocked = client.post("/suggest", json={"board": OPEN_BOARD, "mode": "llm"})
+    assert blocked.status_code == 429
+    assert blocked.json()["detail"] == DETAIL_SPEND_CAP
+    assert blocked.headers["retry-after"] == "60"
+    assert blocked.headers[HEADER_SUGGEST_LIMIT.lower()] == LIMIT_REASON_SPEND
 
-    def __call__(self) -> float:
-        return self.now
+
+def test_hard_ceiling_retry_after_can_collapse_to_one() -> None:
+    """Near window end, spend Retry-After is also 1 — distinct detail still tells layers apart."""
+    llm = FakeLLM(["right", "right"])
+    clock = FrozenClock()
+    limiter = SuggestRateLimiter(1, 60, clock)
+    client = TestClient(
+        create_app(
+            isolated_settings(),
+            llm,
+            rate_limiters={"llm": limiter, "expectimax": SuggestRateLimiter(30, 60, clock)},
+        )
+    )
+    assert client.post("/suggest", json={"board": OPEN_BOARD, "mode": "llm"}).status_code == 200
+    clock.now = 59.5  # remaining 0.5s → ceil → 1
+    blocked = client.post("/suggest", json={"board": OPEN_BOARD, "mode": "llm"})
+    assert blocked.status_code == 429
+    assert blocked.json()["detail"] == DETAIL_SPEND_CAP
+    assert blocked.headers["retry-after"] == "1"
+    assert blocked.headers[HEADER_SUGGEST_LIMIT.lower()] == LIMIT_REASON_SPEND
 
 
 def test_expectimax_returns_a_legal_search_move() -> None:
