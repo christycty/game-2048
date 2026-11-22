@@ -29,7 +29,7 @@ Package name: `game-2048-server`. Entry: `app.main:app`. Python ≥ 3.11 (images
 | `app/suggester.py` | Mode dispatch, LLM retries, fallback, expectimax search; honors per-request cancel. |
 | `app/expectimax.py` | Depth-limited expectimax with spawn chance nodes; checks cancel between depths and inside chance/max nodes. |
 | `app/moves.py` | Slide/merge rules for legal moves and the fallback order. |
-| `app/llm.py` | Ollama chat client, prompt, JSON parse; per-attempt `AsyncClient` with `task.cancel()` on disconnect (sync MockTransport path for tests). |
+| `app/llm.py` | Ollama chat client, prompt, JSON parse; per-attempt `AsyncClient` with `_wait_chat_post_or_cancel` poll + `task.cancel()` on disconnect (sync MockTransport path for tests). Nested-loop callers use a fresh thread so `_run` is not POSTed twice. |
 | `app/cancel.py` | `SuggestCancelled` — per-request stop (not process-wide). |
 | `app/rate_limit.py` | Per-mode sliding-window hard ceiling (`SuggestRateLimiter.release` refunds after cancel) + `LlmInFlightGate` token-tracked capacity gate for LLM. Shared detail/header constants: `DETAIL_SPEND_CAP` / `DETAIL_MODEL_BUSY`, `X-Suggest-Limit`. Same limiter type gates `/client-events` (separate settings). |
 | `app/config.py` | Env-backed settings. |
