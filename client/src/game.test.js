@@ -1,6 +1,15 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { applyMove, createInitialTiles, GRID_SIZE, hasMoves, tilesToBoard } from "./game.js";
+import {
+    applyMove,
+    createInitialTiles,
+    GRID_SIZE,
+    hasMoves,
+    hasWon,
+    MAX_START_TILES,
+    MIN_START_TILES,
+    tilesToBoard,
+} from "./game.js";
 
 // One line of the array is one row of the board, from the top. A 0 is an empty cell.
 function board(rows) {
@@ -54,6 +63,7 @@ function expectMove(start, direction, expected, score) {
     }
 
     assert.equal(result.lost, false, "a board with room left is not a loss");
+    assert.equal(result.won, false, "a board without 2048 is not a win");
     // During the slide the numbers still add up to the board from before the move.
     const startSum = start.flat().reduce((sum, value) => sum + value, 0);
     const visualSum = result.visualTiles.reduce((sum, tile) => sum + tile.value, 0);
@@ -64,12 +74,33 @@ function expectMove(start, direction, expected, score) {
     return result;
 }
 
-test("a new game starts with two different 2 tiles", () => {
-    // () => 0 always picks the first empty cell, so the two 2s land on the first two cells.
-    const tiles = createInitialTiles(() => 0);
-    assert.equal(tiles.length, 2);
-    assert.deepEqual(tiles.map((tile) => tile.value), [2, 2]);
-    assert.notDeepEqual([tiles[0].row, tiles[0].col], [tiles[1].row, tiles[1].col]);
+test("a new game deals a random count of distinct 2 tiles", () => {
+    // () => 0 → count = MIN_START_TILES and always the first empty cell.
+    const few = createInitialTiles(() => 0);
+    assert.equal(few.length, MIN_START_TILES);
+    assert.ok(few.every((tile) => tile.value === 2));
+    assert.notDeepEqual([few[0].row, few[0].col], [few[1].row, few[1].col]);
+
+    // () => 0.99 → count = MAX_START_TILES; cell picks still advance through empties.
+    const many = createInitialTiles(() => 0.99);
+    assert.equal(many.length, MAX_START_TILES);
+    assert.ok(many.every((tile) => tile.value === 2));
+    const cells = new Set(many.map((tile) => `${tile.row},${tile.col}`));
+    assert.equal(cells.size, MAX_START_TILES);
+});
+
+test("every opening count from min to max is reachable", () => {
+    const span = MAX_START_TILES - MIN_START_TILES + 1;
+    for (let count = MIN_START_TILES; count <= MAX_START_TILES; count++) {
+        // First roll picks the count bucket; later rolls pick the first empty cell / sole choice.
+        const countRoll = (count - MIN_START_TILES + 0.5) / span;
+        let calls = 0;
+        const random = () => (calls++ === 0 ? countRoll : 0);
+        const tiles = createInitialTiles(random);
+        assert.equal(tiles.length, count, `count ${count}`);
+        assert.ok(tiles.every((tile) => tile.value === 2));
+        assert.equal(new Set(tiles.map((tile) => `${tile.row},${tile.col}`)).size, count);
+    }
 });
 
 test("tile ids come from the tiles in play, not from earlier games", () => {
@@ -213,6 +244,7 @@ test("a spawn of 2 that fills the board with no matches is a loss", () => {
     assert.equal(result.moved, true);
     assert.equal(result.scoreGained, 0);
     assert.equal(result.lost, true);
+    assert.equal(result.won, false);
     assert.equal(result.resolvedTiles.length, GRID_SIZE * GRID_SIZE);
     const spawn = result.resolvedTiles.find((tile) => tile.isNew);
     assert.equal(spawn.value, 2);
@@ -226,6 +258,37 @@ test("a spawn of 4 that matches a neighbor keeps the game going", () => {
     assert.equal(spawn.value, 4);
     assert.deepEqual([spawn.row, spawn.col], [3, 3]);
     assert.equal(result.lost, false);
+    assert.equal(result.won, false);
+});
+
+test("merging two 1024s wins", () => {
+    const empty = [0, 0, 0, 0];
+    const result = applyMove(
+        board([[1024, 1024, 0, 0], empty, empty, empty]),
+        "left",
+        () => 0.5,
+    );
+    assert.equal(result.moved, true);
+    assert.equal(result.scoreGained, 2048);
+    assert.equal(result.won, true);
+    assert.equal(result.lost, false);
+    assert.equal(hasWon(result.resolvedTiles), true);
+    assert.ok(result.resolvedTiles.some((tile) => tile.value === 2048 && tile.isMerged));
+});
+
+test("reaching 2048 wins even when the spawn leaves no moves", () => {
+    // Left merges to 2048 and opens (0,3); spawn fills it → full board with no matches.
+    const start = [
+        [1024, 1024, 2, 4],
+        [8, 16, 32, 64],
+        [128, 256, 512, 8],
+        [16, 32, 64, 128],
+    ];
+    const result = applyMove(board(start), "left", () => 0.5);
+    assert.equal(result.moved, true);
+    assert.equal(result.won, true);
+    assert.equal(result.lost, false);
+    assert.equal(hasMoves(result.resolvedTiles), false);
 });
 
 test("tilesToBoard fills empty cells with 0 for the suggestion API", () => {

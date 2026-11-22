@@ -13,11 +13,12 @@ from app.cancel import SuggestCancelled
 from app.config import Settings
 from app.llm import LlmClient, OllamaClient
 from app.rate_limit import LlmInFlightGate, SuggestRateLimiter
-from app.schemas import HealthResponse, SuggestRequest, SuggestResponse
+from app.schemas import ClientEventRequest, HealthResponse, SuggestRequest, SuggestResponse
 from app.suggester import MoveSuggester, NoLegalMove
 from app.telemetry import (
     mark_chain_io,
     mark_span_error,
+    record_client_suggest_outcome,
     set_json_io,
     setup_telemetry,
     shutdown_telemetry,
@@ -134,6 +135,12 @@ def create_app(
     def health() -> HealthResponse:
         return HealthResponse(status="ok")
 
+    # Thin client beacons: fail / rate_limit / cancel counts for Grafana. Not traced
+    # (see _EXCLUDED_URLS).
+    @app.post("/client-events", status_code=204, include_in_schema=False)
+    def client_events(body: ClientEventRequest) -> None:
+        record_client_suggest_outcome(body.outcome)
+
     @app.post("/suggest", response_model=SuggestResponse)
     async def suggest(request: Request, body: SuggestRequest) -> SuggestResponse:
         # Layer 1: per-mode sliding-window hard ceiling (spend / runaway safety).
@@ -158,17 +165,19 @@ def create_app(
                     headers={"Retry-After": str(capacity.retry_after)},
                 )
             slot = capacity.token
-        span = trace.get_current_span()
-        set_json_io(span, input_payload={"board": body.board, "mode": body.mode})
-        # Middleware installs a per-request Event; fall back for non-HTTP callers.
-        cancel = getattr(request.state, "suggest_cancel", None) or threading.Event()
+        # try starts immediately after acquire so a pre-suggester failure cannot leak the slot
+        # (default LLM_MAX_IN_FLIGHT=1 would sticky-429 until restart).
         try:
+            span = trace.get_current_span()
+            set_json_io(span, input_payload={"board": body.board, "mode": body.mode})
+            # Middleware installs a per-request Event; fall back for non-HTTP callers.
+            cancel = getattr(request.state, "suggest_cancel", None) or threading.Event()
             result = await asyncio.to_thread(suggester.suggest, body.board, body.mode, cancel)
-        except SuggestCancelled as exc:
+        except SuggestCancelled:
             # Refund this request's hit only (token), so concurrent siblings keep theirs.
             if gate.token is not None:
                 limiters[body.mode].release(gate.token)
-            mark_span_error(span, exc)
+            # Disconnect is not a model failure — leave HTTP span unset of ERROR pollution.
             set_json_io(span, output_payload={"detail": "cancelled"})
             # 499 = client closed request (nginx convention). Best-effort if already gone.
             raise HTTPException(status_code=499, detail="client cancelled") from None

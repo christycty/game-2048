@@ -28,11 +28,15 @@ flowchart TB
 flowchart TD
   A[Receive board + mode] --> V{Valid payload?}
   V -->|no| U[422]
-  V -->|yes| R{Rate limit?}
+  V -->|yes| R{Hard ceiling?}
   R -->|over| T[429 Retry-After]
-  R -->|ok| B{Legal moves?}
+  R -->|ok| M{mode}
+  M -->|expectimax| B{Legal moves?}
+  M -->|llm| Cap{In-flight slot?}
+  Cap -->|full| T
+  Cap -->|ok| B
   B -->|none| C[409]
-  B -->|yes| D{mode}
+  B -->|yes| D{mode work}
   D -->|expectimax| E[Depth-limited search + score reason]
   D -->|llm| F[Ollama chat with retries]
   F -->|valid move + reason| G[source: llm]

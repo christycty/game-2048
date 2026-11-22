@@ -64,7 +64,7 @@ function Tile({ tile }) {
     );
 }
 
-function Board({ tiles, lost, onSwipe }) {
+function Board({ tiles, lost, won = false, onSwipe }) {
     const swipeRef = useRef(null);
 
     function onPointerDown(event) {
@@ -121,7 +121,8 @@ function Board({ tiles, lost, onSwipe }) {
                             ))}
                     </div>
                     {/* A sibling of the tile layer, so a tile z-index cannot cover this overlay. */}
-                    {lost && <div className="game-over">Game over</div>}
+                    {won && <div className="game-over">You win!</div>}
+                    {lost && !won && <div className="game-over">Game over</div>}
                 </div>
             </div>
         </div>

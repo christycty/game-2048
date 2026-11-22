@@ -10,7 +10,7 @@ Typical loop:
 2. API from `server/` on `127.0.0.1:${API_HOST_PORT}` (default `8000`).
 3. Client from `client/` on `127.0.0.1:${CLIENT_HOST_PORT}` (default `5173`; Vite loads those names from the repo-root `.env`).
 
-The page calls **same-origin** `/suggest` by default. Vite proxies that path to `http://127.0.0.1:${API_HOST_PORT}` (override with `API_PROXY_TARGET`). Set `VITE_API_BASE_URL` to an absolute API origin only when you intentionally bypass the proxy. CORS allows `http://localhost:${CLIENT_HOST_PORT}` and `http://127.0.0.1:${CLIENT_HOST_PORT}` for that absolute-origin case.
+The page calls **same-origin** `/suggest` (and `/client-events`) by default. Vite proxies those paths to `http://127.0.0.1:${API_HOST_PORT}` (override with `API_PROXY_TARGET`). Set `VITE_API_BASE_URL` to an absolute API origin only when you intentionally bypass the proxy. CORS allows `http://localhost:${CLIENT_HOST_PORT}` and `http://127.0.0.1:${CLIENT_HOST_PORT}` for that absolute-origin case.
 
 Host API env comes from `server/.env` or the shell. Copy `server/.env.example` for local uvicorn. That file is not read by Compose for the API container. Keep `CLIENT_HOST_PORT` in sync with the page port when you use absolute API URLs.
 
@@ -50,7 +50,7 @@ docker compose --profile dev --profile metrics up
 | `prod` | `prod` (API, **unpublished**), `client` (nginx) | client `${CLIENT_HOST_PORT}`→80 only |
 | `metrics` | `prometheus`, `grafana` (pair with `dev` or `prod`) | Prometheus `${PROMETHEUS_HOST_PORT}`→9090, Grafana `${GRAFANA_HOST_PORT}`→3000 |
 
-Published ports bind `127.0.0.1` and `::1` so a LAN peer cannot reach them. Prod does **not** publish the API. The page origin is the client host port; nginx in the client image forwards `/suggest` to `prod:8000` on the Compose network (Docker DNS `127.0.0.11`, 50s read timeout over the 40s suggestion budget). Dev Compose still publishes the API so a host process can call it; `client-dev` sets `API_PROXY_TARGET=http://dev:8000`.
+Published ports bind `127.0.0.1` and `::1` so a LAN peer cannot reach them. Prod does **not** publish the API. The page origin is the client host port; nginx in the client image forwards `/suggest` and `/client-events` to `prod:8000` on the Compose network (Docker DNS `127.0.0.11`, 50s read timeout on `/suggest` over the 40s suggestion budget). Dev Compose still publishes the API so a host process can call it; `client-dev` sets `API_PROXY_TARGET=http://dev:8000`.
 
 Ollama stays on the host. Inside the API container the default URL is `http://host.docker.internal:11434`. Set `COMPOSE_OLLAMA_BASE_URL` in the root `.env` to override that. Do not set `OLLAMA_BASE_URL` in the root `.env`: that name is for a host uvicorn process (`server/.env.example` uses localhost), and Compose must not replace the container URL with it. Same rule for Phoenix: use `COMPOSE_PHOENIX_COLLECTOR_ENDPOINT`, not `PHOENIX_COLLECTOR_ENDPOINT`, in the root `.env`.
 
@@ -75,12 +75,14 @@ Two layers for **LLM**; Expectimax keeps a separate cheap window.
 
 Either layer returns `429` with the same `detail` today; clients can still tell them apart via `Retry-After` (capacity = `1`; hard ceiling = remaining window, often `60`). Distinct detail/labels are a multi-client follow-up. The caps are not per browser: in prod the only caller is nginx. A mid-run cancel (`499`) releases **that request’s** hard-ceiling token and its in-flight slot so Stop/disconnect does not burn the mode cap, a sibling’s hit, or capacity. Auto Play may still hit the hard ceiling only as a safety net; under normal serial play the capacity gate dominates.
 
+**Verify (no code reading):** from `server/`, `pytest tests/test_rate_limit.py tests/test_suggest.py tests/test_cancel.py -q` — expect gate unit tests, capacity/hard-ceiling HTTP cases, cancel frees the in-flight slot, and concurrent LLM isolation with `LLM_MAX_IN_FLIGHT=2`. Broader load/checklist follow-up: parent `plan/verification-ladder.md`.
+
 ### Metrics profile
 
 `GET /metrics` on the API is always on (Prometheus text). Pair `--profile metrics` with `dev` or `prod` to scrape it:
 
-- Prometheus scrapes Compose DNS `api:8000` (`dev` and `prod` both publish that alias).
-- Grafana **GenAI ops** (`/d/game2048-genai`): API row (`/suggest` by status, suggest by source, latency p50/p95) and LLM row (success rate, outcomes, error types, duration p50/p95, tokens). Unstacked rate lines; legend **Last \*** skips idle zeros. Inventory: [telemetry.md](telemetry.md).
+- Prometheus scrapes Compose DNS `api:8000` (`dev` and `prod` both publish that alias) every **5s**.
+- Grafana **GenAI ops** (`/d/game2048-genai`): API row (`/suggest` by status, suggest by source, latency p50/p95, in-flight POSTs via `max_over_time` — often 0 while idle or when calls finish between scrapes), Client row (fail / rate_limit / cancel beacons), and LLM row (success rate excluding cancelled, outcomes incl. cancelled, error types, duration p50/p95, tokens). Unstacked rate lines; legend **Last \*** skips idle zeros. Inventory: [telemetry.md](telemetry.md).
 - Anonymous Viewer access on loopback; no Alertmanager or retention stack. Prometheus Graph is ad-hoc only.
 
 Config lives under `observability/` (`prometheus.yml`, Grafana provisioning).
@@ -92,7 +94,7 @@ docker build -t game-2048-server ./server
 docker build -t game-2048-client ./client   # default target is prod (nginx)
 ```
 
-Server image: `python:3.12-slim`, `pip install -e .`, uvicorn on `0.0.0.0:8000`. Client Dockerfile stages: `dev` (Vite), `build`, `prod` (nginx serving `dist`, SPA `try_files`, plus `/suggest` proxy). Local env files are dockerignored.
+Server image: `python:3.12-slim`, `pip install -e .`, uvicorn on `0.0.0.0:8000`. Client Dockerfile stages: `dev` (Vite), `build`, `prod` (nginx serving `dist`, SPA `try_files`, plus `/suggest` and `/client-events` proxies). Local env files are dockerignored.
 
 ## CI
 

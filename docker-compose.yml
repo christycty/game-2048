@@ -2,8 +2,8 @@
 # unless you pass --profile dev, --profile prod, and/or --profile metrics.
 # Published ports are loopback-only. localhost is ::1 on some machines,
 # so each port is published on 127.0.0.1 and ::1.
-# The prod API has no host port. The page calls /suggest on the client
-# origin, and nginx forwards it to the prod service.
+# The prod API has no host port. The page calls /suggest and /client-events
+# on the client origin, and nginx forwards them to the prod service.
 # API_HOST_PORT / CLIENT_HOST_PORT / PROMETHEUS_HOST_PORT / GRAFANA_HOST_PORT
 # and COMPOSE_PROJECT_NAME in .env let each worktree keep its own stack.
 # host-gateway makes host.docker.internal resolve on Linux Docker Engine.
@@ -99,7 +99,7 @@ services:
       PHOENIX_COLLECTOR_ENDPOINT: ${COMPOSE_PHOENIX_COLLECTOR_ENDPOINT:-http://host.docker.internal:6006}
       PHOENIX_API_KEY: ${PHOENIX_API_KEY:-}
 
-  # Host port from CLIENT_HOST_PORT. nginx proxies /suggest to the prod service.
+  # Host port from CLIENT_HOST_PORT. nginx proxies /suggest and /client-events to prod.
   client:
     profiles: ["prod"]
     depends_on:

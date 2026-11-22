@@ -5,6 +5,8 @@ from pydantic import BaseModel, Field, model_validator
 Move = Literal["up", "down", "left", "right"]
 Mode = Literal["llm", "expectimax"]
 Source = Literal["llm", "fallback", "expectimax"]
+# Browser-reported suggest outcomes (AbortError / HTTP 499 → cancel).
+ClientEventOutcome = Literal["fail", "rate_limit", "cancel"]
 # 4 through 131072 fills all 16 cells, so a 4x4 board cannot hold a higher tile.
 MAX_TILE = 1 << 17
 
@@ -31,3 +33,7 @@ class SuggestResponse(BaseModel):
 
 class HealthResponse(BaseModel):
     status: str = Field(examples=["ok"])
+
+
+class ClientEventRequest(BaseModel):
+    outcome: ClientEventOutcome

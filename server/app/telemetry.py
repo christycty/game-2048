@@ -29,6 +29,7 @@ from opentelemetry.exporter.otlp.proto.http.trace_exporter import OTLPSpanExport
 from opentelemetry.exporter.prometheus import PrometheusMetricReader
 from opentelemetry.instrumentation.fastapi import FastAPIInstrumentor
 from opentelemetry.sdk.metrics import MeterProvider
+from opentelemetry.sdk.metrics.view import DropAggregation, View
 from opentelemetry.sdk.resources import Resource
 from opentelemetry.sdk.trace import TracerProvider
 from opentelemetry.sdk.trace.export import BatchSpanProcessor, SpanProcessor
@@ -43,8 +44,15 @@ SERVICE_NAME = "game-2048-server"
 _LOOPBACK = {"localhost", "127.0.0.1", "::1"}
 # Compose reaches Phoenix on the host at this name.
 _DOCKER_HOST_ALIAS = "host.docker.internal"
-# Keep the Phoenix tree on suggestion work. /metrics is scrape noise.
-_EXCLUDED_URLS = "/health,/metrics,/docs,/openapi.json,/redoc"
+# Keep the Phoenix tree on suggestion work. /metrics and client beacons are scrape noise.
+_EXCLUDED_URLS = "/health,/metrics,/client-events,/docs,/openapi.json,/redoc"
+# FastAPI OTel also emits request/response body-size histograms. Tiny fixed JSON
+# boards make those panels flat forever — drop at the SDK so scrape == charted.
+# Keep duration (API latency) and active_requests (in-flight /suggest; multi-tab overlap).
+_DROP_HTTP_BODY_SIZE_VIEWS = (
+    View(instrument_name="http.server.request.size", aggregation=DropAggregation()),
+    View(instrument_name="http.server.response.size", aggregation=DropAggregation()),
+)
 # Phoenix places TTFT from this OpenInference event name.
 # The call is not streamed; the stamp is load + prompt_eval.
 _FIRST_TOKEN_EVENT = "First Token Stream Event"
@@ -57,10 +65,19 @@ PROM_OPERATION_DURATION = "gen_ai_client_operation_duration_seconds"
 PROM_TOKEN_USAGE = "gen_ai_client_token_usage"
 PROM_REQUEST_COUNT = "gen_ai_client_request_count"
 PROM_SUGGEST_SOURCE = "suggest_source"
+PROM_CLIENT_SUGGEST_OUTCOME = "client_suggest_outcome"
 # Outcome label on request_count (success rate = success / total).
 REQUEST_OUTCOME_SUCCESS = "success"
 REQUEST_OUTCOME_ERROR = "error"
 REQUEST_OUTCOME_TIMEOUT = "timeout"
+REQUEST_OUTCOME_CANCELLED = "cancelled"
+# Browser beacon outcomes (fail / rate_limit / cancel).
+CLIENT_OUTCOME_FAIL = "fail"
+CLIENT_OUTCOME_RATE_LIMIT = "rate_limit"
+CLIENT_OUTCOME_CANCEL = "cancel"
+_CLIENT_OUTCOMES = frozenset(
+    {CLIENT_OUTCOME_FAIL, CLIENT_OUTCOME_RATE_LIMIT, CLIENT_OUTCOME_CANCEL}
+)
 
 # OpenInference keys used by tests and callers.
 OPENINFERENCE_SPAN_KIND = SpanAttributes.OPENINFERENCE_SPAN_KIND
@@ -96,6 +113,7 @@ class LlmMetrics:
     token_usage: metrics.Histogram
     request_count: metrics.Counter
     suggest_source: metrics.Counter
+    client_suggest_outcome: metrics.Counter
 
 
 @dataclass(frozen=True)
@@ -205,7 +223,11 @@ def setup_telemetry(
         disable_target_info=True,
         scope_info_enabled=False,
     )
-    meter_provider = MeterProvider(resource=resource, metric_readers=[metric_reader])
+    meter_provider = MeterProvider(
+        resource=resource,
+        metric_readers=[metric_reader],
+        views=_DROP_HTTP_BODY_SIZE_VIEWS,
+    )
     meter = meter_provider.get_meter(SERVICE_NAME)
     app_metrics = LlmMetrics(
         operation_duration=meter.create_histogram(
@@ -223,12 +245,17 @@ def setup_telemetry(
         request_count=meter.create_counter(
             name="gen_ai.client.request_count",
             unit="{request}",
-            description="LLM chat requests by outcome (success / error / timeout).",
+            description="LLM chat requests by outcome (success / error / timeout / cancelled).",
         ),
         suggest_source=meter.create_counter(
             name="suggest.source",
             unit="{suggestion}",
             description="Suggest responses by source (llm / fallback / expectimax).",
+        ),
+        client_suggest_outcome=meter.create_counter(
+            name="client.suggest.outcome",
+            unit="{event}",
+            description="Browser-reported suggest outcomes (fail / rate_limit / cancel).",
         ),
     )
 
@@ -279,11 +306,25 @@ def shutdown_telemetry(app) -> None:
 @contextmanager
 def chain_span(name: str, *, input_payload: object | None = None) -> Iterator[Span]:
     """OpenInference CHAIN span for a nested application step."""
-    with tracer().start_as_current_span(name) as span:
+    # Manual status: client cancel must not look like a model ERROR in Phoenix.
+    with tracer().start_as_current_span(
+        name,
+        record_exception=False,
+        set_status_on_exception=False,
+    ) as span:
         span.set_attribute(OPENINFERENCE_SPAN_KIND, SPAN_KIND_CHAIN)
         if input_payload is not None:
             set_json_io(span, input_payload=input_payload)
-        yield span
+        try:
+            yield span
+        except Exception as exc:
+            from app.cancel import SuggestCancelled
+
+            if isinstance(exc, SuggestCancelled):
+                set_json_io(span, output_payload={"detail": "cancelled"})
+            else:
+                mark_span_error(span, exc)
+            raise
 
 
 def set_json_io(
@@ -441,9 +482,25 @@ def record_suggest_source(source: str) -> None:
     instruments.suggest_source.add(1, {"suggest.source": source})
 
 
+def record_client_suggest_outcome(outcome: str) -> None:
+    """Count one browser beacon for a suggest fail / rate_limit / cancel."""
+    if outcome not in _CLIENT_OUTCOMES:
+        return
+    instruments = llm_metrics()
+    if instruments is None:
+        return
+    instruments.client_suggest_outcome.add(1, {"outcome": outcome})
+
+
 def mark_span_error(span: Span, error: Exception) -> None:
     span.record_exception(error)
     span.set_status(Status(StatusCode.ERROR, str(error)))
+
+
+def mark_span_cancelled(span: Span) -> None:
+    """Client abort / disconnect — not a model failure (leave status unset)."""
+    set_json_io(span, output_payload={"detail": "cancelled"})
+    span.set_status(Status(StatusCode.UNSET))
 
 
 def _operation_metric_attrs(model: str) -> dict[str, str]:
