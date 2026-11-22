@@ -34,17 +34,29 @@ export async function suggestMove(
     } catch (error) {
         // Abort must stay AbortError so the UI can stay silent (Stop, New Game, move, mode).
         if (isAbortError(error) || signal?.aborted) {
-            const abortError = isAbortError(error) ? error : new DOMException("Aborted", "AbortError");
-            throw abortError;
+            throw isAbortError(error) ? error : new DOMException("Aborted", "AbortError");
         }
         throw new SuggestError("suggestion request failed", { status: 0 });
+    }
+
+    // 499 = server saw disconnect; treat like abort (silent) even if fetch resolved a body.
+    if (signal?.aborted || response.status === 499) {
+        throw new DOMException("Aborted", "AbortError");
     }
 
     if (!response.ok) {
         throw new SuggestError("suggestion request failed", { status: response.status });
     }
 
-    const body = await response.json();
+    let body;
+    try {
+        body = await response.json();
+    } catch (error) {
+        if (isAbortError(error) || signal?.aborted) {
+            throw isAbortError(error) ? error : new DOMException("Aborted", "AbortError");
+        }
+        throw new SuggestError("suggestion response was unusable");
+    }
     if (!body || typeof body.move !== "string") {
         throw new SuggestError("suggestion response was unusable");
     }
