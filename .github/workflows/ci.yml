@@ -45,7 +45,6 @@ jobs:
           EXPORT_TRACES: "false"
         run: pytest
 
-
   load:
     # Opt-in FakeLLM soak — not on every PR. Trigger via Actions → Run workflow.
     if: github.event_name == 'workflow_dispatch'
@@ -108,7 +107,11 @@ jobs:
           exit 1
       - name: API image serves health without Ollama
         run: |
-          docker run -d --name game-2048-server -e EXPORT_TRACES=false -p 127.0.0.1:8000:8000 game-2048-server
+          # APP_ENV=prod matches Compose prod (docs gated); EXPORT_TRACES off for CI.
+          docker run -d --name game-2048-server \
+            -e EXPORT_TRACES=false \
+            -e APP_ENV=prod \
+            -p 127.0.0.1:8000:8000 game-2048-server
           for _ in $(seq 1 30); do
             if curl -fsS -o /tmp/health.json http://127.0.0.1:8000/health \
               && python3 -c 'import json; assert json.load(open("/tmp/health.json"))["status"] == "ok"'; then
@@ -118,6 +121,8 @@ jobs:
           done
           docker logs game-2048-server
           exit 1
+      - name: Image smokes (health, prod docs, nginx suggest, metrics)
+        run: bash scripts/smoke_api_images.sh
       - name: Compose keeps the container URL and loopback ports
         run: |
           cp .env.example .env
