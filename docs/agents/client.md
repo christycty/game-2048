@@ -11,7 +11,7 @@ From `client/`:
 ```bash
 npm install
 npm run dev       # Vite on CLIENT_HOST_PORT (default 5173; reads repo-root .env)
-npm test          # Vitest for React components, then node:test for game.js, swipe.js, and api.js
+npm test          # Vitest for React components, then node:test for game/swipe/api/trace/suggestHints
 npm run lint      # oxlint
 npm run build     # production bundle
 ```
@@ -24,7 +24,12 @@ Stack: React 19, Vite, plain JavaScript. The page title is 2048. The app mounts 
 
 | Path | Role |
 |---|---|
-| `src/App.jsx` | Score, best score, tiles, loss, AI suggestion and Auto Play state. Owns input and the slide timer. |
+| `src/App.jsx` | Score, best score, tiles, loss/win, busy, mode, pending hint. Wires hooks to `ActionPanel` / `Board`; owns `startGame` and derived `canSuggest` / `canApplySuggestion` / `canToggleAutoPlay`. |
+| `src/hooks/useKeyboardMoves.js` | Arrow keys → move; unmount aborts in-flight suggest + bumps token. |
+| `src/hooks/useSuggestSession.js` | Suggest token, abort, capacity retries, beacon gate, `handleSuggest`. |
+| `src/hooks/useMoveController.js` | `handleMove`, settle `SETTLE_MS`, Auto Play gap → suggest. |
+| `src/hooks/useAutoPlayController.js` | Toggle/stop, `autoApplyingRef`; shared failed-apply exit; busy release on Stop. |
+| `src/suggestHints.js` | Pure 429/fallback hint copy + `capitalize` / `formatSuggestionHint`. |
 | `src/game.js` | Board rules. Pure functions. No DOM. Includes `tilesToBoard` for the API. |
 | `src/swipe.js` | Turns a pointer delta into a direction. |
 | `src/api.js` | `POST /suggest` with W3C `traceparent` and optional `AbortSignal`; beacons fail / spend `rate_limit` / capacity `model_busy` to `/client-events` unless `shouldReportOutcome` is false (stale token). Classifies 429 via `X-Suggest-Limit` / detail onto `SuggestError.limitReason`. Abort / HTTP `499` beacons `cancel` (not fail) and throws `AbortError`. Throws `SuggestError` on network, HTTP, or unusable body. |
