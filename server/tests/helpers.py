@@ -69,18 +69,26 @@ def isolated_settings(**overrides: object) -> Settings:
     return Settings(**values)
 
 
+class FrozenClock:
+    """Injectable clock for rate-limit tests. Advance ``now`` to control Retry-After."""
+
+    def __init__(self, now: float = 0.0) -> None:
+        self.now = now
+
+    def __call__(self) -> float:
+        return self.now
+
+
 class FakeLLM:
-    """Queued replies for unit/API tests. Optional delay creates capacity contention."""
+    """Queued replies for unit/API tests. Use BlockingLLM when you need a held slot."""
 
     def __init__(
         self,
         replies: list | None = None,
         *,
-        delay_seconds: float = 0.0,
         forever_move: str | None = None,
     ) -> None:
         self._replies = None if replies is None else list(replies)
-        self._delay_seconds = delay_seconds
         self._forever_move = forever_move
         self.calls = 0
         self._lock = threading.Lock()
@@ -99,12 +107,8 @@ class FakeLLM:
         self.legal = legal
         self.rejected = list(rejected)
         self.invalid_reply = invalid_reply
-        if self._delay_seconds > 0:
-            deadline = time.monotonic() + self._delay_seconds
-            while time.monotonic() < deadline:
-                if cancel is not None and cancel.is_set():
-                    raise SuggestCancelled()
-                time.sleep(0.005)
+        if cancel is not None and cancel.is_set():
+            raise SuggestCancelled()
         if self._forever_move is not None:
             return ModelSuggestion(self._forever_move, "ok")
         if self._replies is None:

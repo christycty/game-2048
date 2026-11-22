@@ -5,6 +5,10 @@
 #   - game-2048-server  (EXPORT_TRACES=false; APP_ENV=prod for docs gating)
 #   - game-2048-client  (host :5173→80)
 # nginx.conf resolves upstream hostname ``prod`` on a shared Docker network.
+#
+# Topology is CI ``docker run`` (+ invented network/alias), not Compose service
+# names. Checks: health, prod docs gate, nginx /suggest + /client-events,
+# metrics labels for the suggest, nginx path isolation for /health + /metrics.
 set -euo pipefail
 
 NETWORK="${NETWORK:-game-2048-ci}"
@@ -76,6 +80,14 @@ assert data["source"] in ("expectimax", "fallback"), data
 print("suggest-through-nginx ok:", data["move"], data["source"])
 PY
 
+echo "== client-events through nginx =="
+events_code="$(curl -sS -o /dev/null -w '%{http_code}' \
+  -X POST "${CLIENT_URL}/client-events" \
+  -H 'content-type: application/json' \
+  -d '{"outcome":"fail"}' || true)"
+[[ "$events_code" == "204" ]] || fail "POST ${CLIENT_URL}/client-events expected 204, got ${events_code}"
+echo "client-events-through-nginx ok"
+
 echo "== metrics scrape after suggest =="
 curl -fsS -o "$METRICS_OUT" "${API_URL}/metrics" \
   || fail "GET ${API_URL}/metrics failed"
@@ -86,15 +98,22 @@ import sys
 body = Path(sys.argv[1]).read_text()
 assert "suggest_source_total" in body or 'suggest_source="' in body, "missing suggest_source series"
 assert 'suggest_source="expectimax"' in body, body[:2000]
-assert 'http_target="/suggest"' in body, body[:2000]
-assert 'http_status_code="200"' in body, body[:2000]
-# Scrape endpoint itself must not require Ollama / must stay untraced noise-free enough to read.
+# Require /suggest 200 on the same sample line (not a lone status from /health).
+suggest_200 = False
+for line in body.splitlines():
+    if line.startswith("#"):
+        continue
+    if 'http_target="/suggest"' in line and 'http_status_code="200"' in line:
+        suggest_200 = True
+        break
+assert suggest_200, "no metrics line joins http_target=/suggest with http_status_code=200"
+assert 'outcome="fail"' in body or "client_suggest_outcome" in body, body[:2000]
 assert "# TYPE" in body or "http_server_duration_milliseconds" in body
-print("metrics scrape ok (expectimax + /suggest 200)")
+print("metrics scrape ok (expectimax + joined /suggest 200 + client fail beacon)")
 PY
 
 echo "== nginx does not proxy /health or /metrics =="
-# Only /suggest is forwarded; other paths are the SPA. Must not look like the API.
+# Only /suggest and /client-events are forwarded; other paths are the SPA.
 health_via_nginx="$(curl -sS "${CLIENT_URL}/health" || true)"
 metrics_via_nginx="$(curl -sS "${CLIENT_URL}/metrics" || true)"
 python3 - "$health_via_nginx" "$metrics_via_nginx" <<'PY'

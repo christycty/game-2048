@@ -4,8 +4,9 @@ Run: ``pytest --load`` (or ``pytest --load -m load``).
 
 Pass criteria: every worker finishes; accounting closes
 (``completes + capacity_429 + cancels == starts``); after drain a fresh acquire
-succeeds (no leaked in-flight slots). Exercises ``LLM_MAX_IN_FLIGHT`` 1 then 2,
-including a cancel-under-capacity soak.
+succeeds (no leaked in-flight slots). Exercises ``LLM_MAX_IN_FLIGHT`` 1 then 2
+with **sustained** capacity hold, mixed 429 layers on one app, and cancel-under-
+capacity with a mid-hold capacity probe.
 """
 
 from __future__ import annotations
@@ -21,32 +22,24 @@ from fastapi.testclient import TestClient
 
 from app.main import create_app
 from app.rate_limit import LlmInFlightGate, SuggestRateLimiter
-from helpers import OPEN_BOARD, BlockingLLM, FakeLLM, isolated_settings
+from helpers import OPEN_BOARD, BlockingLLM, FrozenClock, isolated_settings
 
 pytestmark = pytest.mark.load
 
 _WORKERS = 6
-_PER_WORKER = 10
+_PROBES_PER_WORKER = 8
+_COMPLETES_PER_WORKER = 4
 _BODY = {"board": OPEN_BOARD, "mode": "llm"}
 _CANCEL_WAVES = 6
 _WINDOW_SECONDS = 60
 
 
-class _Clock:
-    """Frozen clock so hard-ceiling Retry-After stays ``window`` (never collapses to 1)."""
-
-    def __init__(self) -> None:
-        self.now = 0.0
-
-    def __call__(self) -> float:
-        return self.now
-
-
 def _run_load(*, max_in_flight: int) -> None:
-    """Soak with forced capacity contention, then fast completes (no timing races)."""
-    total = _WORKERS * _PER_WORKER
-    # Stay under Settings max (120) so 429s are capacity, not hard ceiling.
-    assert total <= 120
+    """Hold every slot through a concurrent probe wave, then drain and complete."""
+    probe_total = _WORKERS * _PROBES_PER_WORKER
+    complete_total = _WORKERS * _COMPLETES_PER_WORKER
+    # Holders + completes must stay under Settings max so 429s stay capacity.
+    assert max_in_flight + complete_total <= 120
     llm = BlockingLLM()
     gate = LlmInFlightGate(max_in_flight)
     settings = isolated_settings(
@@ -70,7 +63,7 @@ def _run_load(*, max_in_flight: int) -> None:
             else:
                 counts["other"] += 1
 
-    # --- Guaranteed capacity: hold every slot, then probe ---
+    # --- Sustained capacity: hold every slot while workers hammer 429 ---
     llm.release.clear()
 
     def hold() -> None:
@@ -85,13 +78,26 @@ def _run_load(*, max_in_flight: int) -> None:
         time.sleep(0.01)
     assert llm.calls == max_in_flight
 
-    capacity_probes = max(1, _WORKERS - max_in_flight)
+    def probe_worker(n: int) -> None:
+        with TestClient(app) as client:
+            for _ in range(n):
+                blocked = client.post("/suggest", json=_BODY)
+                assert blocked.status_code == 429
+                assert blocked.headers.get("retry-after") == "1"
+                record(429)
+
+    with ThreadPoolExecutor(max_workers=_WORKERS) as pool:
+        futures = [pool.submit(probe_worker, _PROBES_PER_WORKER) for _ in range(_WORKERS)]
+        for future in as_completed(futures):
+            future.result(timeout=60)
+
+    assert counts["capacity_429"] == probe_total, counts
+    # Still full after the wave (holders never released).
     with TestClient(app) as client:
-        for _ in range(capacity_probes):
-            blocked = client.post("/suggest", json=_BODY)
-            assert blocked.status_code == 429
-            assert blocked.headers.get("retry-after") == "1"
-            record(429)
+        still = client.post("/suggest", json=_BODY)
+        assert still.status_code == 429
+        assert still.headers.get("retry-after") == "1"
+        record(429)
 
     llm.release.set()
     for thread in holders:
@@ -101,33 +107,31 @@ def _run_load(*, max_in_flight: int) -> None:
     for code in holder_codes:
         record(code)
 
-    # --- Remaining soak: release is set, so BlockingLLM returns immediately ---
-    remaining = total - counts["starts"]
-    assert remaining >= 0
-
-    def worker(n: int) -> None:
+    # --- Completes after drain (release stays set). Parallel workers may still
+    # hit capacity 429 briefly while a sibling holds the slot — that is real
+    # contention, not a failure; classify and account.
+    def complete_worker(n: int) -> None:
         with TestClient(app) as client:
             for _ in range(n):
                 response = client.post("/suggest", json=_BODY)
                 if response.status_code == 429:
                     assert response.headers.get("retry-after") == "1"
+                else:
+                    assert response.status_code == 200
                 record(response.status_code)
 
-    # Split remaining across workers (some may get 0).
-    per = [remaining // _WORKERS] * _WORKERS
-    for i in range(remaining % _WORKERS):
-        per[i] += 1
     with ThreadPoolExecutor(max_workers=_WORKERS) as pool:
-        futures = [pool.submit(worker, n) for n in per if n > 0]
+        futures = [pool.submit(complete_worker, _COMPLETES_PER_WORKER) for _ in range(_WORKERS)]
         for future in as_completed(futures):
             future.result(timeout=60)
 
     assert counts["other"] == 0, counts
-    assert counts["starts"] == total, counts
+    expected_starts = probe_total + 1 + max_in_flight + complete_total
+    assert counts["starts"] == expected_starts, counts
     accounted = counts["completes"] + counts["capacity_429"] + counts["cancels"]
     assert accounted == counts["starts"], counts
-    assert counts["completes"] >= 1, counts
-    assert counts["capacity_429"] >= capacity_probes, counts
+    assert counts["completes"] >= max_in_flight + 1, counts
+    assert counts["capacity_429"] >= probe_total + 1, counts
 
     probe = gate.acquire()
     assert probe.retry_after is None and probe.token is not None
@@ -142,14 +146,29 @@ def test_load_suggest_accounts_and_drains(max_in_flight: int) -> None:
 
 
 def test_load_mixed_429_layers_classified_by_retry_after() -> None:
-    """Both 429 layers under load pressure; classify by Retry-After without ambiguity.
+    """One app: capacity 429 while held, then hard-ceiling 429 after drain.
 
-    Frozen clock keeps hard-ceiling Retry-After at the full window (60). Without that,
-    ``SuggestRateLimiter`` can return ``1`` near window end — the same value as capacity.
-    Capacity is forced with BlockingLLM holders (no delay races).
+    Frozen clock keeps hard-ceiling Retry-After at the full window (60). Without
+    that, ``SuggestRateLimiter`` can return ``1`` near window end — the same value
+    as capacity (see contract collision test).
     """
-    hard_ceiling = 3
-    clock = _Clock()
+    hard_ceiling = 4
+    clock = FrozenClock()
+    llm = BlockingLLM()
+    gate = LlmInFlightGate(1)
+    limiter = SuggestRateLimiter(hard_ceiling, _WINDOW_SECONDS, clock)
+    app = create_app(
+        isolated_settings(
+            suggest_rate_limit_requests=hard_ceiling,
+            llm_max_in_flight=1,
+        ),
+        llm,
+        rate_limiters={
+            "llm": limiter,
+            "expectimax": SuggestRateLimiter(30, _WINDOW_SECONDS, clock),
+        },
+        llm_in_flight=gate,
+    )
     counts = {
         "starts": 0,
         "completes": 0,
@@ -157,108 +176,74 @@ def test_load_mixed_429_layers_classified_by_retry_after() -> None:
         "hard_ceiling_429": 0,
         "other": 0,
     }
+    lock = threading.Lock()
 
     def record(status: int, *, retry: str | None = None) -> None:
-        counts["starts"] += 1
-        if status == 200:
-            counts["completes"] += 1
-        elif status == 429 and retry == "1":
-            counts["capacity_429"] += 1
-        elif status == 429 and retry == str(_WINDOW_SECONDS):
-            counts["hard_ceiling_429"] += 1
-        else:
-            counts["other"] += 1
+        with lock:
+            counts["starts"] += 1
+            if status == 200:
+                counts["completes"] += 1
+            elif status == 429 and retry == "1":
+                counts["capacity_429"] += 1
+            elif status == 429 and retry == str(_WINDOW_SECONDS):
+                counts["hard_ceiling_429"] += 1
+            else:
+                counts["other"] += 1
 
-    # --- Capacity layer (BlockingLLM hold) ---
-    blocking = BlockingLLM()
-    gate = LlmInFlightGate(1)
-    capacity_app = create_app(
-        isolated_settings(suggest_rate_limit_requests=120, llm_max_in_flight=1),
-        blocking,
-        llm_in_flight=gate,
-    )
+    llm.release.clear()
 
     def hold() -> None:
-        with TestClient(capacity_app) as client:
+        with TestClient(app) as client:
             record(client.post("/suggest", json=_BODY).status_code)
 
     holder = threading.Thread(target=hold)
     holder.start()
-    assert blocking.started.wait(2)
-    with TestClient(capacity_app) as client:
-        for _ in range(8):
-            blocked = client.post("/suggest", json=_BODY)
-            assert blocked.status_code == 429
-            retry = blocked.headers.get("retry-after")
-            assert retry == "1"
-            record(429, retry=retry)
-    blocking.release.set()
-    holder.join(timeout=3)
-    assert not holder.is_alive()
+    assert llm.started.wait(2)
 
-    probe = gate.acquire()
-    assert probe.retry_after is None and probe.token is not None
-    gate.release(probe.token)
+    def capacity_worker(n: int) -> None:
+        with TestClient(app) as client:
+            for _ in range(n):
+                blocked = client.post("/suggest", json=_BODY)
+                assert blocked.status_code == 429
+                retry = blocked.headers.get("retry-after")
+                assert retry == "1"
+                record(429, retry=retry)
 
-    # --- Hard-ceiling layer (frozen clock ⇒ Retry-After always window) ---
-    llm = FakeLLM(forever_move="right")
-    spend_gate = LlmInFlightGate(4)
-    limiter = SuggestRateLimiter(hard_ceiling, _WINDOW_SECONDS, clock)
-    spend_app = create_app(
-        isolated_settings(
-            suggest_rate_limit_requests=hard_ceiling,
-            llm_max_in_flight=4,
-        ),
-        llm,
-        rate_limiters={
-            "llm": limiter,
-            "expectimax": SuggestRateLimiter(30, _WINDOW_SECONDS, clock),
-        },
-        llm_in_flight=spend_gate,
-    )
-
-    spend_lock = threading.Lock()
-    spend_counts = {"starts": 0, "completes": 0, "hard_ceiling_429": 0, "other": 0}
-
-    def spend_worker(_: int) -> None:
-        with TestClient(spend_app) as client:
-            for _ in range(10):
-                response = client.post("/suggest", json=_BODY)
-                with spend_lock:
-                    spend_counts["starts"] += 1
-                    if response.status_code == 200:
-                        spend_counts["completes"] += 1
-                    elif response.status_code == 429 and response.headers.get("retry-after") == str(
-                        _WINDOW_SECONDS
-                    ):
-                        spend_counts["hard_ceiling_429"] += 1
-                    else:
-                        spend_counts["other"] += 1
-
-    with ThreadPoolExecutor(max_workers=6) as pool:
-        futures = [pool.submit(spend_worker, i) for i in range(6)]
+    with ThreadPoolExecutor(max_workers=4) as pool:
+        futures = [pool.submit(capacity_worker, 5) for _ in range(4)]
         for future in as_completed(futures):
             future.result(timeout=60)
 
-    assert spend_counts["other"] == 0, spend_counts
-    assert spend_counts["completes"] == hard_ceiling, spend_counts
-    assert spend_counts["hard_ceiling_429"] >= 1, spend_counts
-    counts["starts"] += spend_counts["starts"]
-    counts["completes"] += spend_counts["completes"]
-    counts["hard_ceiling_429"] += spend_counts["hard_ceiling_429"]
+    llm.release.set()
+    holder.join(timeout=3)
+    assert not holder.is_alive()
+
+    # Holder burned 1 hard-ceiling hit. Fill the rest, then assert window Retry-After.
+    remaining_ok = hard_ceiling - 1
+    with TestClient(app) as client:
+        for _ in range(remaining_ok):
+            assert client.post("/suggest", json=_BODY).status_code == 200
+            record(200)
+        spend = client.post("/suggest", json=_BODY)
+        assert spend.status_code == 429
+        retry = spend.headers.get("retry-after")
+        assert retry == str(_WINDOW_SECONDS)
+        record(429, retry=retry)
 
     assert counts["other"] == 0, counts
     assert counts["capacity_429"] >= 1, counts
     assert counts["hard_ceiling_429"] >= 1, counts
-    assert counts["completes"] >= 1, counts
+    assert counts["completes"] == hard_ceiling, counts
+    accounted = counts["completes"] + counts["capacity_429"] + counts["hard_ceiling_429"]
+    assert accounted == counts["starts"], counts
 
-    spend_probe = spend_gate.acquire()
+    spend_probe = gate.acquire()
     assert spend_probe.retry_after is None and spend_probe.token is not None
-    spend_gate.release(spend_probe.token)
+    gate.release(spend_probe.token)
 
 
 def test_load_cancel_under_capacity_accounts_and_drains() -> None:
-    """ASGI disconnect under capacity: cancels + completes account; no leaked slots."""
+    """ASGI disconnect under capacity: mid-hold capacity 429; cancels + completes account."""
     llm = BlockingLLM()
     gate = LlmInFlightGate(2)
     settings = isolated_settings(
@@ -331,6 +316,14 @@ def test_load_cancel_under_capacity_accounts_and_drains() -> None:
             while llm.calls < baseline + 2 and time.monotonic() < deadline:
                 await asyncio.sleep(0.01)
             assert llm.calls >= baseline + 2
+
+            # Both slots held: oversubscribe before cancelling A.
+            with TestClient(app) as client:
+                blocked = client.post("/suggest", json=_BODY)
+                assert blocked.status_code == 429
+                assert blocked.headers.get("retry-after") == "1"
+                record(429)
+
             disconnect.set()
             status_a = await asyncio.wait_for(task_a, timeout=5)
             assert status_a == 499
@@ -342,6 +335,7 @@ def test_load_cancel_under_capacity_accounts_and_drains() -> None:
 
         assert counts["cancels"] == _CANCEL_WAVES, counts
         assert counts["completes"] == _CANCEL_WAVES, counts
+        assert counts["capacity_429"] == _CANCEL_WAVES, counts
         assert counts["other"] == 0, counts
         accounted = counts["completes"] + counts["capacity_429"] + counts["cancels"]
         assert accounted == counts["starts"], counts
@@ -349,7 +343,6 @@ def test_load_cancel_under_capacity_accounts_and_drains() -> None:
         probe = gate.acquire()
         assert probe.retry_after is None and probe.token is not None
         gate.release(probe.token)
-        # release is set, so BlockingLLM completes a fresh TestClient suggest.
         with TestClient(app) as client:
             assert client.post("/suggest", json=_BODY).status_code == 200
 

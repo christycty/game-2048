@@ -2,9 +2,10 @@
 
 Runs in the default suite (CI). Real-model cases live in ``test_suggest_e2e.py``.
 
-Until multi-client splits capacity vs spend ``detail``, clients distinguish the
-two LLM ``429`` layers by ``Retry-After``: capacity is short (1); hard-ceiling
-is the remaining window (typically larger, default 60 when the window just filled).
+Until multi-client splits capacity vs spend ``detail``, ``Retry-After`` is only a
+*partial* tell: capacity is always ``1``; hard-ceiling is remaining window seconds
+(often ``60`` when the window just filled). Near window end hard-ceiling also
+collapses to ``1`` — do not treat ``Retry-After: 1`` as capacity-only.
 """
 
 from __future__ import annotations
@@ -17,7 +18,14 @@ from app.main import create_app
 from app.moves import legal_moves
 from app.rate_limit import LlmInFlightGate, SuggestRateLimiter
 from app.telemetry import PROM_CLIENT_SUGGEST_OUTCOME
-from helpers import OPEN_BOARD, SORTED_ROW, BlockingLLM, FakeLLM, isolated_settings
+from helpers import (
+    OPEN_BOARD,
+    SORTED_ROW,
+    BlockingLLM,
+    FakeLLM,
+    FrozenClock,
+    isolated_settings,
+)
 
 CORNER_BOARD = [
     [2, 0, 0, 0],
@@ -32,14 +40,6 @@ STUCK_BOARD = [
     [512, 1024, 2048, 4096],
     [8192, 16384, 32768, 65536],
 ]
-
-
-class _Clock:
-    def __init__(self) -> None:
-        self.now = 0.0
-
-    def __call__(self) -> float:
-        return self.now
 
 
 class _UnusedLLM:
@@ -111,7 +111,7 @@ def test_suggest_rate_limit_is_429_with_retry_after() -> None:
 
 def test_hard_ceiling_429_uses_window_retry_after() -> None:
     llm = FakeLLM(["right", "right"])
-    clock = _Clock()
+    clock = FrozenClock()
     limiter = SuggestRateLimiter(1, 60, clock)
     client = TestClient(
         create_app(
@@ -127,8 +127,28 @@ def test_hard_ceiling_429_uses_window_retry_after() -> None:
     assert blocked.headers["retry-after"] == "60"
 
 
+def test_hard_ceiling_retry_after_can_collapse_to_one() -> None:
+    """Near window end, hard-ceiling Retry-After is also 1 — same as capacity."""
+    llm = FakeLLM(["right", "right"])
+    clock = FrozenClock()
+    limiter = SuggestRateLimiter(1, 60, clock)
+    client = TestClient(
+        create_app(
+            isolated_settings(),
+            llm,
+            rate_limiters={"llm": limiter, "expectimax": SuggestRateLimiter(30, 60, clock)},
+        )
+    )
+    assert client.post("/suggest", json={"board": OPEN_BOARD, "mode": "llm"}).status_code == 200
+    clock.now = 59.5  # remaining 0.5s → ceil → 1
+    blocked = client.post("/suggest", json={"board": OPEN_BOARD, "mode": "llm"})
+    assert blocked.status_code == 429
+    assert blocked.json()["detail"] == "too many suggestions"
+    assert blocked.headers["retry-after"] == "1"
+
+
 def test_capacity_429_uses_short_retry_after() -> None:
-    """Capacity full today shares detail with hard ceiling; Retry-After is the tell."""
+    """Capacity full today shares detail with hard ceiling; Retry-After is always 1."""
     llm = BlockingLLM()
     settings = isolated_settings(suggest_rate_limit_requests=10, llm_max_in_flight=1)
     app = create_app(settings, llm, llm_in_flight=LlmInFlightGate(1))
@@ -154,8 +174,8 @@ def test_capacity_429_uses_short_retry_after() -> None:
 
 
 def test_capacity_and_hard_ceiling_429_classified_by_retry_after() -> None:
-    """One scenario surfaces both 429 layers; same detail, Retry-After distinguishes them."""
-    clock = _Clock()
+    """Fresh window: both 429 layers; Retry-After differs (1 vs 60). Not reliable near expiry."""
+    clock = FrozenClock()
     limiter = SuggestRateLimiter(2, 60, clock)
     llm = BlockingLLM()
     app = create_app(
@@ -192,7 +212,7 @@ def test_capacity_and_hard_ceiling_429_classified_by_retry_after() -> None:
         assert spend.json()["detail"] == "too many suggestions"
         assert spend.headers["retry-after"] == "60"
 
-    # Clients must not treat every 429 alike before multi-client splits detail.
+    # Fresh-window case only; see test_hard_ceiling_retry_after_can_collapse_to_one.
     assert capacity.headers["retry-after"] != spend.headers["retry-after"]
 
 

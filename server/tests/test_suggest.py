@@ -23,6 +23,7 @@ from helpers import (
     SORTED_ROW,
     BlockingLLM,
     FakeLLM,
+    FrozenClock,
     isolated_settings,
 )
 
@@ -52,21 +53,13 @@ def test_health() -> None:
     assert response.json() == {"status": "ok"}
 
 
-class _Clock:
-    def __init__(self) -> None:
-        self.now = 0.0
-
-    def __call__(self) -> float:
-        return self.now
-
-
 def _suggest(client: TestClient) -> httpx.Response:
     return client.post("/suggest", json={"board": OPEN_BOARD, "mode": "llm"})
 
 
 def test_suggest_rate_limit_stops_before_the_model() -> None:
     llm = FakeLLM(["right", "right", "right"])
-    clock = _Clock()
+    clock = FrozenClock()
     limiter = SuggestRateLimiter(2, 60, clock)
     client = TestClient(
         create_app(
@@ -252,7 +245,7 @@ def test_expectimax_unaffected_by_llm_in_flight_gate() -> None:
 def test_capacity_reject_does_not_burn_hard_ceiling() -> None:
     """A 429 from the in-flight gate must refund the sliding-window hit."""
     llm = BlockingLLM()
-    clock = _Clock()
+    clock = FrozenClock()
     # Cap 2: holder uses one hit. Capacity reject must not fill the second.
     limiter = SuggestRateLimiter(2, 60, clock)
     settings = isolated_settings(suggest_rate_limit_requests=2, llm_max_in_flight=1)
