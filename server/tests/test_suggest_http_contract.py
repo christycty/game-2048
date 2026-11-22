@@ -133,10 +133,12 @@ def test_client_events_beacons_and_metrics() -> None:
     client = TestClient(create_app(isolated_settings(app_env="prod"), _UnusedLLM()))
     assert client.post("/client-events", json={"outcome": "fail"}).status_code == 204
     assert client.post("/client-events", json={"outcome": "rate_limit"}).status_code == 204
-    assert client.post("/client-events", json={"outcome": "cancel"}).status_code == 422
+    assert client.post("/client-events", json={"outcome": "cancel"}).status_code == 204
     assert client.post("/client-events", json={}).status_code == 422
+    assert client.post("/client-events", json={"outcome": "success"}).status_code == 422
 
     text = client.get("/metrics").text
     assert PROM_CLIENT_SUGGEST_OUTCOME in text
     assert 'outcome="fail"' in text
     assert 'outcome="rate_limit"' in text
+    assert 'outcome="cancel"' in text
