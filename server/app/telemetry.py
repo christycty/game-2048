@@ -48,7 +48,7 @@ _DOCKER_HOST_ALIAS = "host.docker.internal"
 _EXCLUDED_URLS = "/health,/metrics,/client-events,/docs,/openapi.json,/redoc"
 # FastAPI OTel also emits request/response body-size histograms. Tiny fixed JSON
 # boards make those panels flat forever — drop at the SDK so scrape == charted.
-# Keep duration (API latency) and active_requests (in-flight /suggest under Auto Play).
+# Keep duration (API latency) and active_requests (in-flight /suggest; multi-tab overlap).
 _DROP_HTTP_BODY_SIZE_VIEWS = (
     View(instrument_name="http.server.request.size", aggregation=DropAggregation()),
     View(instrument_name="http.server.response.size", aggregation=DropAggregation()),

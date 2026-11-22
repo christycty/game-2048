@@ -116,7 +116,7 @@ Every panel on the provisioned dashboard and the **exact** Prom series suffix it
 | POST /suggest by status | `http_server_duration_milliseconds_count` | `sum by (http_status_code)` · `http_target="/suggest"` · rate `> 0` |
 | Suggest by source | `suggest_source_total` | `sum by (suggest_source)` · `llm` \| `fallback` \| `expectimax` · rate `> 0` |
 | POST /suggest latency | `http_server_duration_milliseconds_bucket` | `histogram_quantile` p50 + p95 · empty when no `/suggest` traffic |
-| In-flight HTTP requests | `http_server_active_requests` | `sum` · `http_method="POST"` (proxy for overlapping `/suggest`; `/health`/`/metrics`/`/client-events` not instrumented) |
+| In-flight HTTP requests | `http_server_active_requests` | `sum` · `http_method="POST"` (proxy for `/suggest`; single-tab Auto Play is serial — spikes mean multi-tab/overlap; `/health`/`/metrics`/`/client-events` not instrumented) |
 | Client suggest outcomes | `client_suggest_outcome_total` | `sum by (outcome)` · `fail` \| `rate_limit` · rate `> 0` |
 | LLM request success rate | `gen_ai_client_request_count_total` | `success` rate / total rate; empty when idle (`total rate == 0`) |
 | LLM requests by outcome | `gen_ai_client_request_count_total` | `sum by (gen_ai_request_outcome)` · `success` \| `error` \| `timeout` · rate `> 0` |
