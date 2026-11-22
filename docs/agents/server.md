@@ -101,7 +101,7 @@ Expectimax depth: open boards (≥8 empties) search to depth 1; tighter boards t
 
 `POST {OLLAMA_BASE_URL}/api/chat` with `OLLAMA_MODEL`, non-streaming. The prompt lists the board, legal moves, any rejected moves, and asks for JSON `{"move":"...","reason":"..."}` only.
 
-When `OLLAMA_STRUCTURED_OUTPUT` is true and `APP_ENV` is not `prod`, the request also sends a JSON schema that constrains `move` to the legal set. Prod always omits that schema so the model must follow the prompt text alone.
+`OLLAMA_STRUCTURED_OUTPUT` is off by default. When opted in and `APP_ENV` is not `prod`, the request also sends a JSON schema that constrains `move` to the legal set. Prod always omits that schema so the model must follow the prompt text alone.
 
 `parse_move` requires JSON with a known direction and a non-blank reason, then trims the reason to at most 50 words and 400 characters.
 
@@ -114,7 +114,7 @@ Loaded from the environment and optional `server/.env` (Compose does not use tha
 | `APP_ENV` | `dev` | `dev` or `prod` |
 | `OLLAMA_BASE_URL` | `http://localhost:11434` | Host process default |
 | `OLLAMA_MODEL` | `gemma4:latest` | |
-| `OLLAMA_STRUCTURED_OUTPUT` | `true` | Forced off in prod |
+| `OLLAMA_STRUCTURED_OUTPUT` | `false` | Opt in; forced off in prod |
 | `LLM_MAX_ATTEMPTS` | `3` | 1–5 |
 | `LLM_ATTEMPT_TIMEOUT_SECONDS` | `20` | >0, ≤20 |
 | `LLM_SUGGEST_BUDGET_SECONDS` | `40` | >0, ≤40; raised to 2× attempt timeout when lower |
