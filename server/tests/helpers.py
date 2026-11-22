@@ -57,7 +57,7 @@ ISOLATED_SETTINGS_DEFAULTS: dict[str, object] = {
     "llm_attempt_timeout_seconds": 20,
     "llm_suggest_budget_seconds": 40,
     "suggest_rate_limit_requests": 60,
-    "suggest_rate_limit_expectimax_requests": 120,
+    "suggest_rate_limit_expectimax_requests": 360,
     "suggest_rate_limit_window_seconds": 60,
     "llm_max_in_flight": 1,
     "client_events_rate_limit_requests": 60,
