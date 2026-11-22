@@ -7,6 +7,14 @@ from typing import NamedTuple
 
 _Clock = Callable[[], float]
 
+# Distinct 429 details so clients can retry capacity without treating spend as busy.
+DETAIL_SPEND_CAP = "too many suggestions"
+DETAIL_MODEL_BUSY = "model busy"
+LIMIT_REASON_SPEND = "spend"
+LIMIT_REASON_CAPACITY = "capacity"
+# Surfaced on capacity/spend 429s (detail is the primary contract; header is explicit).
+HEADER_SUGGEST_LIMIT = "X-Suggest-Limit"
+
 
 class GateDecision(NamedTuple):
     """Outcome of ``allow``: either a hit token or a Retry-After delay."""

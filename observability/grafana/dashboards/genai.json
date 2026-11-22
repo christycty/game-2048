@@ -226,7 +226,7 @@
       },
       "gridPos": {
         "h": 9,
-        "w": 24,
+        "w": 12,
         "x": 0,
         "y": 10
       },
@@ -260,6 +260,64 @@
       }
     },
     {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "description": "Server 429 rejects by reason: capacity (model busy / contention) vs spend (hard ceiling / runaway). Unstacked.",
+      "fieldConfig": {
+        "defaults": {
+          "unit": "reqps",
+          "custom": {
+            "drawStyle": "line",
+            "lineInterpolation": "smooth",
+            "fillOpacity": 10,
+            "showPoints": "never",
+            "stacking": {
+              "mode": "none",
+              "group": "A"
+            },
+            "spanNulls": false
+          }
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 9,
+        "w": 12,
+        "x": 12,
+        "y": 10
+      },
+      "id": 15,
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "expr": "sum by (reason) (rate(suggest_limit_reject_total[5m])) > 0",
+          "legendFormat": "{{reason}}",
+          "refId": "A"
+        }
+      ],
+      "title": "Suggest limit rejects (capacity vs spend)",
+      "type": "timeseries",
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true,
+          "calcs": [
+            "lastNotNull"
+          ]
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      }
+    },
+    {
       "collapsed": false,
       "gridPos": {
         "h": 1,
@@ -277,7 +335,7 @@
         "type": "prometheus",
         "uid": "prometheus"
       },
-      "description": "Browser-reported suggest outcomes via POST /client-events (fail / rate_limit / cancel). Unstacked.",
+      "description": "Browser-reported suggest outcomes via POST /client-events (fail / rate_limit spend / model_busy capacity / cancel). Unstacked.",
       "fieldConfig": {
         "defaults": {
           "unit": "reqps",

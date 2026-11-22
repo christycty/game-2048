@@ -17,7 +17,7 @@ from app.cancel import SuggestCancelled
 from app.expectimax import Choice, choose_move
 from app.llm import ModelSuggestion, OllamaClient
 from app.main import DisconnectCancelMiddleware, create_app
-from app.rate_limit import LlmInFlightGate, SuggestRateLimiter
+from app.rate_limit import DETAIL_MODEL_BUSY, LlmInFlightGate, SuggestRateLimiter
 from app.suggester import MoveSuggester
 from helpers import OPEN_BOARD, BlockingLLM, asgi_suggest, isolated_settings
 
@@ -400,7 +400,7 @@ def test_asgi_disconnect_cancels_blocking_llm() -> None:
 
         fourth = await asgi_suggest(app, body, disconnect_gate=None)
         assert fourth.status == 429
-        assert fourth.json()["detail"] == "too many suggestions"
+        assert fourth.json()["detail"] == DETAIL_MODEL_BUSY
         assert fourth.headers["retry-after"] == "1"
         assert not getattr(app.state, "telemetry_shutdown", False)
 

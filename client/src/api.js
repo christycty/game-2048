@@ -5,19 +5,28 @@
 // Fail / 429 / cancel outcomes beacon to /client-events for scrapeable client counts.
 // Pass shouldReportOutcome when the UI can abandon the request (stale token);
 // abandoned fails must not inflate client Grafana rates. Abort beacons `cancel`
-// (not fail); maybeReportOutcome still skips fail/rate_limit when the signal aborted.
+// (not fail); maybeReportOutcome still skips fail/rate_limit/model_busy when aborted.
 
 import { createTraceparent } from "./trace.js";
+
+/** Spend hard-ceiling 429 (stop Auto Play). */
+export const LIMIT_SPEND = "spend";
+/** LLM capacity-gate 429 (Auto Play may retry). */
+export const LIMIT_CAPACITY = "capacity";
+export const DETAIL_SPEND_CAP = "too many suggestions";
+export const DETAIL_MODEL_BUSY = "model busy";
 
 function apiBaseUrl() {
     return import.meta.env?.VITE_API_BASE_URL ?? "";
 }
 
 export class SuggestError extends Error {
-    constructor(message, { status } = {}) {
+    constructor(message, { status, limitReason = null, retryAfter = null } = {}) {
         super(message);
         this.name = "SuggestError";
         this.status = status;
+        this.limitReason = limitReason;
+        this.retryAfter = retryAfter;
     }
 }
 
@@ -57,6 +66,30 @@ function abortError(error) {
     return isAbortError(error) ? error : new DOMException("Aborted", "AbortError");
 }
 
+function parseRetryAfter(headers) {
+    const raw = headers?.get?.("retry-after");
+    if (raw == null || raw === "") return null;
+    const seconds = Number.parseInt(raw, 10);
+    return Number.isFinite(seconds) && seconds > 0 ? seconds : null;
+}
+
+/** Classify a 429 from detail / X-Suggest-Limit; unknown → spend (safe stop). */
+export function classifySuggestLimit(detail, headerReason) {
+    if (headerReason === LIMIT_CAPACITY || detail === DETAIL_MODEL_BUSY) {
+        return LIMIT_CAPACITY;
+    }
+    return LIMIT_SPEND;
+}
+
+async function readSuggestErrorBody(response) {
+    try {
+        const body = await response.json();
+        return typeof body?.detail === "string" ? body.detail : null;
+    } catch {
+        return null;
+    }
+}
+
 export async function suggestMove(
     board,
     mode = "llm",
@@ -93,7 +126,27 @@ export async function suggestMove(
     }
 
     if (!response.ok) {
-        maybeReportOutcome(response.status === 429 ? "rate_limit" : "fail", reportOpts);
+        if (response.status === 429) {
+            const detail = await readSuggestErrorBody(response);
+            if (signal?.aborted) {
+                reportCancel(cancelOpts);
+                throw new DOMException("Aborted", "AbortError");
+            }
+            const limitReason = classifySuggestLimit(
+                detail,
+                response.headers?.get?.("x-suggest-limit"),
+            );
+            const retryAfter = parseRetryAfter(response.headers);
+            maybeReportOutcome(
+                limitReason === LIMIT_CAPACITY ? "model_busy" : "rate_limit",
+                reportOpts,
+            );
+            throw new SuggestError(
+                limitReason === LIMIT_CAPACITY ? DETAIL_MODEL_BUSY : DETAIL_SPEND_CAP,
+                { status: 429, limitReason, retryAfter },
+            );
+        }
+        maybeReportOutcome("fail", reportOpts);
         throw new SuggestError("suggestion request failed", { status: response.status });
     }
 

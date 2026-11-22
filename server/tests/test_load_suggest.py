@@ -148,9 +148,8 @@ def test_load_suggest_accounts_and_drains(max_in_flight: int) -> None:
 def test_load_mixed_429_layers_classified_by_retry_after() -> None:
     """One app: capacity 429 while held, then hard-ceiling 429 after drain.
 
-    Frozen clock keeps hard-ceiling Retry-After at the full window (60). Without
-    that, ``SuggestRateLimiter`` can return ``1`` near window end — the same value
-    as capacity (see contract collision test).
+    Details / X-Suggest-Limit distinguish layers; frozen clock keeps spend
+    Retry-After at the full window (60) so Retry-After still differs in this soak.
     """
     hard_ceiling = 4
     clock = FrozenClock()

@@ -6,6 +6,8 @@ export const SETTLE_MS = SLIDE_MS + 20;
 // Pause after settle before the next Auto Play suggestion so the loop is watchable
 // and does not burn the process rate limit as fast as the slide allows.
 export const AUTO_PLAY_GAP_MS = 750;
+// Capacity-busy 429s: retry a few times with Retry-After backoff; spend 429 still stops.
+export const AUTO_PLAY_CAPACITY_MAX_RETRIES = 3;
 // Opening deal: uniform count of 2s (requirements: random number; classic used exactly 2).
 export const MIN_START_TILES = 2;
 export const MAX_START_TILES = 8;
