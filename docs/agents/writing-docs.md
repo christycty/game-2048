@@ -61,7 +61,7 @@ If a human section has **no diagram and more than ~15 lines**, it probably belon
 
 **Avoid:**
 
-- Mixing *plan* with *truth* (put staged plans under `plan/` or mark clearly as non-canonical)
+- Mixing *plan* with *truth* (keep staged plans outside the repo; never treat them as canonical)
 - Conflicting copies of the same fact across packages
 - Essay-length narrative that duplicates human overview
 
@@ -71,7 +71,7 @@ If a human section has **no diagram and more than ~15 lines**, it probably belon
 |---|---|---|
 | **Truth** | `runtime.md`, `client.md`, `server.md` | Current ports, env names, pipeline |
 | **Intent** | `prd.md`, human `overview.md` | Goals, non-goals, success criteria |
-| **Plan** | `plan/` or dated notes | Future metrics stages—must not override truth |
+| **Plan** | Outside the repo (parent notes) | Future work—must not override truth |
 
 ## One source of truth
 
@@ -116,7 +116,7 @@ Browser automation often pads to a large canvas. **Inspect the PNG before upload
 | Intent (`prd`, overview) | Match product decisions | Update when goals/non-goals change |
 | How-to (getting-started) | Commands work | “It worked if…”; occasional smoke |
 | Diagrams (architecture) | Topology/API shape | Update on structural change |
-| Plan (`plan/`) | May rot | Never treat as truth; date or mark draft |
+| Plan (outside repo) | May rot | Never check into the repo; never treat as truth |
 
 ### Prefer executable truth
 

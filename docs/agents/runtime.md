@@ -73,16 +73,22 @@ Two layers for **LLM**; Expectimax keeps a separate cheap window.
 
 **Layer 2 — LLM capacity gate:** `LLM_MAX_IN_FLIGHT` (default `1`) limits concurrent LLM `/suggest` calls admitted to Ollama. This is the real throttle for Auto Play. Expectimax does not take a slot.
 
-Either layer returns `429` with `Retry-After` (same client UX). The caps are not per browser: in prod the only caller is nginx. A mid-run cancel (`499`) releases **that request’s** hard-ceiling token and its in-flight slot so Stop/disconnect does not burn the mode cap, a sibling’s hit, or capacity. Auto Play may still hit the hard ceiling only as a safety net; under normal serial play the capacity gate dominates.
+Either layer returns `429` with `Retry-After`, but **details differ**: spend uses `detail: "too many suggestions"` + `X-Suggest-Limit: spend`; capacity uses `detail: "model busy"` + `X-Suggest-Limit: capacity` + short `Retry-After: 1`. Auto Play **retries** capacity a few times with that backoff, and **stops** on spend. The caps are not per browser: in prod the only caller is nginx. A mid-run cancel (`499`) releases **that request’s** hard-ceiling token and its in-flight slot so Stop/disconnect does not burn the mode cap, a sibling’s hit, or capacity. Auto Play may still hit the hard ceiling only as a safety net; under normal serial play the capacity gate dominates.
 
-**Verify (no code reading):** from `server/`, `pytest tests/test_rate_limit.py tests/test_suggest.py tests/test_cancel.py -q` — expect gate unit tests, capacity/hard-ceiling HTTP cases, cancel frees the in-flight slot, and concurrent LLM isolation with `LLM_MAX_IN_FLIGHT=2`. Broader load/checklist follow-up: parent `plan/verification-ladder.md`.
+**Verify (no code reading):** from `server/`, `pytest tests/test_rate_limit.py tests/test_suggest.py tests/test_suggest_http_contract.py tests/test_cancel.py -q` — expect gate unit tests, capacity (`model busy`) vs spend (`too many suggestions`) HTTP cases, cancel frees the in-flight slot, and concurrent LLM isolation with `LLM_MAX_IN_FLIGHT=2`. Broader load/checklist follow-up: parent `plan/verification-ladder.md`.
+
+### Client-events integrity gate
+
+`POST /client-events` has its own process-wide sliding window (`CLIENT_EVENTS_RATE_LIMIT_REQUESTS` / `CLIENT_EVENTS_RATE_LIMIT_WINDOW_SECONDS`, default 60 / 60s), separate from the suggest buckets. Over the cap → `429` + `Retry-After` and no scrape bump. Compose passes the same env names from the root `.env` (like the suggest caps). This is ops metric trust (harder to spam Grafana casually), not player auth. The page already ignores beacon failures.
+
+**Verify:** `pytest tests/test_suggest_http_contract.py -q` — beacons under the cap still `204` + scrape series; exhausted cap → `429` with counter unchanged; suggest and beacon limits stay independent.
 
 ### Metrics profile
 
 `GET /metrics` on the API is always on (Prometheus text). Pair `--profile metrics` with `dev` or `prod` to scrape it:
 
 - Prometheus scrapes Compose DNS `api:8000` (`dev` and `prod` both publish that alias) every **5s**.
-- Grafana **GenAI ops** (`/d/game2048-genai`): API row (`/suggest` by status, suggest by source, latency p50/p95, in-flight POSTs via `max_over_time` — often 0 while idle or when calls finish between scrapes), Client row (fail / rate_limit / cancel beacons), and LLM row (success rate excluding cancelled, outcomes incl. cancelled, error types, duration p50/p95, tokens). Unstacked rate lines; legend **Last \*** skips idle zeros. Inventory: [telemetry.md](telemetry.md).
+- Grafana **GenAI ops** (`/d/game2048-genai`): API row (`/suggest` by status, suggest by source, latency p50/p95, in-flight POSTs via `max_over_time` — often 0 while idle or when calls finish between scrapes, suggest limit rejects by `capacity` vs `spend`), Client row (fail / rate_limit / model_busy / cancel beacons), and LLM row (success rate excluding cancelled, outcomes incl. cancelled, error types, duration p50/p95, tokens). Unstacked rate lines; legend **Last \*** skips idle zeros. Inventory: [telemetry.md](telemetry.md).
 - Anonymous Viewer access on loopback; no Alertmanager or retention stack. Prometheus Graph is ad-hoc only.
 
 Config lives under `observability/` (`prometheus.yml`, Grafana provisioning).

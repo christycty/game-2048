@@ -30,8 +30,8 @@ A **scrape series** is a metric the process exposes on `GET /metrics` in Prometh
 We intentionally **do not** scrape TTFT / time-per-output-token / prompt text: those stay Phoenix span events/attributes so `/metrics` stays cheap and dashboards stay readable.
 
 **Grafana charting:**
-- **API row:** `/suggest` by status (all codes), Suggest by source, Latency (p50/p95), in-flight HTTP POSTs.
-- **Client row:** suggest outcomes (`fail` / `rate_limit` / `cancel` from `/client-events`).
+- **API row:** `/suggest` by status (all codes), Suggest by source, Latency (p50/p95), in-flight HTTP POSTs, suggest limit rejects (`capacity` vs `spend`).
+- **Client row:** suggest outcomes (`fail` / `rate_limit` / `model_busy` / `cancel` from `/client-events`).
 - **LLM row:** success rate (excludes cancelled), outcomes (incl. cancelled), error types, duration (p50/p95), tokens.
 - Multi-series **rate** panels use **unstacked** lines (each series Y is absolute). Stacked areas make a smaller series look “above” a larger one.
 - Legends use **Last \*** = last non-null sample. Rate queries drop `== 0` samples (`> 0`) so idle series do not show a fake `0`; latency / success-rate panels stay empty when there is no traffic.
@@ -42,11 +42,11 @@ Excluded from tracing: `/health`, `/metrics`, `/client-events`, `/docs`, `/opena
 
 The browser does **not** run an OpenTelemetry SDK. Each `POST /suggest` from [`client/src/api.js`](../../client/src/api.js) sends a hand-rolled W3C `traceparent` header (`client/src/trace.js`). FastAPI’s OTel instrumentor extracts it so the HTTP + `suggest` + `ollama chat` spans share the client’s `trace_id` in Phoenix.
 
-Coarse client fail / rate-limit counts go to scrape metrics via `POST /client-events` (same-origin; Vite and nginx proxy it). Prompt forensics stay in Phoenix — do not duplicate them in the browser.
+Coarse client fail / spend `rate_limit` / capacity `model_busy` / cancel counts go to scrape metrics via `POST /client-events` (same-origin; Vite and nginx proxy it). Prompt forensics stay in Phoenix — do not duplicate them in the browser.
 
-App passes `shouldReportOutcome` so abandoned in-flight suggests (stale token after a board-changing move / New Game) do **not** beacon `fail` / `rate_limit`. Abort (`AbortError` / HTTP `499`, including abort across `response.json()`) beacons `cancel` (not `fail`); that path does not consult `shouldReportOutcome` because Stop/move already bumps the token before fetch rejects. Stale-token ignores that never aborted a fetch stay beacon-free.
+App passes `shouldReportOutcome` so abandoned in-flight suggests (stale token after a board-changing move / New Game) do **not** beacon `fail` / `rate_limit` / `model_busy`. Abort (`AbortError` / HTTP `499`, including abort across `response.json()`) beacons `cancel` (not `fail`); that path does not consult `shouldReportOutcome` because Stop/move already bumps the token before fetch rejects. Stale-token ignores that never aborted a fetch stay beacon-free.
 
-`/client-events` is unauthenticated like the rest of the API (no player auth yet). Prod keeps the API unpublished; published ports are loopback-only. Follow-up integrity gate (beacon rate limit): [client-events-integrity.md](../../plan/client-events-integrity.md).
+`/client-events` is unauthenticated like the rest of the API (no player auth yet). Prod keeps the API unpublished; published ports are loopback-only. Client rates are best-effort under that deployment boundary: a process-wide sliding-window rate limit (`CLIENT_EVENTS_RATE_LIMIT_REQUESTS` / `CLIENT_EVENTS_RATE_LIMIT_WINDOW_SECONDS`, default 60 / 60s) returns `429` + `Retry-After` over the cap and does not increment `client_suggest_outcome`. That gate is separate from the suggest LLM / expectimax buckets; the browser already ignores beacon failures.
 
 ## Where each concern belongs
 
@@ -57,7 +57,8 @@ App passes `shouldReportOutcome` so abandoned in-flight suggests (stale token af
 | TTFT, provider total/eval, time-per-output-token | **Phoenix** (span events) | Kept off scrape series on purpose |
 | HTTP status rates, API latency | **Grafana** | Aggregates from FastAPI HTTP scrape series |
 | Suggest `source` (`llm` / `fallback` / …) | **Grafana** | API-level scrape counter (HTTP 200 ≠ model win) |
-| Client fail / rate_limit / cancel rates | **Grafana** | `client_suggest_outcome_total` from `/client-events` |
+| Client fail / rate_limit / model_busy / cancel rates | **Grafana** | `client_suggest_outcome_total` from `/client-events` |
+| Suggest 429 capacity vs spend | **Grafana** | `suggest_limit_reject_total{reason}` |
 | LLM success / error / timeout / cancelled rate | **Grafana** | Per-attempt `request_count` scrape series |
 | LLM duration p50/p95, token burn | **Grafana** | GenAI histogram scrape series |
 | Ad-hoc PromQL / “is scrape up?” | Prometheus Graph | Not a product dashboard |
@@ -117,7 +118,8 @@ Every panel on the provisioned dashboard and the **exact** Prom series suffix it
 | Suggest by source | `suggest_source_total` | `sum by (suggest_source)` · `llm` \| `fallback` \| `expectimax` · rate `> 0` |
 | POST /suggest latency | `http_server_duration_milliseconds_bucket` | `histogram_quantile` p50 + p95 · empty when no `/suggest` traffic |
 | In-flight HTTP requests | `http_server_active_requests` | `max_over_time(sum(…)[1m:])` · `http_method="POST"` (proxy for `/suggest`; 1m max retains a scrape that landed mid-call — still often **0** while idle or when `/suggest` finishes between scrapes; single-tab Auto Play is serial — spikes mean multi-tab/overlap; `/health`/`/metrics`/`/client-events` not instrumented) |
-| Client suggest outcomes | `client_suggest_outcome_total` | `sum by (outcome)` · `fail` \| `rate_limit` \| `cancel` · rate `> 0` |
+| Client suggest outcomes | `client_suggest_outcome_total` | `sum by (outcome)` · `fail` \| `rate_limit` \| `model_busy` \| `cancel` · rate `> 0` |
+| Suggest limit rejects | `suggest_limit_reject_total` | `sum by (reason)` · `capacity` \| `spend` · rate `> 0` |
 | LLM request success rate | `gen_ai_client_request_count_total` | `success` / (`success`+`error`+`timeout`); cancelled excluded; empty when idle |
 | LLM requests by outcome | `gen_ai_client_request_count_total` | `sum by (gen_ai_request_outcome)` · `success` \| `error` \| `timeout` \| `cancelled` · rate `> 0` |
 | LLM errors by type | `gen_ai_client_request_count_total` | `sum by (error_type)` where outcome=`error` · `request` \| `response` \| `parse` \| `illegal_move` · rate `> 0` |
@@ -160,7 +162,8 @@ Histograms for duration/tokens record only when usage mapping runs (successful O
 | `outcome` | Meaning |
 |---|---|
 | `fail` | Network error, non-429 HTTP failure, or unusable suggest body |
-| `rate_limit` | Suggest returned HTTP 429 |
+| `rate_limit` | Suggest returned HTTP 429 spend hard ceiling (`too many suggestions`) |
+| `model_busy` | Suggest returned HTTP 429 capacity gate (`model busy`) |
 | `cancel` | Client abort (`AbortError`) or HTTP `499` (server saw disconnect) |
 
 Not emitted on success. Stale-token ignores that never aborted do not beacon.
@@ -177,7 +180,8 @@ Not emitted on success. Stale-token ignores that never aborted do not beacon.
 | Suggest sources | `llm` / `fallback` / `expectimax` (expectimax does not open Ollama) |
 | HTTP `/suggest` | `http_server_duration_milliseconds_count` for status `200` / `422` / `409` / `429` (429 does not bump `suggest_source`) |
 | Client `traceparent` | Fixed header → `/suggest` spans share that `trace_id` and parent span id |
-| Client beacons | `client_suggest_outcome_total` for `fail` / `rate_limit` / `cancel`; `/client-events` not traced |
+| Client beacons | `client_suggest_outcome_total` for `fail` / `rate_limit` / `model_busy` / `cancel`; `/client-events` not traced |
+| Suggest limit rejects | `suggest_limit_reject_total` for `capacity` / `spend` |
 
 ---
 

@@ -213,6 +213,7 @@ def test_client_events_increment_scrape_counter() -> None:
     from app.telemetry import (
         CLIENT_OUTCOME_CANCEL,
         CLIENT_OUTCOME_FAIL,
+        CLIENT_OUTCOME_MODEL_BUSY,
         CLIENT_OUTCOME_RATE_LIMIT,
         record_client_suggest_outcome,
     )
@@ -222,6 +223,10 @@ def test_client_events_increment_scrape_counter() -> None:
     assert client.post("/client-events", json={"outcome": CLIENT_OUTCOME_FAIL}).status_code == 204
     assert (
         client.post("/client-events", json={"outcome": CLIENT_OUTCOME_RATE_LIMIT}).status_code
+        == 204
+    )
+    assert (
+        client.post("/client-events", json={"outcome": CLIENT_OUTCOME_MODEL_BUSY}).status_code
         == 204
     )
     assert client.post("/client-events", json={"outcome": CLIENT_OUTCOME_CANCEL}).status_code == 204
@@ -238,6 +243,12 @@ def test_client_events_increment_scrape_counter() -> None:
     assert (
         _labeled_counter(
             body, PROM_CLIENT_SUGGEST_OUTCOME, f'outcome="{CLIENT_OUTCOME_RATE_LIMIT}"'
+        )
+        == 1.0
+    )
+    assert (
+        _labeled_counter(
+            body, PROM_CLIENT_SUGGEST_OUTCOME, f'outcome="{CLIENT_OUTCOME_MODEL_BUSY}"'
         )
         == 1.0
     )

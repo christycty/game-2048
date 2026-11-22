@@ -1,8 +1,14 @@
 import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
 import App from "./App.jsx";
-import { suggestMove, SuggestError } from "./api";
-import { applyMove, AUTO_PLAY_GAP_MS, createInitialTiles, SETTLE_MS } from "./game";
+import { suggestMove, SuggestError, LIMIT_CAPACITY, LIMIT_SPEND } from "./api";
+import {
+    applyMove,
+    AUTO_PLAY_CAPACITY_MAX_RETRIES,
+    AUTO_PLAY_GAP_MS,
+    createInitialTiles,
+    SETTLE_MS,
+} from "./game";
 
 // These tests lock input and score timing. The move rules are covered in game.test.js.
 vi.mock("./game", async () => {
@@ -487,8 +493,14 @@ test("a fallback response reports the miss and offers no move", async () => {
     expect(screen.getByRole("button", { name: "AI" }).disabled).toBe(false);
 });
 
-test("a rate-limited suggestion tells the player to wait", async () => {
-    suggestMove.mockRejectedValue(new SuggestError("suggestion rate limit", { status: 429 }));
+test("a spend-capped suggestion tells the player to wait", async () => {
+    suggestMove.mockRejectedValue(
+        new SuggestError("too many suggestions", {
+            status: 429,
+            limitReason: LIMIT_SPEND,
+            retryAfter: 60,
+        }),
+    );
 
     render(<App />);
     fireEvent.click(screen.getByRole("button", { name: "AI" }));
@@ -503,6 +515,29 @@ test("a rate-limited suggestion tells the player to wait", async () => {
     );
     expect(screen.queryByRole("button", { name: /Play / })).toBeNull();
     expect(screen.getByRole("button", { name: "AI" }).disabled).toBe(false);
+});
+
+test("a capacity-busy suggestion tells the player the model is busy", async () => {
+    suggestMove.mockRejectedValue(
+        new SuggestError("model busy", {
+            status: 429,
+            limitReason: LIMIT_CAPACITY,
+            retryAfter: 1,
+        }),
+    );
+
+    render(<App />);
+    fireEvent.click(screen.getByRole("button", { name: "AI" }));
+
+    await act(async () => {
+        await Promise.resolve();
+    });
+
+    expect(applyMove).not.toHaveBeenCalled();
+    expect(screen.getByRole("status").textContent).toBe(
+        "Model busy. Wait a moment and try again.",
+    );
+    expect(screen.queryByRole("button", { name: /Play / })).toBeNull();
 });
 
 test("a failed AI suggestion leaves the board alone and reports the miss", async () => {
@@ -1259,8 +1294,14 @@ test("a win during auto play stops the loop", async () => {
     expect(screen.getByRole("button", { name: "AI" }).disabled).toBe(true);
 });
 
-test("a rate limit during auto play stops the loop", async () => {
-    suggestMove.mockRejectedValue(new SuggestError("suggestion rate limit", { status: 429 }));
+test("a spend rate limit during auto play stops the loop", async () => {
+    suggestMove.mockRejectedValue(
+        new SuggestError("too many suggestions", {
+            status: 429,
+            limitReason: LIMIT_SPEND,
+            retryAfter: 60,
+        }),
+    );
 
     render(<App />);
     fireEvent.click(screen.getByRole("button", { name: "Auto Play" }));
@@ -1277,6 +1318,90 @@ test("a rate limit during auto play stops the loop", async () => {
         "false",
     );
     expect(screen.getByRole("button", { name: "AI" }).disabled).toBe(false);
+});
+
+test("capacity busy during auto play retries then continues", async () => {
+    suggestMove
+        .mockRejectedValueOnce(
+            new SuggestError("model busy", {
+                status: 429,
+                limitReason: LIMIT_CAPACITY,
+                retryAfter: 1,
+            }),
+        )
+        .mockResolvedValue({
+            move: "right",
+            mode: "llm",
+            source: "llm",
+            reason: "ok",
+        });
+    applyMove.mockReturnValue({
+        moved: true,
+        scoreGained: 0,
+        visualTiles: [{ id: 1, row: 0, col: 3, value: 2, fromRow: 0, fromCol: 0, sliding: true }],
+        resolvedTiles: [{ id: 1, row: 0, col: 3, value: 2 }],
+        lost: false,
+    });
+
+    render(<App />);
+    fireEvent.click(screen.getByRole("button", { name: "Auto Play" }));
+
+    await act(async () => {
+        await Promise.resolve();
+    });
+
+    expect(screen.getByRole("status").textContent).toBe("Model busy. Retrying…");
+    expect(screen.getByRole("button", { name: "Stop" }).getAttribute("aria-pressed")).toBe("true");
+    expect(suggestMove).toHaveBeenCalledTimes(1);
+
+    await act(async () => {
+        vi.advanceTimersByTime(1000);
+        await Promise.resolve();
+    });
+
+    expect(suggestMove).toHaveBeenCalledTimes(2);
+    expect(applyMove).toHaveBeenCalledTimes(1);
+    expect(screen.getByRole("button", { name: "Stop" }).getAttribute("aria-pressed")).toBe("true");
+});
+
+test("capacity busy during auto play stops after retries are exhausted", async () => {
+    suggestMove.mockRejectedValue(
+        new SuggestError("model busy", {
+            status: 429,
+            limitReason: LIMIT_CAPACITY,
+            retryAfter: 1,
+        }),
+    );
+
+    render(<App />);
+    fireEvent.click(screen.getByRole("button", { name: "Auto Play" }));
+
+    for (let attempt = 0; attempt < AUTO_PLAY_CAPACITY_MAX_RETRIES; attempt += 1) {
+        await act(async () => {
+            await Promise.resolve();
+        });
+        expect(screen.getByRole("status").textContent).toBe("Model busy. Retrying…");
+        expect(screen.getByRole("button", { name: "Stop" }).getAttribute("aria-pressed")).toBe(
+            "true",
+        );
+        await act(async () => {
+            vi.advanceTimersByTime(1000);
+            await Promise.resolve();
+        });
+    }
+
+    await act(async () => {
+        await Promise.resolve();
+    });
+
+    expect(suggestMove).toHaveBeenCalledTimes(AUTO_PLAY_CAPACITY_MAX_RETRIES + 1);
+    expect(applyMove).not.toHaveBeenCalled();
+    expect(screen.getByRole("status").textContent).toBe(
+        "Model busy. Wait a moment and try again.",
+    );
+    expect(screen.getByRole("button", { name: "Auto Play" }).getAttribute("aria-pressed")).toBe(
+        "false",
+    );
 });
 
 test("a new game during auto play cancels the next suggestion", async () => {
