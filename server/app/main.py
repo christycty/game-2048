@@ -12,7 +12,7 @@ from starlette.types import ASGIApp, Receive, Scope, Send
 from app.cancel import SuggestCancelled
 from app.config import Settings
 from app.llm import LlmClient, OllamaClient
-from app.rate_limit import SuggestRateLimiter
+from app.rate_limit import LlmInFlightGate, SuggestRateLimiter
 from app.schemas import HealthResponse, SuggestRequest, SuggestResponse
 from app.suggester import MoveSuggester, NoLegalMove
 from app.telemetry import (
@@ -77,6 +77,7 @@ def create_app(
     llm_client: LlmClient | None = None,
     span_processor: SpanProcessor | None = None,
     rate_limiters: dict[str, SuggestRateLimiter] | None = None,
+    llm_in_flight: LlmInFlightGate | None = None,
 ) -> FastAPI:
     settings = settings or Settings()
     owns_llm = llm_client is None
@@ -89,6 +90,7 @@ def create_app(
             window,
         ),
     }
+    in_flight = llm_in_flight or LlmInFlightGate(settings.llm_max_in_flight)
     suggester = MoveSuggester(
         llm,
         max_attempts=settings.llm_max_attempts,
@@ -134,6 +136,7 @@ def create_app(
 
     @app.post("/suggest", response_model=SuggestResponse)
     async def suggest(request: Request, body: SuggestRequest) -> SuggestResponse:
+        # Layer 1: per-mode sliding-window hard ceiling (spend / runaway safety).
         gate = limiters[body.mode].allow()
         if gate.retry_after is not None:
             raise HTTPException(
@@ -141,6 +144,20 @@ def create_app(
                 detail="too many suggestions",
                 headers={"Retry-After": str(gate.retry_after)},
             )
+        # Layer 2 (LLM only): in-flight capacity before calling Ollama.
+        slot: object | None = None
+        if body.mode == "llm":
+            capacity = in_flight.acquire()
+            if capacity.retry_after is not None:
+                # Rejected before Ollama — do not burn the hard-ceiling hit.
+                if gate.token is not None:
+                    limiters[body.mode].release(gate.token)
+                raise HTTPException(
+                    status_code=429,
+                    detail="too many suggestions",
+                    headers={"Retry-After": str(capacity.retry_after)},
+                )
+            slot = capacity.token
         span = trace.get_current_span()
         set_json_io(span, input_payload={"board": body.board, "mode": body.mode})
         # Middleware installs a per-request Event; fall back for non-HTTP callers.
@@ -159,6 +176,9 @@ def create_app(
             mark_span_error(span, exc)
             set_json_io(span, output_payload={"detail": "no legal move"})
             raise HTTPException(status_code=409, detail="no legal move") from None
+        finally:
+            if slot is not None:
+                in_flight.release(slot)
         mark_chain_io(
             span,
             input_payload={"board": body.board, "mode": body.mode},

@@ -54,3 +54,35 @@ class SuggestRateLimiter:
         """Drop this request's hit after a client cancel so Stop does not burn the cap."""
         with self._lock:
             self._hits = deque((stamp, hit) for stamp, hit in self._hits if hit is not token)
+
+
+class LlmInFlightGate:
+    """Process-wide concurrency cap for LLM suggestions (Ollama capacity).
+
+    Default max is 1: one in-flight Ollama call at a time. Non-blocking; a full
+    gate returns Retry-After like the sliding-window limiter (v1: no queue).
+    """
+
+    # Busy clients should retry soon; we do not know when the holder finishes.
+    _RETRY_AFTER_SECONDS = 1
+
+    def __init__(self, max_in_flight: int) -> None:
+        if max_in_flight < 1:
+            raise ValueError("max_in_flight must be >= 1")
+        self._sem = threading.BoundedSemaphore(max_in_flight)
+
+    def acquire(self) -> GateDecision:
+        """Take a slot, or return Retry-After when every slot is held."""
+        if self._sem.acquire(blocking=False):
+            return GateDecision(token=object(), retry_after=None)
+        return GateDecision(token=None, retry_after=self._RETRY_AFTER_SECONDS)
+
+    def release(self, token: object) -> None:
+        """Free the slot acquired with ``token`` (ignore unknown tokens)."""
+        if token is None:
+            return
+        try:
+            self._sem.release()
+        except ValueError:
+            # Extra release past the bound — ignore so a double-finally is safe.
+            pass
