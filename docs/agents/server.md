@@ -160,7 +160,7 @@ Run from `server/` after `pip install -e ".[dev]"` (or `uv sync --extra dev`). G
 |---|---|---|
 | Unit + API + concurrency + contract | `pytest` (and `cd ../client && npm test` for UI) | All green; e2e and load skipped |
 | Light chaos (disconnect mid-flight) | (included in default `pytest` via `test_cancel.py`) | Cancel A leaves B; while B holds at `max_in_flight=2`, third admits / fourth capacity-429; slot + hard-ceiling token refunded |
-| Image smokes (CI `docker run` topology, no Ollama) | CI docker job: `APP_ENV=prod` API + client, then `bash scripts/smoke_api_images.sh` | `/health` ok; `/docs` + `/openapi.json` 404; expectimax via nginx `:5173/suggest`; `/client-events` → 204; `GET /metrics` has `suggest_source=expectimax` and a **joined** `/suggest`+`200` sample line + client fail beacon; nginx does **not** proxy `/health` or `/metrics` |
+| Image smokes (CI `docker run` topology, no Ollama) | CI docker job: `APP_ENV=prod` API + client, then `bash scripts/smoke_api_images.sh` | `/health` ok; `/docs` + `/openapi.json` 404; expectimax via nginx `:5173/suggest`; `/client-events` → 204; `GET /metrics` has `suggest_source=expectimax`, a **joined** `/suggest`+`200` sample line, and `outcome="fail"`; nginx does **not** proxy `/health` or `/metrics` |
 | E2E (real Ollama) | `pytest --e2e` | Local Ollama up with `OLLAMA_MODEL`; asserts `source == "llm"` |
 | Load / soak (sustained capacity hold + cancel waves) | `pytest --load -m load` | Workers join under hold; accounting closes (incl. cancels + mixed `429` layers); final suggest / gate probe OK. Also: Actions → **Run workflow** (`run_load`; optional `load_only`) |
 

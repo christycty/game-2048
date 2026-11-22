@@ -152,20 +152,22 @@ def test_llm_in_flight_blocks_second_call_while_first_holds() -> None:
     body = {"board": OPEN_BOARD, "mode": "llm"}
     results: dict[str, int] = {}
 
-    def hold() -> None:
-        with TestClient(app) as client:
+    # One TestClient lifespan for holder + probe (nested clients shut down telemetry).
+    with TestClient(app) as client:
+
+        def hold() -> None:
             results["first"] = client.post("/suggest", json=body).status_code
 
-    holder = threading.Thread(target=hold)
-    holder.start()
-    assert llm.started.wait(2)
+        holder = threading.Thread(target=hold)
+        holder.start()
+        assert llm.started.wait(2)
 
-    with TestClient(app) as client:
         blocked = client.post("/suggest", json=body)
         assert blocked.status_code == 429
         assert blocked.json()["detail"] == "too many suggestions"
         assert blocked.headers["retry-after"] == "1"
         assert llm.calls == 1
+        assert not getattr(app.state, "telemetry_shutdown", False)
 
         llm.release.set()
         holder.join(timeout=3)
@@ -183,36 +185,36 @@ def test_llm_in_flight_two_admits_two_blocks_third() -> None:
     body = {"board": OPEN_BOARD, "mode": "llm"}
     results: dict[str, int] = {}
 
-    def hold(name: str) -> None:
-        with TestClient(app) as client:
+    with TestClient(app) as client:
+
+        def hold(name: str) -> None:
             results[name] = client.post("/suggest", json=body).status_code
 
-    first = threading.Thread(target=hold, args=("first",))
-    second = threading.Thread(target=hold, args=("second",))
-    first.start()
-    second.start()
-    assert llm.started.wait(2)
-    deadline = time.monotonic() + 2
-    while llm.calls < 2 and time.monotonic() < deadline:
-        time.sleep(0.01)
-    assert llm.calls == 2
+        first = threading.Thread(target=hold, args=("first",))
+        second = threading.Thread(target=hold, args=("second",))
+        first.start()
+        second.start()
+        assert llm.started.wait(2)
+        deadline = time.monotonic() + 2
+        while llm.calls < 2 and time.monotonic() < deadline:
+            time.sleep(0.01)
+        assert llm.calls == 2
 
-    with TestClient(app) as client:
         blocked = client.post("/suggest", json=body)
         assert blocked.status_code == 429
         assert blocked.json()["detail"] == "too many suggestions"
         assert blocked.headers["retry-after"] == "1"
         assert llm.calls == 2
+        assert not getattr(app.state, "telemetry_shutdown", False)
 
-    llm.release.set()
-    first.join(timeout=3)
-    second.join(timeout=3)
-    assert results == {"first": 200, "second": 200}
-    # No leaked slots after drain.
-    probe = gate.acquire()
-    assert probe.retry_after is None and probe.token is not None
-    gate.release(probe.token)
-    with TestClient(app) as client:
+        llm.release.set()
+        first.join(timeout=3)
+        second.join(timeout=3)
+        assert results == {"first": 200, "second": 200}
+        # No leaked slots after drain.
+        probe = gate.acquire()
+        assert probe.retry_after is None and probe.token is not None
+        gate.release(probe.token)
         assert client.post("/suggest", json=body).status_code == 200
 
 
@@ -223,23 +225,24 @@ def test_expectimax_unaffected_by_llm_in_flight_gate() -> None:
     app = create_app(settings, llm)
     body_llm = {"board": OPEN_BOARD, "mode": "llm"}
 
-    def hold() -> None:
-        with TestClient(app) as client:
+    with TestClient(app) as client:
+
+        def hold() -> None:
             client.post("/suggest", json=body_llm)
 
-    holder = threading.Thread(target=hold)
-    holder.start()
-    assert llm.started.wait(2)
+        holder = threading.Thread(target=hold)
+        holder.start()
+        assert llm.started.wait(2)
 
-    with TestClient(app) as client:
         expectimax = client.post("/suggest", json={"board": OPEN_BOARD, "mode": "expectimax"})
         assert expectimax.status_code == 200
         assert expectimax.json()["source"] in ("expectimax", "fallback")
         # LLM still blocked while the holder runs.
         assert client.post("/suggest", json=body_llm).status_code == 429
+        assert not getattr(app.state, "telemetry_shutdown", False)
 
-    llm.release.set()
-    holder.join(timeout=3)
+        llm.release.set()
+        holder.join(timeout=3)
 
 
 def test_capacity_reject_does_not_burn_hard_ceiling() -> None:
@@ -257,15 +260,15 @@ def test_capacity_reject_does_not_burn_hard_ceiling() -> None:
     )
     body = {"board": OPEN_BOARD, "mode": "llm"}
 
-    def hold() -> None:
-        with TestClient(app) as client:
+    with TestClient(app) as client:
+
+        def hold() -> None:
             client.post("/suggest", json=body)
 
-    holder = threading.Thread(target=hold)
-    holder.start()
-    assert llm.started.wait(2)
+        holder = threading.Thread(target=hold)
+        holder.start()
+        assert llm.started.wait(2)
 
-    with TestClient(app) as client:
         busy = client.post("/suggest", json=body)
         assert busy.status_code == 429
         assert busy.headers["retry-after"] == "1"
@@ -274,9 +277,10 @@ def test_capacity_reject_does_not_burn_hard_ceiling() -> None:
         again = client.post("/suggest", json=body)
         assert again.status_code == 429
         assert again.headers["retry-after"] == "1"
+        assert not getattr(app.state, "telemetry_shutdown", False)
 
-    llm.release.set()
-    holder.join(timeout=3)
+        llm.release.set()
+        holder.join(timeout=3)
 
 
 def test_invalid_body_and_stuck_board_do_not_leak_capacity() -> None:
@@ -332,35 +336,35 @@ def test_concurrent_llm_suggests_fail_fast_without_leaking_capacity() -> None:
     extras: list[int] = []
     lock = threading.Lock()
 
-    def hold() -> None:
-        with TestClient(app) as client:
+    with TestClient(app) as client:
+
+        def hold() -> None:
             holder_status["code"] = client.post("/suggest", json=body).status_code
 
-    holder = threading.Thread(target=hold)
-    holder.start()
-    assert llm.started.wait(2)
+        holder = threading.Thread(target=hold)
+        holder.start()
+        assert llm.started.wait(2)
 
-    def one() -> None:
-        with TestClient(app) as client:
+        def one() -> None:
             status = client.post("/suggest", json=body).status_code
             with lock:
                 extras.append(status)
 
-    threads = [threading.Thread(target=one) for _ in range(workers)]
-    for thread in threads:
-        thread.start()
-    for thread in threads:
-        thread.join(timeout=5)
-        assert not thread.is_alive()
+        threads = [threading.Thread(target=one) for _ in range(workers)]
+        for thread in threads:
+            thread.start()
+        for thread in threads:
+            thread.join(timeout=5)
+            assert not thread.is_alive()
 
-    assert extras == [429] * workers
-    assert llm.calls == 1
+        assert extras == [429] * workers
+        assert llm.calls == 1
+        assert not getattr(app.state, "telemetry_shutdown", False)
 
-    llm.release.set()
-    holder.join(timeout=3)
-    assert holder_status["code"] == 200
-    # After drain, the slot is free (v1 has no queue — retries are a follow-up).
-    with TestClient(app) as client:
+        llm.release.set()
+        holder.join(timeout=3)
+        assert holder_status["code"] == 200
+        # After drain, the slot is free (v1 has no queue — retries are a follow-up).
         assert client.post("/suggest", json=body).status_code == 200
         assert llm.calls == 2
 

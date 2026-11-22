@@ -154,23 +154,24 @@ def test_capacity_429_uses_short_retry_after() -> None:
     app = create_app(settings, llm, llm_in_flight=LlmInFlightGate(1))
     body = {"board": OPEN_BOARD, "mode": "llm"}
 
-    def hold() -> None:
-        with TestClient(app) as client:
+    with TestClient(app) as client:
+
+        def hold() -> None:
             client.post("/suggest", json=body)
 
-    holder = threading.Thread(target=hold)
-    holder.start()
-    assert llm.started.wait(2)
+        holder = threading.Thread(target=hold)
+        holder.start()
+        assert llm.started.wait(2)
 
-    with TestClient(app) as client:
         blocked = client.post("/suggest", json=body)
         assert blocked.status_code == 429
         assert blocked.json()["detail"] == "too many suggestions"
         assert blocked.headers["retry-after"] == "1"
+        assert not getattr(app.state, "telemetry_shutdown", False)
 
-    llm.release.set()
-    holder.join(timeout=3)
-    assert not holder.is_alive()
+        llm.release.set()
+        holder.join(timeout=3)
+        assert not holder.is_alive()
 
 
 def test_capacity_and_hard_ceiling_429_classified_by_retry_after() -> None:
@@ -186,25 +187,25 @@ def test_capacity_and_hard_ceiling_429_classified_by_retry_after() -> None:
     )
     body = {"board": OPEN_BOARD, "mode": "llm"}
 
-    def hold() -> None:
-        with TestClient(app) as client:
+    with TestClient(app) as client:
+
+        def hold() -> None:
             client.post("/suggest", json=body)
 
-    holder = threading.Thread(target=hold)
-    holder.start()
-    assert llm.started.wait(2)
+        holder = threading.Thread(target=hold)
+        holder.start()
+        assert llm.started.wait(2)
 
-    with TestClient(app) as client:
         capacity = client.post("/suggest", json=body)
         assert capacity.status_code == 429
         assert capacity.json()["detail"] == "too many suggestions"
         assert capacity.headers["retry-after"] == "1"
+        assert not getattr(app.state, "telemetry_shutdown", False)
 
-    llm.release.set()
-    holder.join(timeout=3)
-    assert not holder.is_alive()
+        llm.release.set()
+        holder.join(timeout=3)
+        assert not holder.is_alive()
 
-    with TestClient(app) as client:
         # Holder used 1 hard-ceiling hit; one more success fills the window of 2.
         assert client.post("/suggest", json=body).status_code == 200
         spend = client.post("/suggest", json=body)

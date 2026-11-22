@@ -19,7 +19,7 @@ from app.llm import ModelSuggestion, OllamaClient
 from app.main import DisconnectCancelMiddleware, create_app
 from app.rate_limit import LlmInFlightGate, SuggestRateLimiter
 from app.suggester import MoveSuggester
-from helpers import OPEN_BOARD, BlockingLLM, isolated_settings
+from helpers import OPEN_BOARD, BlockingLLM, asgi_suggest, isolated_settings
 
 
 class BlockingExpectimax:
@@ -376,86 +376,40 @@ def test_asgi_disconnect_cancels_blocking_llm() -> None:
     )
     app = create_app(settings, llm, llm_in_flight=in_flight)
     body = json.dumps({"board": OPEN_BOARD, "mode": "llm"}).encode()
-    json_body = {"board": OPEN_BOARD, "mode": "llm"}
-
-    async def one_call(*, disconnect_gate: asyncio.Event | None) -> int | None:
-        scope = {
-            "type": "http",
-            "asgi": {"version": "3.0"},
-            "http_version": "1.1",
-            "method": "POST",
-            "scheme": "http",
-            "path": "/suggest",
-            "raw_path": b"/suggest",
-            "query_string": b"",
-            "headers": [
-                (b"host", b"test"),
-                (b"content-type", b"application/json"),
-                (b"content-length", str(len(body)).encode()),
-            ],
-            "client": ("127.0.0.1", 50000),
-            "server": ("test", 80),
-            "state": {},
-        }
-        messages: list[dict] = [{"type": "http.request", "body": body, "more_body": False}]
-        sent: list[dict] = []
-
-        async def receive() -> dict:
-            if messages:
-                return messages.pop(0)
-            if disconnect_gate is not None:
-                await disconnect_gate.wait()
-                return {"type": "http.disconnect"}
-            await asyncio.sleep(60)
-            return {"type": "http.disconnect"}
-
-        async def send(message: dict) -> None:
-            sent.append(message)
-
-        await app(scope, receive, send)
-        return next(
-            (m.get("status") for m in sent if m.get("type") == "http.response.start"),
-            None,
-        )
 
     async def run() -> None:
         gate = asyncio.Event()
-        task_a = asyncio.create_task(one_call(disconnect_gate=gate))
-        task_b = asyncio.create_task(one_call(disconnect_gate=None))
+        task_a = asyncio.create_task(asgi_suggest(app, body, disconnect_gate=gate))
+        task_b = asyncio.create_task(asgi_suggest(app, body, disconnect_gate=None))
         deadline = time.monotonic() + 2
         while llm.calls < 2 and time.monotonic() < deadline:
             await asyncio.sleep(0.01)
         assert llm.calls == 2
         gate.set()
-        status_a = await asyncio.wait_for(task_a, timeout=3)
+        result_a = await asyncio.wait_for(task_a, timeout=3)
         assert llm.cancelled_with is not None
-        assert status_a == 499
+        assert result_a.status == 499
 
         # While B still holds: exactly one free slot (third admits, fourth capacity-429).
-        third_status: dict[str, int] = {}
-
-        def hold_third() -> None:
-            with TestClient(app) as client:
-                third_status["code"] = client.post("/suggest", json=json_body).status_code
-
-        third = threading.Thread(target=hold_third)
-        third.start()
+        # Raw ASGI only — TestClient lifespan would shutdown_telemetry mid-flight.
+        task_third = asyncio.create_task(asgi_suggest(app, body, disconnect_gate=None))
         entered = time.monotonic() + 2
         while llm.calls < 3 and time.monotonic() < entered:
             await asyncio.sleep(0.01)
         assert llm.calls == 3
 
-        with TestClient(app) as client:
-            fourth = client.post("/suggest", json=json_body)
-            assert fourth.status_code == 429
-            assert fourth.json()["detail"] == "too many suggestions"
-            assert fourth.headers["retry-after"] == "1"
+        fourth = await asgi_suggest(app, body, disconnect_gate=None)
+        assert fourth.status == 429
+        assert fourth.json()["detail"] == "too many suggestions"
+        assert fourth.headers["retry-after"] == "1"
+        assert not getattr(app.state, "telemetry_shutdown", False)
 
         llm.release.set()
-        third.join(timeout=3)
-        assert third_status.get("code") == 200
-        status_b = await asyncio.wait_for(task_b, timeout=3)
-        assert status_b == 200
+        result_third = await asyncio.wait_for(task_third, timeout=3)
+        assert result_third.status == 200
+        result_b = await asyncio.wait_for(task_b, timeout=3)
+        assert result_b.status == 200
+        assert not getattr(app.state, "telemetry_shutdown", False)
 
         probe = in_flight.acquire()
         assert probe.retry_after is None and probe.token is not None
@@ -477,69 +431,28 @@ def test_asgi_disconnect_cancels_blocking_expectimax(
     app = create_app(settings, UnusedLLM())
     body = json.dumps({"board": OPEN_BOARD, "mode": "expectimax"}).encode()
 
-    async def one_call(*, disconnect_gate: asyncio.Event | None) -> int | None:
-        scope = {
-            "type": "http",
-            "asgi": {"version": "3.0"},
-            "http_version": "1.1",
-            "method": "POST",
-            "scheme": "http",
-            "path": "/suggest",
-            "raw_path": b"/suggest",
-            "query_string": b"",
-            "headers": [
-                (b"host", b"test"),
-                (b"content-type", b"application/json"),
-                (b"content-length", str(len(body)).encode()),
-            ],
-            "client": ("127.0.0.1", 50000),
-            "server": ("test", 80),
-            "state": {},
-        }
-        messages: list[dict] = [{"type": "http.request", "body": body, "more_body": False}]
-        sent: list[dict] = []
-
-        async def receive() -> dict:
-            if messages:
-                return messages.pop(0)
-            if disconnect_gate is not None:
-                await disconnect_gate.wait()
-                return {"type": "http.disconnect"}
-            await asyncio.sleep(60)
-            return {"type": "http.disconnect"}
-
-        async def send(message: dict) -> None:
-            sent.append(message)
-
-        await app(scope, receive, send)
-        return next(
-            (m.get("status") for m in sent if m.get("type") == "http.response.start"),
-            None,
-        )
-
     async def run() -> None:
         gate = asyncio.Event()
-        task_a = asyncio.create_task(one_call(disconnect_gate=gate))
-        task_b = asyncio.create_task(one_call(disconnect_gate=None))
+        task_a = asyncio.create_task(asgi_suggest(app, body, disconnect_gate=gate))
+        task_b = asyncio.create_task(asgi_suggest(app, body, disconnect_gate=None))
         deadline = time.monotonic() + 2
         while search.calls < 2 and time.monotonic() < deadline:
             await asyncio.sleep(0.01)
         assert search.calls == 2
         gate.set()
-        status_a = await asyncio.wait_for(task_a, timeout=3)
+        result_a = await asyncio.wait_for(task_a, timeout=3)
         assert search.cancelled_with is not None
-        assert status_a == 499
+        assert result_a.status == 499
         search.release.set()
-        status_b = await asyncio.wait_for(task_b, timeout=3)
-        assert status_b == 200
+        result_b = await asyncio.wait_for(task_b, timeout=3)
+        assert result_b.status == 200
+        assert not getattr(app.state, "telemetry_shutdown", False)
 
     asyncio.run(run())
 
 
 def test_cancelled_suggest_releases_llm_in_flight_slot() -> None:
     """499 must free the capacity slot so the next LLM suggest is admitted."""
-    from app.rate_limit import LlmInFlightGate
-
     llm = BlockingLLM()
     gate = LlmInFlightGate(1)
     settings = isolated_settings(suggest_rate_limit_requests=10, llm_max_in_flight=1)
@@ -547,45 +460,12 @@ def test_cancelled_suggest_releases_llm_in_flight_slot() -> None:
     body = json.dumps({"board": OPEN_BOARD, "mode": "llm"}).encode()
 
     async def call_and_disconnect() -> int | None:
-        scope = {
-            "type": "http",
-            "asgi": {"version": "3.0"},
-            "http_version": "1.1",
-            "method": "POST",
-            "scheme": "http",
-            "path": "/suggest",
-            "raw_path": b"/suggest",
-            "query_string": b"",
-            "headers": [
-                (b"host", b"test"),
-                (b"content-type", b"application/json"),
-                (b"content-length", str(len(body)).encode()),
-            ],
-            "client": ("127.0.0.1", 50000),
-            "server": ("test", 80),
-            "state": {},
-        }
-        messages: list[dict] = [{"type": "http.request", "body": body, "more_body": False}]
         disconnect = asyncio.Event()
-        sent: list[dict] = []
-
-        async def receive() -> dict:
-            if messages:
-                return messages.pop(0)
-            await disconnect.wait()
-            return {"type": "http.disconnect"}
-
-        async def send(message: dict) -> None:
-            sent.append(message)
-
-        task = asyncio.create_task(app(scope, receive, send))
+        task = asyncio.create_task(asgi_suggest(app, body, disconnect_gate=disconnect))
         assert await asyncio.to_thread(llm.started.wait, 2)
         disconnect.set()
-        await asyncio.wait_for(task, timeout=3)
-        return next(
-            (m.get("status") for m in sent if m.get("type") == "http.response.start"),
-            None,
-        )
+        result = await asyncio.wait_for(task, timeout=3)
+        return result.status
 
     assert asyncio.run(call_and_disconnect()) == 499
     llm.release.set()
@@ -608,45 +488,12 @@ def test_cancelled_suggest_refunds_rate_limit_hit() -> None:
     body = json.dumps({"board": OPEN_BOARD, "mode": "llm"}).encode()
 
     async def call_and_disconnect() -> int | None:
-        scope = {
-            "type": "http",
-            "asgi": {"version": "3.0"},
-            "http_version": "1.1",
-            "method": "POST",
-            "scheme": "http",
-            "path": "/suggest",
-            "raw_path": b"/suggest",
-            "query_string": b"",
-            "headers": [
-                (b"host", b"test"),
-                (b"content-type", b"application/json"),
-                (b"content-length", str(len(body)).encode()),
-            ],
-            "client": ("127.0.0.1", 50000),
-            "server": ("test", 80),
-            "state": {},
-        }
-        messages: list[dict] = [{"type": "http.request", "body": body, "more_body": False}]
         gate = asyncio.Event()
-        sent: list[dict] = []
-
-        async def receive() -> dict:
-            if messages:
-                return messages.pop(0)
-            await gate.wait()
-            return {"type": "http.disconnect"}
-
-        async def send(message: dict) -> None:
-            sent.append(message)
-
-        task = asyncio.create_task(app(scope, receive, send))
+        task = asyncio.create_task(asgi_suggest(app, body, disconnect_gate=gate))
         assert await asyncio.to_thread(llm.started.wait, 2)
         gate.set()
-        await asyncio.wait_for(task, timeout=3)
-        return next(
-            (m.get("status") for m in sent if m.get("type") == "http.response.start"),
-            None,
-        )
+        result = await asyncio.wait_for(task, timeout=3)
+        return result.status
 
     assert asyncio.run(call_and_disconnect()) == 499
     # Same window, cap 1: after refund the next allow must succeed.

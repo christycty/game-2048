@@ -107,7 +107,7 @@ for line in body.splitlines():
         suggest_200 = True
         break
 assert suggest_200, "no metrics line joins http_target=/suggest with http_status_code=200"
-assert 'outcome="fail"' in body or "client_suggest_outcome" in body, body[:2000]
+assert 'outcome="fail"' in body, body[:2000]
 assert "# TYPE" in body or "http_server_duration_milliseconds" in body
 print("metrics scrape ok (expectimax + joined /suggest 200 + client fail beacon)")
 PY
