@@ -141,7 +141,7 @@ Typical LLM tree: FastAPI `POST /suggest` → `suggest` chain → sibling `ollam
 - `tests/test_expectimax.py` covers legality, spawn odds, depth/budget cutoffs, and the reason format.
 - `tests/test_moves.py` covers the slide and merge rules used for legality.
 - `tests/test_telemetry.py` covers Phoenix URL/header rules, per-app exporters, excluded `/health` / `/metrics` / `/client-events`, client `traceparent` continuation, client beacon counters (incl. `cancel`), HTTP body-size series dropped (duration + active kept), span nesting, retries, errors, cancel → `gen_ai_request_outcome=cancelled` (spans not ERROR), stuck-board span shape, GenAI series on `/metrics` after a suggest (success / request / response / parse / illegal_move / timeout + suggest sources), and HTTP scrape status codes for `/suggest` (200 / 422 / 409 / 429).
-- `tests/test_suggest_e2e.py` marks real-Ollama cases `e2e` under `APP_ENV=prod` (parametrized legal move + reason, `traceparent` header smoke, GenAI `/metrics` after success; shared fixture rate-limit is a loose budget above the matrix).
+- `tests/test_suggest_e2e.py` marks real-Ollama cases `e2e` under `APP_ENV=prod` (parametrized legal move + reason, `traceparent` header smoke, GenAI `/metrics` after success, cancel beacon scrape, ASGI disconnect → `gen_ai_request_outcome=cancelled`; shared fixture rate-limit is a loose budget above the matrix).
 - `tests/test_suggest_http_contract.py` covers health, `/metrics`, `422` (no rate-limit spend), stuck-board `409`, LLM-bucket `429` + `Retry-After`, expectimax search, unreachable-Ollama `fallback`, and `/client-events` beacons (`fail` / `rate_limit` / `cancel`) → `client_suggest_outcome` scrape series (default suite / CI).
 
 ## Not built yet
