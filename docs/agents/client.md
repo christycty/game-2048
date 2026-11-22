@@ -1,6 +1,6 @@
 # Client
 
-The playable 2048 board. A new game deals two 2s. Arrow keys and swipes slide and merge tiles. Score and best score update after each slide. The AI control asks the suggestion API for a move; the player confirms with **Play**, or turns on **Auto Play** to apply suggestions in a loop.
+The playable 2048 board. A new game deals a random count of 2s (2–8). Arrow keys and swipes slide and merge tiles. Score and best score update after each slide. Reaching 2048 is a hard win; no moves left is a loss. The AI control asks the suggestion API for a move; the player confirms with **Play**, or turns on **Auto Play** to apply suggestions in a loop.
 
 Agent/implementer detail for the client. Human architecture overview: [../architecture.md](../architecture.md). Product rules: [prd.md](prd.md).
 
@@ -94,7 +94,7 @@ The UI does not show the response `mode` or `source` fields beyond treating `"fa
 
 The grid is 4×4. Row 0 is the top. Column 0 is the left.
 
-`createInitialTiles` places two 2s on different empty cells. Their ids are 1 and 2. A later spawn takes one more than the highest id already on that board, so a new game does not continue the previous game's ids.
+`createInitialTiles` places a uniform random count of 2s (`MIN_START_TILES`..`MAX_START_TILES`, currently 2–8) on distinct empty cells. Ids start at 1. A later spawn takes one more than the highest id already on that board, so a new game does not continue the previous game's ids.
 
 `applyMove(tiles, direction, random)`:
 
@@ -102,10 +102,12 @@ The grid is 4×4. Row 0 is the top. Column 0 is the left.
 2. Walks cells starting from the side the tiles move toward. A row of four 2s becomes two 4s, not one 8.
 3. Each tile slides through empty cells. It merges into the next tile of the same value only if that tile has not merged yet this move. The score gained is the new value.
 4. If nothing moved, there is no spawn and no score.
-5. Otherwise one tile spawns on a random empty cell: a 2, or a 4 one time in ten. The opening deal passes `[2]` so both starting tiles are 2s.
-6. The game is lost only when the board after the spawn has no empty cell and no equal neighbors.
+5. Otherwise one tile spawns on a random empty cell: a 2, or a 4 one time in ten. The opening deal passes `[2]` so starting tiles are only 2s.
+6. After the spawn: `won` if any tile is ≥ 2048; else `lost` if there is no empty cell and no equal neighbors. Win beats lose.
 
 `hasMoves` is true when any cell is empty, or when a horizontal or vertical neighbor matches. Each pair is checked once, from the top or left cell.
+
+`hasWon` is true when any tile value is ≥ `WIN_TILE` (2048).
 
 `tilesToBoard` builds the 4×4 value grid the API expects. Empty cells are `0`. Animation fields are dropped.
 
@@ -125,7 +127,7 @@ A swipe starts on pointer down (left button only for a mouse), captures the poin
 
 ## Tests
 
-- `src/game.test.js` covers the deal, ids, slides, single merges, blocked moves, spawn timing, loss, and `tilesToBoard`.
+- `src/game.test.js` covers the deal, ids, slides, single merges, blocked moves, spawn timing, win, loss, and `tilesToBoard`.
 - `src/swipe.test.js` covers the threshold and axis choice.
 - `src/api.test.js` covers same-origin `/suggest` + `traceparent`, success body, `SuggestError` statuses including 429, fail/rate_limit beacons (HTTP, network, unusable JSON / missing `move`), skipping fail/rate_limit when `shouldReportOutcome` is false, re-checking that gate after the suggest await, abort paths beaconing `cancel` (including during `json()`, HTTP `499`, aborted-but-resolved, and when `shouldReportOutcome` is false), and preserving `AbortError`.
 - `src/trace.test.js` covers W3C `traceparent` shape and retry when `getRandomValues` returns all zeros.

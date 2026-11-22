@@ -378,7 +378,8 @@ def _prompt(
     rows = "\n".join(" ".join(str(cell) for cell in row) for row in board)
     lines = [
         "You are playing 2048. The board is 4x4. 0 is an empty cell. "
-        "Other numbers are tile values. Choose the single best next move.",
+        "Other numbers are tile values. The goal is to reach a 2048 tile. "
+        "Choose the single best next move.",
         rows,
         f"Legal moves: {', '.join(legal)}.",
         "Choose one of those moves.",
