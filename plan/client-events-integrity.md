@@ -1,7 +1,7 @@
 # Client-events integrity (beacon trust)
 
-**Status:** Agreed as follow-up; not blocking `client-observability`.  
-**Related:** parent `plan/production-practice-review.md` finding 2; parent `plan/cancel-observability.md`.
+**Status:** Implemented on `client-events-integrity` (worktree `game-2048-client-events-integrity`).  
+**Related:** parent `plan/production-practice-review.md` finding 2; cancel-observability (on `main`).
 
 ## Is this a security concern?
 
