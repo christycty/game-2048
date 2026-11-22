@@ -20,7 +20,7 @@ def test_isolated_settings_ignores_hostile_rate_limit_env(
     monkeypatch.setenv("CLIENT_EVENTS_RATE_LIMIT_WINDOW_SECONDS", "1")
     settings = isolated_settings()
     assert settings.suggest_rate_limit_requests == 60
-    assert settings.suggest_rate_limit_expectimax_requests == 30
+    assert settings.suggest_rate_limit_expectimax_requests == 120
     assert settings.suggest_rate_limit_window_seconds == 60
     assert settings.llm_max_in_flight == 1
     assert settings.client_events_rate_limit_requests == 60

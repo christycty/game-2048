@@ -21,7 +21,9 @@ class Settings(BaseSettings):
     # LLM hard ceiling (spend safety net). Raised so Auto Play rarely hits it;
     # the real LLM throttle is llm_max_in_flight.
     suggest_rate_limit_requests: int = Field(default=60, ge=1, le=120)
-    suggest_rate_limit_expectimax_requests: int = Field(default=30, ge=1, le=120)
+    # Expectimax Auto Play is CPU-cheap and ~1 suggest/s (settle + AUTO_PLAY_GAP_MS),
+    # so its spend ceiling must sit above that sustained rate — not below LLM's.
+    suggest_rate_limit_expectimax_requests: int = Field(default=120, ge=1, le=120)
     suggest_rate_limit_window_seconds: float = Field(default=60, ge=1, le=3600)
     # Concurrent LLM /suggest calls admitted to Ollama (capacity gate).
     llm_max_in_flight: int = Field(default=1, ge=1, le=8)

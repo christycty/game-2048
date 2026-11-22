@@ -114,7 +114,7 @@ def test_default_llm_hard_ceiling_blocks_after_sixty_calls() -> None:
 
     # Field default, not Settings() — that still reads the process env / .env.
     assert Settings.model_fields["suggest_rate_limit_requests"].default == 60
-    assert Settings.model_fields["suggest_rate_limit_expectimax_requests"].default == 30
+    assert Settings.model_fields["suggest_rate_limit_expectimax_requests"].default == 120
     assert Settings.model_fields["llm_max_in_flight"].default == 1
     assert E2E_SUGGEST_CALLS == E2E_BOARD_COUNT * E2E_RUN_COUNT
     assert E2E_SUGGEST_CALLS < 60
