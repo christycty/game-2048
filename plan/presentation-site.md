@@ -1,6 +1,6 @@
 # Presentation site (GitHub Pages)
 
-**Status:** Scaffolding on branch `presentation-site` / worktree `game-2048-present` (`site/`, Pages workflow, AGENTS/getting-started polish started). Independent of residual ops WIP.  
+**Status:** PR #23 on `presentation-site` / `game-2048-present` — walkthrough aligned with shipped ops (#17–#19, #22); residual open PRs (#20 verify, #21 beacon integrity) called out as in-flight.  
 **Related:** [overview.md](./overview.md) (status board + presentability caveats).
 
 ## Goal
