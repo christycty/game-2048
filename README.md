@@ -35,6 +35,15 @@ cd server && uv run pytest && uv run ruff check . && uv run ruff format --check 
 cd client && npm test && npm run lint && npm run build
 ```
 
+## Docs
+
+| Audience | Start here |
+|---|---|
+| **Humans:** what this is and how it's built | [docs/](docs/README.md) |
+| **Pitch page:** diagram-heavy walkthrough | [Live site](https://christycty.github.io/game-2048/) · [source](site/index.html) |
+| **Agents:** rules, invariants, implementation detail | [AGENTS.md](AGENTS.md) → [docs/agents/](docs/agents/README.md) |
+
+
 ## Feature map
 
 | # | Feature | Code | Tests |
@@ -72,11 +81,3 @@ Where product rules are silent, classic 2048 decides. Where they conflict, the p
 - **Delivery:** Pydantic validation, dev/prod Docker Compose profiles (prod serves the client through nginx and keeps the API unpublished), a locked `uv` build, pre-commit hooks, and CI for lint, tests, Docker build and doc links.
 
 Detail: [architecture](docs/architecture.md), [runtime and limits](docs/agents/runtime.md), [telemetry](docs/agents/telemetry.md).
-
-## Docs
-
-| Audience | Start here |
-|---|---|
-| **Humans:** what this is and how it's built | [docs/](docs/README.md) |
-| **Pitch page:** diagram-heavy walkthrough | [Live site](https://christycty.github.io/game-2048/) · [source](site/index.html) |
-| **Agents:** rules, invariants, implementation detail | [AGENTS.md](AGENTS.md) → [docs/agents/](docs/agents/README.md) |
