@@ -1,6 +1,6 @@
 import { useLayoutEffect, useRef } from "react";
-import { GRID_COUNT, GRID_SIZE, SLIDE_MS, WIN_TILE } from "../game";
-import { swipeDirection } from "../swipe";
+import { GRID_COUNT, GRID_SIZE, SLIDE_MS, WIN_TILE } from "../game/game";
+import { swipeDirection } from "../game/swipe";
 import "./Board.css";
 
 // One step is the board's own cell plus gap, so a resize cannot leave the slide behind.

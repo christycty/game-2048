@@ -1,6 +1,6 @@
 import { useState } from "react";
-import { hasMoves } from "../game";
-import { HINT_SUGGEST_FAILED } from "../suggestHints";
+import { hasMoves } from "../game/game";
+import { HINT_SUGGEST_FAILED } from "../suggest/suggestHints";
 
 /**
  * Auto Play toggle/stop and autoApplyingRef.

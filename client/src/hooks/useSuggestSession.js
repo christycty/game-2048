@@ -1,11 +1,11 @@
 import { useRef, useState } from "react";
-import { suggestMove, SuggestError, isAbortError, LIMIT_CAPACITY } from "../api";
-import { AUTO_PLAY_CAPACITY_MAX_RETRIES, hasMoves, tilesToBoard } from "../game";
+import { suggestMove, SuggestError, isAbortError, LIMIT_CAPACITY } from "../suggest/api";
+import { AUTO_PLAY_CAPACITY_MAX_RETRIES, hasMoves, tilesToBoard } from "../game/game";
 import {
     formatSuggestionHint,
     hintForSuggestFailure,
     HINT_SUGGEST_FAILED,
-} from "../suggestHints";
+} from "../suggest/suggestHints";
 
 /**
  * Suggest token, AbortController, capacity retries, and beacon gating.

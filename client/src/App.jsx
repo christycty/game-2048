@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import Board from "./components/Board";
 import ScoreCard from "./components/ScoreCard";
 import ActionPanel from "./components/ActionPanel";
-import { createInitialTiles, hasMoves } from "./game";
+import { createInitialTiles, hasMoves } from "./game/game";
 import { useAutoPlayController } from "./hooks/useAutoPlayController";
 import { useKeyboardMoves } from "./hooks/useKeyboardMoves";
 import { useMoveController } from "./hooks/useMoveController";

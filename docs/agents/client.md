@@ -11,7 +11,7 @@ From `client/`:
 ```bash
 npm install
 npm run dev       # Vite on CLIENT_HOST_PORT (default 5173; reads repo-root .env)
-npm test          # Vitest for React components, then node:test for game/swipe/api/trace/suggestHints
+npm test          # Vitest for React components, then node:test under src/game and src/suggest
 npm run lint      # oxlint
 npm run build     # production bundle
 ```
@@ -29,11 +29,11 @@ Stack: React 19, Vite, plain JavaScript. The page title is 2048. The app mounts 
 | `src/hooks/useSuggestSession.js` | Suggest token, abort, capacity retries, beacon gate, `handleSuggest`. |
 | `src/hooks/useMoveController.js` | `handleMove`, settle `SETTLE_MS`, Auto Play gap → suggest. |
 | `src/hooks/useAutoPlayController.js` | Toggle/stop, `autoApplyingRef`; shared failed-apply exit; busy release on Stop. |
-| `src/suggestHints.js` | Pure 429/fallback hint copy + `capitalize` / `formatSuggestionHint`. |
-| `src/game.js` | Board rules. Pure functions. No DOM. Includes `tilesToBoard` for the API. |
-| `src/swipe.js` | Turns a pointer delta into a direction. |
-| `src/api.js` | `POST /suggest` with W3C `traceparent` and optional `AbortSignal`; beacons fail / spend `rate_limit` / capacity `model_busy` to `/client-events` unless `shouldReportOutcome` is false (stale token). Classifies 429 via `X-Suggest-Limit` / detail onto `SuggestError.limitReason`. Abort / HTTP `499` beacons `cancel` (not fail) and throws `AbortError`. Throws `SuggestError` on network, HTTP, or unusable body. |
-| `src/trace.js` | Hand-rolled W3C `traceparent` (no browser OTel SDK). |
+| `src/game/game.js` | Board rules. Pure functions. No DOM. Includes `tilesToBoard` for the API. |
+| `src/game/swipe.js` | Turns a pointer delta into a direction. |
+| `src/suggest/api.js` | `POST /suggest` with W3C `traceparent` and optional `AbortSignal`; beacons fail / spend `rate_limit` / capacity `model_busy` to `/client-events` unless `shouldReportOutcome` is false (stale token). Classifies 429 via `X-Suggest-Limit` / detail onto `SuggestError.limitReason`. Abort / HTTP `499` beacons `cancel` (not fail) and throws `AbortError`. Throws `SuggestError` on network, HTTP, or unusable body. |
+| `src/suggest/trace.js` | Hand-rolled W3C `traceparent` (no browser OTel SDK). |
+| `src/suggest/suggestHints.js` | Pure 429/fallback hint copy + `capitalize` / `formatSuggestionHint`. |
 | `src/components/Board.jsx` | Cells, sliding tiles, game-over overlay, pointer gestures. |
 | `src/components/ScoreCard.jsx` | Title, help, SCORE, BEST. |
 | `src/components/ActionPanel.jsx` | New Game, AI, Auto Play / Stop, mode radios, hint, confirm. |
@@ -95,7 +95,7 @@ Changing the mode clears a pending suggestion and aborts an in-flight suggest wh
 
 The UI does not show the response `mode` or `source` fields beyond treating `"fallback"` as failure. Expectimax reasons are the server score line and appear in the same hint as LLM reasons.
 
-## Rules (`game.js`)
+## Rules (`game/game.js`)
 
 The grid is 4×4. Row 0 is the top. Column 0 is the left.
 
@@ -128,17 +128,17 @@ On each move, a tile is parked on `fromRow` / `fromCol` for one frame with trans
 
 Tiles are rendered in id order so a merge does not reorder DOM nodes mid-slide. The tile sliding into a merge paints above a tile that only changes cell.
 
-A swipe starts on pointer down (left button only for a mouse), captures the pointer so a release outside the board still counts, and ends on pointer up for that same pointer. A release from a different pointer leaves the gesture alone. Pointer cancel drops it. `swipeDirection` ignores a drag shorter than the module-local `SWIPE_THRESHOLD` (24px). The longer axis wins. When the distances match, the vertical axis wins.
+A swipe starts on pointer down (left button only for a mouse), captures the pointer so a release outside the board still counts, and ends on pointer up for that same pointer. A release from a different pointer leaves the gesture alone. Pointer cancel drops it. `swipeDirection` ignores a drag shorter than `SWIPE_THRESHOLD` (24px). The longer axis wins. When the distances match, the vertical axis wins.
 
 `touch-action: none` on the board keeps the browser from scrolling the gesture away.
 
 ## Tests
 
-- `src/game.test.js` covers the deal, ids, slides, single merges, blocked moves, spawn timing, win, loss, and `tilesToBoard`.
-- `src/swipe.test.js` covers the threshold and axis choice.
-- `src/api.test.js` covers same-origin `/suggest` + `traceparent`, success body, `SuggestError` statuses including spend vs capacity 429 classification, fail/rate_limit/model_busy beacons, skipping those when `shouldReportOutcome` is false, re-checking that gate after the suggest await, abort paths beaconing `cancel` (including during `json()`, HTTP `499`, aborted-but-resolved, and when `shouldReportOutcome` is false), and preserving `AbortError`.
-- `src/trace.test.js` covers W3C `traceparent` shape and retry when `getRandomValues` returns all zeros.
-- `src/suggestHints.test.js` covers `capitalize`, `formatSuggestionHint`, and `hintForSuggestFailure` copy branches.
+- `src/game/game.test.js` covers the deal, ids, slides, single merges, blocked moves, spawn timing, win, loss, and `tilesToBoard`.
+- `src/game/swipe.test.js` covers the threshold and axis choice (asserts via shared `SWIPE_THRESHOLD`).
+- `src/suggest/api.test.js` covers same-origin `/suggest` + `traceparent`, success body, `SuggestError` statuses including spend vs capacity 429 classification, fail/rate_limit/model_busy beacons, skipping those when `shouldReportOutcome` is false, re-checking that gate after the suggest await, abort paths beaconing `cancel` (including during `json()`, HTTP `499`, aborted-but-resolved, and when `shouldReportOutcome` is false), and preserving `AbortError`.
+- `src/suggest/trace.test.js` covers W3C `traceparent` shape and retry when `getRandomValues` returns all zeros.
+- `src/suggest/suggestHints.test.js` covers `capitalize`, `formatSuggestionHint`, and `hintForSuggestFailure` copy branches.
 - `src/App.test.jsx` is the behavior contract for the hooks (not rewritten per hook): score timing, shared swipe and key paths, best score across a new game, a cancelled slide, a lost game ignoring input, suggest-then-confirm, Auto Play apply/gap/loop/stop (including Stop during the gap re-enabling AI, Stop during Thinking aborting the fetch, a token-matched AbortError during Thinking stopping the loop, and keeping the selected LLM mode), hint kept through the next Thinking step, pending-start and in-loop blocked apply, loss / spend 429 / capacity retry + exhaustion / New Game exits, fallback/manual takeover, mode selection (including mode change during Thinking aborting the fetch), fallback / rate-limit / failed requests, dropping a stale suggestion after a board-changing move (asserts `signal.aborted` and `shouldReportOutcome` flipping false), New Game during Thinking aborting the fetch, and unmount aborting an in-flight suggest.
 - `src/components/Board.test.jsx` covers the slide, overlay stacking, and pointer capture.
 - `src/components/ScoreCard.test.jsx` covers opening and closing help.

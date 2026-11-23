@@ -1,18 +1,18 @@
 import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
 import App from "./App.jsx";
-import { suggestMove, SuggestError, LIMIT_CAPACITY, LIMIT_SPEND } from "./api";
+import { suggestMove, SuggestError, LIMIT_CAPACITY, LIMIT_SPEND } from "./suggest/api";
 import {
     applyMove,
     AUTO_PLAY_CAPACITY_MAX_RETRIES,
     AUTO_PLAY_GAP_MS,
     createInitialTiles,
     SETTLE_MS,
-} from "./game";
+} from "./game/game";
 
 // These tests lock input and score timing. The move rules are covered in game.test.js.
-vi.mock("./game", async () => {
-    const actual = await vi.importActual("./game");
+vi.mock("./game/game", async () => {
+    const actual = await vi.importActual("./game/game");
     return {
         ...actual,
         createInitialTiles: vi.fn(),
@@ -20,8 +20,8 @@ vi.mock("./game", async () => {
     };
 });
 
-vi.mock("./api", async () => {
-    const actual = await vi.importActual("./api");
+vi.mock("./suggest/api", async () => {
+    const actual = await vi.importActual("./suggest/api");
     return {
         ...actual,
         suggestMove: vi.fn(),

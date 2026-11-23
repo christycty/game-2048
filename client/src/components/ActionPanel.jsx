@@ -1,4 +1,4 @@
-import { capitalize } from "../suggestHints";
+import { capitalize } from "../suggest/suggestHints";
 import "./ActionPanel.css";
 
 const MODES = [

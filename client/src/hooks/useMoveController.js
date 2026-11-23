@@ -1,5 +1,5 @@
 import { useRef } from "react";
-import { applyMove, AUTO_PLAY_GAP_MS, SETTLE_MS } from "../game";
+import { applyMove, AUTO_PLAY_GAP_MS, SETTLE_MS } from "../game/game";
 
 /**
  * Board moves, settle timer, and Auto Play gap → suggest.
