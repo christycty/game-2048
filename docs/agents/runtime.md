@@ -71,7 +71,7 @@ Two layers for **LLM**; Expectimax keeps a separate (higher) spend window so Aut
 | LLM | `SUGGEST_RATE_LIMIT_REQUESTS` | 60 |
 | Expectimax | `SUGGEST_RATE_LIMIT_EXPECTIMAX_REQUESTS` | 360 |
 
-Expectimax default is sized for a **design load of ~4 concurrent Auto Play tabs**: client cycle is `SETTLE_MS` + `AUTO_PLAY_GAP_MS` (~910ms → ~65/min per tab), so `4 × ~65 × ~1.4 cushion ≈ 360` / window. Prove with `pytest --load -m load` (expectimax cadence cases). Raise via env up to 600 if needed.
+Expectimax default is sized for a **design load of ~4 concurrent Auto Play tabs**: client cycle is `SETTLE_MS` + `AUTO_PLAY_GAP_MS` (~910ms → ~65/min per tab), so `4 × ~65 × ~1.4 cushion ≈ 360` / window. Prove with `pytest --load -m load` (expectimax cadence: full-window soak at 360 with `ok` > 120; undersized cap trips). Raise via env up to 600 if needed.
 
 **Layer 2 — LLM capacity gate:** `LLM_MAX_IN_FLIGHT` (default `1`) limits concurrent LLM `/suggest` calls admitted to Ollama. This is the real throttle for Auto Play. Expectimax does not take a slot.
 
