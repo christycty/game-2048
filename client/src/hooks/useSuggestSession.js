@@ -60,22 +60,23 @@ export function useSuggestSession({
         clearRetryTimer();
         const controller = suggestAbortRef.current;
         suggestAbortRef.current = null;
-        if (suggestingRef.current || hadPendingRetry) {
+        const active = suggestingRef.current || hadPendingRetry;
+        if (active) {
             suggestTokenRef.current += 1;
             suggestingRef.current = false;
             setSuggesting(false);
         }
         controller?.abort();
+        return active;
     }
 
     function resetSuggestSession() {
-        clearRetryTimer();
+        resetCapacityRetries();
         const controller = suggestAbortRef.current;
         suggestAbortRef.current = null;
         suggestTokenRef.current += 1;
         suggestingRef.current = false;
         setSuggesting(false);
-        resetCapacityRetries();
         controller?.abort();
     }
 

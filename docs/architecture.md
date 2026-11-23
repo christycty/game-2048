@@ -30,7 +30,7 @@ flowchart TD
   V -->|no| U[422]
   V -->|yes| Spend{Spend ceiling?}
   Spend -->|over| TSpend[429 spend<br/>too many suggestions]
-  Spend -- ok --> Cap{Mode capacity?}
+  Spend -->|ok| Cap{Mode capacity?}
   Cap -->|full| TBusy[429 capacity + refund spend<br/>model busy]
   Cap -->|slot| B{Legal moves?}
   B -->|none| C[409]
@@ -45,7 +45,7 @@ flowchart TD
   H --> J
 ```
 
-Validation (`422`) runs before both per-mode gates (consuming neither the spend ceiling nor an `LLM_MAX_IN_FLIGHT` / `EXPECTIMAX_MAX_IN_FLIGHT` capacity slot), and capacity `429`s refund the spend token before returning `model busy`. `GET /health` never calls Ollama, and Expectimax never calls Ollama. The client offers **Play** (or auto-applies in **Auto Play**) only on usable suggestions—not on fallback, spend/capacity `429`, or transport errors. Auto Play loops suggest → apply → settle client-side, retrying capacity-busy `429`s and model fallbacks briefly while stopping immediately on spend `429`s. **Stop** / takeover aborts the in-flight `/suggest` fetch; on disconnect the server cancels that request’s LLM/search work only (concurrent clients are supported in-process), responds `499`, refunds its spend token, and frees its mode capacity slot. Abort and `499` stay silent in the UI (`AbortError`) while ending Auto Play.
+Validation (`422`) runs before both per-mode gates (consuming neither the spend ceiling nor a mode in-flight capacity slot), and capacity `429`s refund the spend token before returning `model busy`. `GET /health` never calls Ollama, and Expectimax never calls Ollama. The client offers **Play** (or auto-applies in **Auto Play**) only on usable suggestions—not on fallback, spend/capacity `429`, or transport errors. Auto Play loops suggest → apply → settle client-side, retrying capacity-busy `429`s and model fallbacks briefly while stopping immediately on spend `429`s. **Stop** / takeover aborts the in-flight `/suggest` fetch; on disconnect the server cancels that request’s LLM/search work only (concurrent clients are supported in-process), responds `499`, refunds its spend token, and frees its mode capacity slot. Abort and `499` stay silent in the UI (`AbortError`) while ending Auto Play.
 
 ## Coarse module map
 

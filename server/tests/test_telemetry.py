@@ -840,3 +840,22 @@ def test_stuck_board_marks_http_span_without_llm() -> None:
     assert "65536" in root.attributes[INPUT_VALUE]
     assert "no legal move" in root.attributes[OUTPUT_VALUE]
     assert "failures" not in root.attributes[OUTPUT_VALUE]
+
+
+def test_labeled_counter_sums_matching_subseries() -> None:
+    sample = "\n".join(
+        [
+            "gen_ai_client_request_count_total{"
+            'error_type="parse",gen_ai_request_outcome="error"} 2.0',
+            "gen_ai_client_request_count_total{"
+            'error_type="request",gen_ai_request_outcome="error"} 1.0',
+            'gen_ai_client_request_count_total{gen_ai_request_outcome="cancelled"} 4.0',
+        ]
+    )
+    assert (
+        labeled_counter(sample, "gen_ai_client_request_count", 'gen_ai_request_outcome="error"')
+        == 3.0
+    )
+    assert (
+        labeled_counter(sample, "gen_ai_client_request_count", 'gen_ai_request_outcome="ok"') == 0.0
+    )

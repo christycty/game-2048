@@ -127,10 +127,9 @@ function App() {
         if (mode === aiModeRef.current) return;
         aiModeRef.current = mode;
         setAiMode(mode);
-        // Previous mode's in-flight fetch or pending Play must not land.
-        if (suggestingRef.current) {
-            abortInFlightSuggest();
-            if (!animatingRef.current) setBusy(false);
+        // Previous mode's in-flight fetch, retry wait, or pending Play must not land.
+        if (abortInFlightSuggest() && !animatingRef.current) {
+            setBusy(false);
         }
         clearSuggestion();
     }

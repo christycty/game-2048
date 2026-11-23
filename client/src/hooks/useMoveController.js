@@ -83,10 +83,8 @@ export function useMoveController({
             stopAutoPlayRef.current();
         }
 
-        // A move that changes the board drops an in-flight suggestion so it cannot land on a stale board.
-        if (suggestingRef.current) {
-            abortInFlightSuggest();
-        }
+        // A move that changes the board drops any in-flight suggestion or retry wait so it cannot land on a stale board.
+        abortInFlightSuggest();
 
         const token = moveTokenRef.current + 1;
         moveTokenRef.current = token;

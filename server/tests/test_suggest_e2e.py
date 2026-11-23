@@ -178,7 +178,7 @@ def test_asgi_disconnect_cancels_real_ollama_and_records_cancelled(
     monkeypatch.setattr(OllamaClient, "_post_chat", _post_chat_and_signal)
 
     async def wait_for_ollama() -> None:
-        assert await asyncio.to_thread(ollama_started.wait, 30)
+        await asyncio.to_thread(ollama_started.wait, 30)
 
     result = asyncio.run(
         asyncio.wait_for(
@@ -186,6 +186,7 @@ def test_asgi_disconnect_cancels_real_ollama_and_records_cancelled(
             timeout=60,
         )
     )
+    assert ollama_started.is_set(), "Ollama /api/chat request never started before disconnect"
     assert result.status == 499
 
     text = suggest_client.get("/metrics").text

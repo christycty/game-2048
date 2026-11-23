@@ -56,10 +56,9 @@ export function useAutoPlayController({
 
     function handleAutoPlayToggle() {
         if (autoPlayingRef.current) {
-            // Stop during Thinking aborts the fetch so the server can cancel the run.
-            if (suggestingRef.current) {
-                abortInFlightSuggest();
-                if (!animatingRef.current) setBusy(false);
+            // Stop during Thinking or retry backoff cancels the active suggest session.
+            if (abortInFlightSuggest() && !animatingRef.current) {
+                setBusy(false);
             }
             stopAutoPlay();
             return;

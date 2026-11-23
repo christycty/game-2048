@@ -98,10 +98,14 @@ class FrozenClock:
 
 def labeled_counter(body: str, metric: str, label_fragment: str) -> float:
     prefix = f"{metric}_total{{"
-    for line in body.splitlines():
-        if line.startswith(prefix) and label_fragment in line:
-            return float(line.rsplit(" ", 1)[-1])
-    return 0.0
+    return sum(
+        (
+            float(line.rsplit(" ", 1)[-1])
+            for line in body.splitlines()
+            if line.startswith(prefix) and label_fragment in line
+        ),
+        0.0,
+    )
 
 
 @dataclass(frozen=True)
