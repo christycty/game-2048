@@ -194,7 +194,9 @@ class OllamaClient:
             try:
                 parsed = parse_move(raw_content)
             except LlmError as exc:
-                raise LlmError(str(exc), error_type="parse") from exc
+                # Attach the metric label; re-raise the same failure (no wrap).
+                exc.error_type = "parse"
+                raise
 
             _record_parsed_attempt(span, self._model, parsed.move, legal)
             return parsed
