@@ -299,6 +299,78 @@ test("reaching WIN_TILE wins even when the spawn leaves no moves", () => {
     assert.equal(hasMoves(result.resolvedTiles), false);
 });
 
+// Take-home brief example board (null cells become 0 here).
+const ASSIGNMENT_S = [
+    [0, 8, 2, 2],
+    [4, 2, 0, 2],
+    [0, 0, 0, 0],
+    [0, 0, 0, 2],
+];
+
+test("assignment examples: moves from the take-home brief board", () => {
+    const empty = [0, 0, 0, 0];
+    expectMove(ASSIGNMENT_S, "left", [[8, 4, 0, 0], [4, 4, 0, 0], empty, [2, 0, 0, 0]], 8);
+    expectMove(ASSIGNMENT_S, "right", [[0, 0, 8, 4], [0, 0, 4, 4], empty, [0, 0, 0, 2]], 8);
+    expectMove(
+        ASSIGNMENT_S,
+        "up",
+        [[4, 8, 2, 4], [0, 2, 0, 2], empty, empty],
+        4,
+    );
+    // Brief gives no Down example; derived by the same slide/merge rules as the server.
+    expectMove(
+        ASSIGNMENT_S,
+        "down",
+        [empty, empty, [0, 8, 0, 2], [4, 2, 2, 4]],
+        4,
+    );
+});
+
+test("assignment examples: Move Up then spawn 2 at bottom-left like the brief", () => {
+    let calls = 0;
+    // Ten empties after up; row-major index 6 is (3, 0). Second roll is not 0 mod 10 → spawn 2.
+    const random = () => (calls++ === 0 ? 0.65 : 0.5);
+    const result = applyMove(board(ASSIGNMENT_S), "up", random);
+    assert.equal(result.scoreGained, 4);
+    assert.deepEqual(
+        result.resolvedTiles
+            .filter((tile) => !tile.isNew)
+            .map((tile) => [tile.row, tile.col, tile.value])
+            .sort((a, b) => a[0] - b[0] || a[1] - b[1]),
+        [
+            [0, 0, 4],
+            [0, 1, 8],
+            [0, 2, 2],
+            [0, 3, 4],
+            [1, 1, 2],
+            [1, 3, 2],
+        ],
+    );
+    const spawn = result.resolvedTiles.find((tile) => tile.isNew);
+    assert.equal(spawn.value, 2);
+    assert.deepEqual([spawn.row, spawn.col], [3, 0]);
+});
+
+test("assignment examples: full alternating board has no moves", () => {
+    const lose = [
+        [2, 4, 2, 4],
+        [4, 2, 4, 2],
+        [2, 4, 2, 4],
+        [4, 2, 4, 2],
+    ];
+    assert.equal(hasMoves(board(lose)), false);
+});
+
+test("assignment examples: a 2048 on the board is a win", () => {
+    const win = [
+        [4, 0, 0, 2],
+        [2048, 0, 0, 0],
+        [4, 2, 0, 0],
+        [4, 0, 0, 0],
+    ];
+    assert.equal(hasWon(board(win)), true);
+});
+
 test("tilesToBoard fills empty cells with 0 for the suggestion API", () => {
     assert.deepEqual(tilesToBoard(board([[2, 0, 0, 4], [0, 0, 0, 0], [0, 0, 0, 0], [0, 8, 0, 0]])), [
         [2, 0, 0, 4],

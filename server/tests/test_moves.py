@@ -1,4 +1,21 @@
+import pytest
+
 from app.moves import apply_move, legal_moves
+
+# Take-home brief example board (null cells become 0 here).
+ASSIGNMENT_S = [
+    [0, 8, 2, 2],
+    [4, 2, 0, 2],
+    [0, 0, 0, 0],
+    [0, 0, 0, 2],
+]
+
+ASSIGNMENT_DOWN = [
+    [0, 0, 0, 0],
+    [0, 0, 0, 0],
+    [0, 8, 0, 2],
+    [4, 2, 2, 4],
+]  # Brief gives no Down example; this board is derived by hand.
 
 
 def test_left_merges_a_pair_once() -> None:
@@ -99,3 +116,26 @@ def test_single_corner_tile_can_move_right_or_down() -> None:
         [0, 0, 0, 0],
     ]
     assert legal_moves(board) == ["right", "down"]
+
+
+@pytest.mark.parametrize(
+    ("direction", "expected"),
+    [
+        ("left", [[8, 4, 0, 0], [4, 4, 0, 0], [0, 0, 0, 0], [2, 0, 0, 0]]),
+        ("right", [[0, 0, 8, 4], [0, 0, 4, 4], [0, 0, 0, 0], [0, 0, 0, 2]]),
+        ("up", [[4, 8, 2, 4], [0, 2, 0, 2], [0, 0, 0, 0], [0, 0, 0, 0]]),
+        ("down", ASSIGNMENT_DOWN),
+    ],
+)
+def test_assignment_examples(direction: str, expected: list[list[int]]) -> None:
+    assert apply_move(ASSIGNMENT_S, direction) == expected
+
+
+def test_assignment_examples_lose_board_has_no_legal_moves() -> None:
+    board = [
+        [2, 4, 2, 4],
+        [4, 2, 4, 2],
+        [2, 4, 2, 4],
+        [4, 2, 4, 2],
+    ]
+    assert legal_moves(board) == []
