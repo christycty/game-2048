@@ -220,14 +220,6 @@ section > p {
   max-width: 22rem;
 }
 
-.mock {
-  display: block;
-  width: 100%;
-  height: auto;
-  border: 1px solid var(--line);
-  border-radius: 0.35rem;
-}
-
 figcaption {
   margin-top: 0.45rem;
   color: var(--muted);

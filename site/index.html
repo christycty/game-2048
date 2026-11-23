@@ -276,16 +276,16 @@ flowchart LR
               <p>Is the coach returning llm, expectimax, or fallback?</p>
             </article>
             <article>
-              <h3>Suggest limit rejects</h3>
-              <p>Capacity-busy vs spend-cap 429 volume (<code>suggest_limit_reject_total</code>).</p>
-            </article>
-            <article>
               <h3>POST /suggest latency</h3>
               <p>Wall-time p50 / p95 for /suggest under load.</p>
             </article>
             <article>
               <h3>In-flight HTTP requests</h3>
               <p>Overlapping POSTs right now (usually 0; spikes = multi-tab / slow LLM).</p>
+            </article>
+            <article>
+              <h3>Suggest limit rejects</h3>
+              <p>Capacity-busy vs spend-cap 429 volume (<code>suggest_limit_reject_total</code>).</p>
             </article>
           </div>
           <p class="row-label">Client</p>
@@ -332,25 +332,30 @@ flowchart LR
               <figure class="figure">
                 <img
                   src="./assets/grafana-api.png"
-                  alt="Grafana GenAI ops — API row: status, source, latency, in-flight"
+                  alt="Grafana GenAI ops — 4-panel API reference capture showing status, source, latency, and in-flight"
                   width="1268"
                   height="730"
                 />
                 <figcaption>
-                  <strong>API</strong> — status / source / latency / in-flight. In-flight stays flat for
-                  short Expectimax; spikes during slow LLM calls.
+                  <strong>API</strong> — earlier 4-panel reference capture (status / source /
+                  latency / in-flight; in-flight stays flat for short Expectimax and spikes on slow
+                  LLM calls). The current provisioned row adds a 5th
+                  <code>Suggest limit rejects (capacity vs spend)</code> panel beside in-flight.
                 </figcaption>
               </figure>
               <figure class="figure">
                 <img
                   src="./assets/grafana-client.png"
-                  alt="Grafana GenAI ops — Client row: suggest outcomes"
+                  alt="Grafana GenAI ops — Client suggest outcomes capture during a rate-limit burst showing active fail and rate_limit series"
                   width="1268"
                   height="390"
                 />
                 <figcaption>
-                  <strong>Client</strong> — beacons for fail / spend <code>rate_limit</code> / capacity
-                  <code>model_busy</code> / <code>cancel</code> (UI abort stays silent).
+                  <strong>Client</strong> — rate-limit burst capture showing active
+                  <code>fail</code> and spend <code>rate_limit</code> series
+                  (<code>sum by (outcome) (rate(client_suggest_outcome_total[5m])) &gt; 0</code>
+                  hides zero-rate outcomes until capacity <code>model_busy</code> or
+                  <code>cancel</code> fire).
                 </figcaption>
               </figure>
               <figure class="figure">

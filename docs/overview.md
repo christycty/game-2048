@@ -40,7 +40,7 @@ sequenceDiagram
 | Mode | Intent today |
 |---|---|
 | **LLM** (default) | Language model returns a legal move and a short reason. |
-| **Expectimax** | Depth-limited search with spawn chance nodes; reason lists a score per direction (`N/A` if illegal). |
+| **Expectimax** | Depth-limited search with spawn chance nodes; reason compares each other direction against the chosen move (`not possible` if illegal, `ties`, `wins`/`loses`, or point gap). |
 
 ## Non-goals (for now)
 

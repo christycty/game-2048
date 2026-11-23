@@ -21,7 +21,7 @@ Cross-link once at the top of a page when useful. Never duplicate facts (ports, 
 
 | File | Purpose |
 |---|---|
-| Root `README.md` | Front door: one sentence, one diagram, quick start, links |
+| Root `README.md` | Front door: one sentence, one diagram, quick start, compact submission orientation (`Feature map` / `Assumptions` / `Production readiness`), links |
 | `docs/README.md` | Index of the human tree |
 | `docs/overview.md` | Product story + player journey |
 | `docs/architecture.md` | Topology, request path, coarse modules, stack |
@@ -33,9 +33,9 @@ Do **not** add human `client.md` / `server.md` unless each stays ~½ page + one 
 
 | Doc | Lines |
 |---|---|
-| Root `README.md` | ~40–60 |
+| Root `README.md` | ~85 lines (compact `Feature map` / `Assumptions` / `Production readiness` orientation sections are intentional) |
 | `overview.md` | ~80 + 1–2 diagrams |
-| `architecture.md` | ~100 + 2–3 diagrams |
+| `architecture.md` | ~110 lines + 2–3 diagrams |
 | `getting-started.md` | ~60 |
 
 If a human section has **no diagram and more than ~15 lines**, it probably belongs under `docs/agents/`.
@@ -129,8 +129,8 @@ Browser automation often pads to a large canvas. **Inspect the PNG before upload
 
 | Check | What it does |
 |---|---|
-| `scripts/check_doc_links.py` | Fails CI if relative Markdown links are broken in root `README.md`, `AGENTS.md`, `client/README.md`, and all `docs/**/*.md` |
-| `scripts/check_docs_freshness.py` | **Warns** (does not fail) when `client/`, `server/`, Compose, env example, or workflows change without `docs/agents/` or `AGENTS.md` |
+| `scripts/check_doc_links.py` | Fails CI if relative Markdown links are broken in root `README.md`, `AGENTS.md`, `client/README.md`, `observability/README.md`, `site/assets/README.md`, and all `docs/**/*.md` |
+| `scripts/check_docs_freshness.py` | **Warns** (does not fail) when `client/`, `server/`, `observability/`, Compose, env example, or workflows change without `docs/agents/` or `AGENTS.md` |
 | `scripts/test_*.py` | Pinned unit tests for the scripts above (stdlib `unittest`, no extra deps) |
 
 The `docs` CI job (Python **3.12**) runs the unit tests first, then the two scripts. Locally:
