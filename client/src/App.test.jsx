@@ -5,10 +5,13 @@ import { suggestMove, SuggestError, LIMIT_CAPACITY, LIMIT_SPEND } from "./sugges
 import {
     applyMove,
     AUTO_PLAY_CAPACITY_MAX_RETRIES,
+    AUTO_PLAY_FALLBACK_MAX_RETRIES,
+    AUTO_PLAY_FALLBACK_RETRY_MS,
     AUTO_PLAY_GAP_MS,
     createInitialTiles,
     SETTLE_MS,
 } from "./game/game";
+import { HINT_SUGGEST_FAILED, HINT_SUGGEST_RETRYING } from "./suggest/suggestHints";
 
 // These tests lock input and score timing. The move rules are covered in game.test.js.
 vi.mock("./game/game", async () => {
@@ -488,7 +491,7 @@ test("a fallback response reports the miss and offers no move", async () => {
 
     // The fixed order is not a suggestion, so the player is asked to try again.
     expect(applyMove).not.toHaveBeenCalled();
-    expect(screen.getByRole("status").textContent).toBe("AI could not suggest a move");
+    expect(screen.getByRole("status").textContent).toBe(HINT_SUGGEST_FAILED);
     expect(screen.queryByRole("button", { name: /Play / })).toBeNull();
     expect(screen.getByRole("button", { name: "AI" }).disabled).toBe(false);
 });
@@ -551,7 +554,7 @@ test("a failed AI suggestion leaves the board alone and reports the miss", async
     });
 
     expect(applyMove).not.toHaveBeenCalled();
-    expect(screen.getByRole("status").textContent).toBe("AI could not suggest a move");
+    expect(screen.getByRole("status").textContent).toBe(HINT_SUGGEST_FAILED);
     expect(screen.queryByRole("button", { name: /Play / })).toBeNull();
     expect(screen.getByRole("button", { name: "AI" }).disabled).toBe(false);
 });
@@ -954,12 +957,26 @@ test("stopping auto play during the gap re-enables AI without waiting out the pa
     expect(applyMove).toHaveBeenCalledTimes(1);
 });
 
-test("a fallback during auto play stops the loop", async () => {
-    suggestMove.mockResolvedValue({
-        move: "left",
-        mode: "expectimax",
-        source: "fallback",
-        reason: null,
+test("a fallback during auto play retries then continues", async () => {
+    suggestMove
+        .mockResolvedValueOnce({
+            move: "left",
+            mode: "expectimax",
+            source: "fallback",
+            reason: null,
+        })
+        .mockResolvedValue({
+            move: "right",
+            mode: "expectimax",
+            source: "expectimax",
+            reason: "ok",
+        });
+    applyMove.mockReturnValue({
+        moved: true,
+        scoreGained: 0,
+        visualTiles: [{ id: 1, row: 0, col: 3, value: 2, fromRow: 0, fromCol: 0, sliding: true }],
+        resolvedTiles: [{ id: 1, row: 0, col: 3, value: 2 }],
+        lost: false,
     });
 
     render(<App />);
@@ -970,10 +987,56 @@ test("a fallback during auto play stops the loop", async () => {
     });
 
     expect(applyMove).not.toHaveBeenCalled();
-    expect(screen.getByRole("status").textContent).toBe("AI could not suggest a move");
+    expect(screen.getByRole("status").textContent).toBe(HINT_SUGGEST_RETRYING);
+    expect(screen.getByRole("button", { name: "Stop" }).getAttribute("aria-pressed")).toBe("true");
+    expect(suggestMove).toHaveBeenCalledTimes(1);
+
+    await act(async () => {
+        vi.advanceTimersByTime(AUTO_PLAY_FALLBACK_RETRY_MS);
+        await Promise.resolve();
+    });
+
+    expect(suggestMove).toHaveBeenCalledTimes(2);
+    expect(applyMove).toHaveBeenCalledTimes(1);
+    expect(screen.getByRole("button", { name: "Stop" }).getAttribute("aria-pressed")).toBe("true");
+});
+
+test("a fallback during auto play stops after retries are exhausted", async () => {
+    suggestMove.mockResolvedValue({
+        move: "left",
+        mode: "expectimax",
+        source: "fallback",
+        reason: null,
+    });
+
+    render(<App />);
+    fireEvent.click(screen.getByRole("button", { name: "Auto Play" }));
+
+    for (let attempt = 0; attempt < AUTO_PLAY_FALLBACK_MAX_RETRIES; attempt += 1) {
+        await act(async () => {
+            await Promise.resolve();
+        });
+        expect(screen.getByRole("status").textContent).toBe(HINT_SUGGEST_RETRYING);
+        expect(screen.getByRole("button", { name: "Stop" }).getAttribute("aria-pressed")).toBe(
+            "true",
+        );
+        await act(async () => {
+            vi.advanceTimersByTime(AUTO_PLAY_FALLBACK_RETRY_MS);
+            await Promise.resolve();
+        });
+    }
+
+    await act(async () => {
+        await Promise.resolve();
+    });
+
+    expect(suggestMove).toHaveBeenCalledTimes(AUTO_PLAY_FALLBACK_MAX_RETRIES + 1);
+    expect(applyMove).not.toHaveBeenCalled();
+    expect(screen.getByRole("status").textContent).toBe(HINT_SUGGEST_FAILED);
     expect(screen.getByRole("button", { name: "Auto Play" }).getAttribute("aria-pressed")).toBe(
         "false",
     );
+    expect(screen.getByRole("button", { name: "AI" }).disabled).toBe(false);
 });
 
 test("stopping auto play during Thinking aborts the suggest request", async () => {
@@ -1184,7 +1247,7 @@ test("a blocked pending move when starting auto play stops the loop", async () =
     fireEvent.click(screen.getByRole("button", { name: "Auto Play" }));
 
     expect(applyMove).toHaveBeenCalledWith(opening, "right");
-    expect(screen.getByRole("status").textContent).toBe("AI could not suggest a move");
+    expect(screen.getByRole("status").textContent).toBe(HINT_SUGGEST_FAILED);
     expect(screen.queryByRole("button", { name: /Play / })).toBeNull();
     expect(screen.getByRole("button", { name: "Auto Play" }).getAttribute("aria-pressed")).toBe(
         "false",
@@ -1215,7 +1278,7 @@ test("a blocked auto-applied suggestion stops the loop", async () => {
     });
 
     expect(applyMove).toHaveBeenCalledWith(opening, "right");
-    expect(screen.getByRole("status").textContent).toBe("AI could not suggest a move");
+    expect(screen.getByRole("status").textContent).toBe(HINT_SUGGEST_FAILED);
     expect(screen.getByRole("button", { name: "Auto Play" }).getAttribute("aria-pressed")).toBe(
         "false",
     );

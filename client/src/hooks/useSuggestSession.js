@@ -1,6 +1,12 @@
 import { useRef, useState } from "react";
 import { suggestMove, SuggestError, isAbortError, LIMIT_CAPACITY } from "../suggest/api";
-import { AUTO_PLAY_CAPACITY_MAX_RETRIES, hasMoves, tilesToBoard } from "../game/game";
+import {
+    AUTO_PLAY_CAPACITY_MAX_RETRIES,
+    AUTO_PLAY_FALLBACK_MAX_RETRIES,
+    AUTO_PLAY_FALLBACK_RETRY_MS,
+    hasMoves,
+    tilesToBoard,
+} from "../game/game";
 import {
     formatSuggestionHint,
     hintForSuggestFailure,
@@ -8,7 +14,7 @@ import {
 } from "../suggest/suggestHints";
 
 /**
- * Suggest token, AbortController, capacity retries, and beacon gating.
+ * Suggest token, AbortController, Auto Play retries (capacity + model miss), beacon gating.
  * Cross-calls stopAutoPlay / handleMove via the refs passed in (assigned after render).
  */
 export function useSuggestSession({
@@ -31,9 +37,11 @@ export function useSuggestSession({
     const suggestTokenRef = useRef(0);
     const suggestAbortRef = useRef(null);
     const capacityRetriesRef = useRef(0);
+    const fallbackRetriesRef = useRef(0);
 
     function resetCapacityRetries() {
         capacityRetriesRef.current = 0;
+        fallbackRetriesRef.current = 0;
     }
 
     // Abort the fetch and drop the token so a late response cannot land.
@@ -69,8 +77,8 @@ export function useSuggestSession({
             clearSuggestion();
         }
 
-        let scheduleCapacityRetry = false;
-        let capacityRetryDelayMs = 1000;
+        let scheduleRetry = false;
+        let retryDelayMs = 1000;
         try {
             const suggestion = await suggestMove(tilesToBoard(tilesRef.current), aiModeRef.current, {
                 signal: controller.signal,
@@ -78,13 +86,37 @@ export function useSuggestSession({
                 shouldReportOutcome: () => suggestTokenRef.current === token,
             });
             if (suggestTokenRef.current !== token) return;
-            resetCapacityRetries();
-            // "fallback" is a fixed move order, not a model choice.
+            // "fallback" is a fixed move order, not a model choice — treat as model miss.
             if (suggestion.source === "fallback") {
-                setHint(HINT_SUGGEST_FAILED);
+                if (
+                    autoPlayingRef.current &&
+                    fallbackRetriesRef.current < AUTO_PLAY_FALLBACK_MAX_RETRIES
+                ) {
+                    fallbackRetriesRef.current += 1;
+                    retryDelayMs = AUTO_PLAY_FALLBACK_RETRY_MS;
+                    setHint(
+                        hintForSuggestFailure({
+                            isCapacityBusy: false,
+                            isSpendCap: false,
+                            isModelMiss: true,
+                            retrying: true,
+                        }),
+                    );
+                    scheduleRetry = true;
+                    return;
+                }
+                setHint(
+                    hintForSuggestFailure({
+                        isCapacityBusy: false,
+                        isSpendCap: false,
+                        isModelMiss: true,
+                        retrying: false,
+                    }),
+                );
                 stopAutoPlayRef.current();
                 return;
             }
+            resetCapacityRetries();
             const hintText = formatSuggestionHint(suggestion.move, suggestion.reason);
 
             if (autoPlayingRef.current) {
@@ -128,9 +160,9 @@ export function useSuggestSession({
                 capacityRetriesRef.current < AUTO_PLAY_CAPACITY_MAX_RETRIES
             ) {
                 capacityRetriesRef.current += 1;
-                capacityRetryDelayMs = Math.max(1, error.retryAfter ?? 1) * 1000;
+                retryDelayMs = Math.max(1, error.retryAfter ?? 1) * 1000;
                 setHint(hintForSuggestFailure({ isCapacityBusy, isSpendCap, retrying: true }));
-                scheduleCapacityRetry = true;
+                scheduleRetry = true;
                 return;
             }
 
@@ -143,8 +175,8 @@ export function useSuggestSession({
             if (suggestTokenRef.current === token) {
                 suggestingRef.current = false;
                 setSuggesting(false);
-                if (scheduleCapacityRetry) {
-                    // Keep busy through the Retry-After wait (same idea as AUTO_PLAY_GAP_MS).
+                if (scheduleRetry) {
+                    // Keep busy through the wait (same idea as AUTO_PLAY_GAP_MS).
                     window.setTimeout(() => {
                         if (suggestTokenRef.current !== token) return;
                         if (!autoPlayingRef.current) {
@@ -152,7 +184,7 @@ export function useSuggestSession({
                             return;
                         }
                         void handleSuggest();
-                    }, capacityRetryDelayMs);
+                    }, retryDelayMs);
                 } else if (!animatingRef.current) {
                     setBusy(false);
                 }
