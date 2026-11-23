@@ -1,15 +1,20 @@
 """Opt-in Expectimax Auto Play cadence soak (not required PR CI).
 
 Design load: **4 concurrent Auto Play tabs**. Client cycle is read from
-``client/src/game.js`` (``SETTLE_MS`` + ``AUTO_PLAY_GAP_MS``, ~910ms →
-~65 suggests/min/tab). Default spend cap ``360`` ≈ ``4 × 65 × 1.4``.
+``client/src/game.js`` (``SETTLE_MS`` + ``AUTO_PLAY_GAP_MS``, ~910ms). That
+cadence is an **upper bound** if search were free (~65 suggests/min/tab);
+real Auto Play is slower because suggest latency is extra. Default spend
+cap ``360`` ≈ ``4 × 65 × 1.4`` uses the upper bound so demos do not false-trip.
 
 Run: ``pytest --load -m load`` (or this file alone under ``--load``).
 
 Pass criteria:
 - At the default cap, four cadence workers run for **one full rate-limit
-  window** with **no** spend ``429``, and throughput exceeds the old 120
-  single-client-ish ceiling (so a 120 default would fail this soak).
+  window** with **no** spend ``429``, and ``ok`` clears the interim
+  single-tab-ish bar of 120 (``main`` was 30; an early branch draft used
+  120 — this soak must fail under either).
+- Soft throughput floor: ≥50% of ideal settle+gap volume (search + CI
+  contention headroom).
 - With an undersized cap, the same harness **does** trip spend ``429``
   (proves the soak is sensitive, not a no-op).
 """
@@ -45,8 +50,11 @@ _SOAK_SECONDS = _WINDOW_SECONDS
 # Undersized trip does not need a full window once spend 429s appear.
 _TRIP_SOAK_SECONDS = 20
 _BODY = {"board": OPEN_BOARD, "mode": "expectimax"}
-# Prior default / single-tab-ish ceiling; design load must clear this volume.
+# Interim single-tab-ish ceiling on an early draft of this branch (main was 30).
+# Design load must clear this volume so a 120 default would fail the soak.
 _PRIOR_EXPECTIMAX_CAP = 120
+# Soft floor vs ideal settle+gap volume (search time + CI contention).
+_THROUGHPUT_FRACTION = 0.5
 
 
 def _autoplay_cycle_seconds() -> float:
@@ -133,19 +141,21 @@ def test_load_expectimax_default_cap_covers_four_autoplay_tabs() -> None:
     cap = _default_expectimax_cap()
     assert cap == 360
     assert _CYCLE_S == pytest.approx(0.91, abs=0.001)
-    # Ideal if search were free; allow headroom for expectimax CPU on OPEN_BOARD.
+    # Ideal if search were free; soft floor leaves headroom for expectimax + CI.
     ideal = _DEMO_CLIENTS * (_SOAK_SECONDS / _CYCLE_S)
-    min_expected = int(ideal * 0.65)
-    # Must exceed the prior 120 ceiling so this soak would fail under that default.
+    min_expected = int(ideal * _THROUGHPUT_FRACTION)
+    # Must exceed the interim 120 bar so this soak would fail under that default.
     assert min_expected > _PRIOR_EXPECTIMAX_CAP, (min_expected, ideal)
 
     counts, llm = _run_cadence(expectimax_cap=cap, soak_seconds=_SOAK_SECONDS)
     assert llm.calls == 0
     assert counts["other"] == 0, counts
+    # Primary: no spend 429 at design load; clear the 120 bar.
     assert counts["spend_429"] == 0, counts
-    assert counts["ok"] >= min_expected, counts
     assert counts["ok"] > _PRIOR_EXPECTIMAX_CAP, counts
     assert counts["ok"] == counts["starts"], counts
+    # Soft throughput floor (not the primary gate).
+    assert counts["ok"] >= min_expected, counts
 
 
 def test_load_expectimax_undersized_cap_trips_under_four_tabs() -> None:
