@@ -67,7 +67,7 @@ App passes `shouldReportOutcome` so abandoned in-flight suggests (stale token af
 
 ## Phoenix (OTLP traces)
 
-Export when `EXPORT_TRACES=true` (Compose/dev/prod default; CI sets `false`).
+Export when `EXPORT_TRACES=true` (off by default; set in root `.env` for Compose or `server/.env` for host uvicorn once a collector runs).
 
 ### Spans
 

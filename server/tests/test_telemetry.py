@@ -124,6 +124,11 @@ def test_api_key_is_sent_only_on_https_or_loopback(caplog: pytest.LogCaptureFixt
     assert "secret" not in caplog.text
 
 
+def test_export_traces_defaults_off() -> None:
+    # Field default, not Settings() — that still reads the process env / .env.
+    assert Settings.model_fields["export_traces"].default is False
+
+
 def test_each_app_keeps_its_own_exporter() -> None:
     first = InMemorySpanExporter()
     second = InMemorySpanExporter()
