@@ -449,6 +449,25 @@ def test_invalid_body_and_stuck_board_do_not_leak_capacity() -> None:
     assert llm.calls == 1
 
 
+def test_stuck_board_does_not_leak_expectimax_capacity() -> None:
+    """409 releases the Expectimax slot so the next search admits."""
+    llm = FakeLLM(["right"])
+    settings = isolated_settings(
+        suggest_rate_limit_expectimax_requests=10,
+        expectimax_max_in_flight=1,
+    )
+    client = TestClient(create_app(settings, llm))
+
+    stuck = client.post("/suggest", json={"board": STUCK_BOARD, "mode": "expectimax"})
+    assert stuck.status_code == 409
+    assert llm.calls == 0
+
+    ok = client.post("/suggest", json={"board": OPEN_BOARD, "mode": "expectimax"})
+    assert ok.status_code == 200
+    assert ok.json()["source"] in ("expectimax", "fallback")
+    assert llm.calls == 0
+
+
 def test_pre_suggester_failure_releases_llm_in_flight_slot(monkeypatch: pytest.MonkeyPatch) -> None:
     """A raise after acquire but before suggester must not sticky-hold capacity."""
     from app import main as main_mod
@@ -470,6 +489,36 @@ def test_pre_suggester_failure_releases_llm_in_flight_slot(monkeypatch: pytest.M
     with TestClient(app) as client:
         assert client.post("/suggest", json={"board": OPEN_BOARD, "mode": "llm"}).status_code == 200
         assert llm.calls == 1
+
+
+def test_pre_suggester_failure_releases_expectimax_in_flight_slot(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Pre-suggester raise must free the Expectimax capacity slot too."""
+    from app import main as main_mod
+
+    llm = FakeLLM(["right"])
+    settings = isolated_settings(
+        suggest_rate_limit_expectimax_requests=10,
+        expectimax_max_in_flight=1,
+    )
+    app = create_app(settings, llm)
+
+    def boom(*_args: object, **_kwargs: object) -> None:
+        raise RuntimeError("span io failed")
+
+    monkeypatch.setattr(main_mod, "set_json_io", boom)
+    with TestClient(app, raise_server_exceptions=False) as client:
+        failed = client.post("/suggest", json={"board": OPEN_BOARD, "mode": "expectimax"})
+        assert failed.status_code == 500
+        assert llm.calls == 0
+
+    monkeypatch.undo()
+    with TestClient(app) as client:
+        ok = client.post("/suggest", json={"board": OPEN_BOARD, "mode": "expectimax"})
+        assert ok.status_code == 200
+        assert ok.json()["source"] in ("expectimax", "fallback")
+        assert llm.calls == 0
 
 
 def test_concurrent_llm_suggests_fail_fast_without_leaking_capacity() -> None:
@@ -514,6 +563,55 @@ def test_concurrent_llm_suggests_fail_fast_without_leaking_capacity() -> None:
         # After drain, the slot is free (v1 has no queue — retries are a follow-up).
         assert client.post("/suggest", json=body).status_code == 200
         assert llm.calls == 2
+
+
+def test_concurrent_expectimax_suggests_fail_fast_without_leaking_capacity(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Held Expectimax slot: overlapping peers get capacity 429; slot frees after drain."""
+    workers = 8
+    search = BlockingExpectimax()
+    monkeypatch.setattr("app.suggester.choose_move", search)
+    settings = isolated_settings(
+        suggest_rate_limit_expectimax_requests=50,
+        expectimax_max_in_flight=1,
+    )
+    app = create_app(settings, FakeLLM(["right"]))
+    body = {"board": OPEN_BOARD, "mode": "expectimax"}
+    holder_status: dict[str, int] = {}
+    extras: list[int] = []
+    lock = threading.Lock()
+
+    with TestClient(app) as client:
+
+        def hold() -> None:
+            holder_status["code"] = client.post("/suggest", json=body).status_code
+
+        holder = threading.Thread(target=hold)
+        holder.start()
+        assert search.started.wait(2)
+
+        def one() -> None:
+            status = client.post("/suggest", json=body).status_code
+            with lock:
+                extras.append(status)
+
+        threads = [threading.Thread(target=one) for _ in range(workers)]
+        for thread in threads:
+            thread.start()
+        for thread in threads:
+            thread.join(timeout=5)
+            assert not thread.is_alive()
+
+        assert extras == [429] * workers
+        assert search.calls == 1
+        assert not getattr(app.state, "telemetry_shutdown", False)
+
+        search.release.set()
+        holder.join(timeout=3)
+        assert holder_status["code"] == 200
+        assert client.post("/suggest", json=body).status_code == 200
+        assert search.calls == 2
 
 
 def test_e2e_rate_limit_covers_shared_fixture_budget() -> None:

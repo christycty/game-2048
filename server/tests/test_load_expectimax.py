@@ -136,14 +136,23 @@ def _run_cadence(
                         detail = response.json().get("detail")
                     except Exception:
                         detail = None
+                limit = response.headers.get(HEADER_SUGGEST_LIMIT.lower())
                 record(
                     response.status_code,
                     detail=detail,
-                    limit=response.headers.get(HEADER_SUGGEST_LIMIT.lower()),
+                    limit=limit,
                 )
-                # Match Auto Play watchability pause after settle (search time is extra).
-                # Capacity 429: Auto Play retries after Retry-After=1; soak uses the same pause.
-                time.sleep(_CYCLE_S)
+                # Capacity 429: Auto Play backs off Retry-After (usually 1s).
+                # Otherwise match settle+gap watchability pause (search time is extra).
+                if response.status_code == 429 and limit == LIMIT_REASON_CAPACITY:
+                    retry_after = response.headers.get("retry-after", "1")
+                    try:
+                        pause = max(float(retry_after), 0.0)
+                    except ValueError:
+                        pause = 1.0
+                    time.sleep(pause)
+                else:
+                    time.sleep(_CYCLE_S)
 
         with ThreadPoolExecutor(max_workers=_DEMO_CLIENTS) as pool:
             futures = [pool.submit(worker) for _ in range(_DEMO_CLIENTS)]
