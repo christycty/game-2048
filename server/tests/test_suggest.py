@@ -729,9 +729,9 @@ def test_expectimax_skips_the_model() -> None:
     assert body["source"] == "expectimax"
     # Up is the fallback and would smash the sorted row. Right only slides the 2.
     assert body["move"] == "right"
-    assert body["reason"].startswith("Score of each direction: ")
-    assert "Up = N/A" not in body["reason"]  # up is legal but worse
-    assert "Left = N/A" in body["reason"]
+    assert body["reason"].startswith("Expected score vs Right: ")
+    assert "Up not possible" not in body["reason"]  # up is legal but worse
+    assert "Left not possible" in body["reason"]
     assert llm.calls == 0
 
 
@@ -743,9 +743,9 @@ def test_expectimax_merges_instead_of_sliding() -> None:
     body = response.json()
     assert body["source"] == "expectimax"
     assert body["move"] in {"up", "down"}
-    assert body["reason"].startswith("Score of each direction: ")
-    assert "Left =" in body["reason"]
-    assert "N/A" in body["reason"]
+    assert body["reason"].startswith("Expected score vs ")
+    assert "Left" in body["reason"]
+    assert "not possible" in body["reason"]
 
 
 def test_expectimax_drops_an_illegal_search_move(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -754,7 +754,7 @@ def test_expectimax_drops_an_illegal_search_move(monkeypatch: pytest.MonkeyPatch
     monkeypatch.setattr(
         "app.suggester.choose_move",
         lambda _board, **_kwargs: Choice(
-            "up", "Score of each direction: Left = N/A, Right = 1.0, Up = 2.0, Down = 1.0"
+            "up", "Expected score vs Up: Left not possible, Right -1.0, Down -1.0"
         ),
     )
     response = _client(FakeLLM([])).post(
@@ -1106,6 +1106,22 @@ def test_time_budget_stops_further_attempts() -> None:
     response = suggester.suggest(OPEN_BOARD, "llm")
     assert response.source == "fallback"
     assert llm.calls == 1
+
+
+def test_a_timed_out_first_attempt_still_gets_its_retry() -> None:
+    llm = FakeLLM([LlmError("timed out"), ModelSuggestion("right", "Slide toward the edge.")])
+    # The first attempt overran its 20s timeout slightly, leaving 19.9s of the 40s budget.
+    ticks = iter([0.0, 0.0, 20.1])
+    suggester = MoveSuggester(
+        llm,
+        max_attempts=3,
+        budget_seconds=40,
+        attempt_timeout_seconds=20,
+        clock=lambda: next(ticks),
+    )
+    response = suggester.suggest(OPEN_BOARD, "llm")
+    assert response.source == "llm"
+    assert llm.calls == 2
 
 
 def test_lifespan_closes_the_owned_client(monkeypatch: pytest.MonkeyPatch) -> None:

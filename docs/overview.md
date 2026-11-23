@@ -4,7 +4,7 @@ A local or self-hosted 2048 session with an optional AI coach. No accounts, lead
 
 ## Goals
 
-1. Familiar 2048 with assignment tweaks: random count of starting **2**s (1–16), slide and merge, spawn after each successful move, hard win at **2048**.
+1. Familiar 2048 with a few rule tweaks: random count of starting **2**s (1–16), slide and merge, spawn after each successful move, hard win at **2048**.
 2. Small surface: current score, session best, new game.
 3. Optional AI: pick a mode, ask for a move, read the hint, confirm with **Play**, or turn on **Auto Play**.
 

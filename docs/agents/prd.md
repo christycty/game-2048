@@ -6,7 +6,7 @@ Product rules for implementers and agents. Human-oriented narrative: [../overvie
 
 ## Goals
 
-1. Play 2048 per assignment rules: start with a random count of 2s (1–16), slide and merge, spawn after each successful move, hard win at 2048 / lose when no moves.
+1. Play 2048 per the product rules: start with a random count of 2s (1–16), slide and merge, spawn after each successful move, hard win at 2048 / lose when no moves.
 2. Keep the surface small: current score, best score for the session, and new game. No undo, accounts, or leaderboard.
 3. Offer optional AI help: the player picks a suggestion style, asks for a move, sees the recommendation, and either confirms with **Play** or starts **Auto Play**.
 
@@ -93,7 +93,7 @@ A release matches this product when:
 - The player can request an LLM or Expectimax suggestion, read the reason when one is returned, confirm with **Play**, and see that move applied like any other move.
 - The player can start **Auto Play** in the selected mode, watch usable suggestions apply in a loop, and stop with **Stop**, New Game, a manual move, win or loss, or a failed suggestion. Abort / server cancel during Thinking ends the loop without a failure hint.
 - A failed or unusable suggestion leaves the board unchanged and shows a clear failure message (including a distinct rate-limit message). Abort is silent (not a failure message).
-- Expectimax returns a legal search move with a per-direction score line the player can read.
+- Expectimax returns a legal search move with a short reason comparing each other direction to the chosen move (`not possible`, score gap, `ties`, `wins`, or `loses`).
 
 ## Open product decisions
 

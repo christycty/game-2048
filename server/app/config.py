@@ -41,8 +41,8 @@ class Settings(BaseSettings):
     client_host_port: int = Field(default=5173, ge=1, le=65535)
     phoenix_collector_endpoint: str = "http://localhost:6006"
     phoenix_api_key: str | None = None
-    # Dev and prod export. CI sets EXPORT_TRACES=false.
-    export_traces: bool = True
+    # Opt in when a Phoenix/OTLP collector is running (EXPORT_TRACES=true).
+    export_traces: bool = False
 
     @model_validator(mode="after")
     def prod_uses_plain_json(self) -> "Settings":

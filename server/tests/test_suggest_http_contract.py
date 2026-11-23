@@ -79,6 +79,20 @@ def test_metrics_always_on() -> None:
     assert client.get("/metrics").status_code == 200
 
 
+_BAD_TILE_BOARDS = [
+    [[1, 0, 0, 0], [0, 0, 0, 0], [0, 0, 0, 0], [0, 0, 0, 0]],
+    [[3, 0, 0, 0], [0, 0, 0, 0], [0, 0, 0, 0], [0, 0, 0, 0]],
+    [[6, 0, 0, 0], [0, 0, 0, 0], [0, 0, 0, 0], [0, 0, 0, 0]],
+]
+
+
+@pytest.mark.parametrize("board", _BAD_TILE_BOARDS)
+def test_suggest_non_power_of_two_tile_is_422(board: list[list[int]]) -> None:
+    client = TestClient(create_app(isolated_settings(app_env="prod"), _UnusedLLM()))
+    response = client.post("/suggest", json={"board": board, "mode": "expectimax"})
+    assert response.status_code == 422
+
+
 def test_suggest_bad_payload_is_422_and_skips_rate_limit() -> None:
     client = TestClient(
         create_app(
@@ -352,8 +366,8 @@ def test_expectimax_returns_a_legal_search_move() -> None:
     assert body["source"] == "expectimax"
     assert body["move"] == "right"
     assert body["move"] in legal_moves(SORTED_ROW)
-    assert body["reason"].startswith("Score of each direction: ")
-    assert "Left = N/A" in body["reason"]
+    assert body["reason"].startswith("Expected score vs Right: ")
+    assert "Left not possible" in body["reason"]
 
 
 def test_unreachable_ollama_falls_back_with_null_reason() -> None:

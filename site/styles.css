@@ -216,6 +216,10 @@ section > p {
   background: #fff;
 }
 
+.figure img.portrait {
+  max-width: 22rem;
+}
+
 .mock {
   display: block;
   width: 100%;

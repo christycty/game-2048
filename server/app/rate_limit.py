@@ -98,7 +98,3 @@ class InFlightGate:
             return
         with self._lock:
             self._held.discard(token)
-
-
-# Backward-compatible alias (tests / older call sites).
-LlmInFlightGate = InFlightGate

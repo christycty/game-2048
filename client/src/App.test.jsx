@@ -444,7 +444,7 @@ test("expectimax mode is sent to the suggestion API", async () => {
         move: "up",
         mode: "expectimax",
         source: "expectimax",
-        reason: "Score of each direction: Left = N/A, Right = 1053.4, Up = 1200.0, Down = 771.2",
+        reason: "Expected score vs Up: Left not possible, Right -146.6, Down -428.8",
     });
 
     render(<App />);
@@ -469,7 +469,7 @@ test("expectimax mode is sent to the suggestion API", async () => {
         }),
     );
     expect(screen.getByRole("status").textContent).toBe(
-        "Suggested: Up. Score of each direction: Left = N/A, Right = 1053.4, Up = 1200.0, Down = 771.2",
+        "Suggested: Up. Expected score vs Up: Left not possible, Right -146.6, Down -428.8",
     );
     expect(screen.getByRole("button", { name: "Play Up" })).toBeTruthy();
 });
@@ -637,13 +637,13 @@ test("a blocked move during an AI request keeps the suggestion", async () => {
             move: "right",
             mode: "expectimax",
             source: "expectimax",
-            reason: "Score of each direction: Left = N/A, Right = 900.0, Up = N/A, Down = 800.0",
+            reason: "Expected score vs Right: Left not possible, Up not possible, Down -100.0",
         });
         await Promise.resolve();
     });
 
     expect(screen.getByRole("status").textContent).toBe(
-        "Suggested: Right. Score of each direction: Left = N/A, Right = 900.0, Up = N/A, Down = 800.0",
+        "Suggested: Right. Expected score vs Right: Left not possible, Up not possible, Down -100.0",
     );
     expect(screen.getByRole("button", { name: "Play Right" })).toBeTruthy();
 });

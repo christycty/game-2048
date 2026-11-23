@@ -12,6 +12,9 @@ from app.schemas import Mode, SuggestResponse
 
 logger = logging.getLogger(__name__)
 _Clock = Callable[[], float]
+# A timed-out attempt overruns its timeout by a few ms. Without slack, a 40s budget
+# never fits the second 20s attempt it was sized for.
+_ATTEMPT_START_SLACK_SECONDS = 1.0
 
 
 def _record_result(span, result: SuggestResponse, failures: list[str]) -> SuggestResponse:
@@ -88,7 +91,7 @@ class MoveSuggester:
                 # between-attempt abort still opens an ollama span and records
                 # gen_ai cancelled. Pre-loop cancel stays above (no GenAI series).
                 remaining = deadline - self._clock()
-                if remaining < self._attempt_timeout_seconds:
+                if remaining + _ATTEMPT_START_SLACK_SECONDS < self._attempt_timeout_seconds:
                     failures.append("time budget")
                     logger.warning("llm suggestion stopped with %.1f seconds left", remaining)
                     break

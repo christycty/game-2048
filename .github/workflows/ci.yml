@@ -144,11 +144,12 @@ jobs:
       - name: Compose keeps the container URL and loopback ports
         run: |
           cp .env.example .env
-          printf '\nOLLAMA_BASE_URL=http://localhost:11434\nPHOENIX_COLLECTOR_ENDPOINT=http://localhost:6006\nEXPORT_TRACES=false\n' >> .env
+          printf '\nOLLAMA_BASE_URL=http://localhost:11434\nPHOENIX_COLLECTOR_ENDPOINT=http://localhost:6006\n' >> .env
           OLLAMA_BASE_URL=http://localhost:11434 \
           PHOENIX_COLLECTOR_ENDPOINT=http://localhost:6006 \
-          EXPORT_TRACES=false \
             docker compose --profile dev --profile prod config --format json > /tmp/compose.json
+          EXPORT_TRACES=true \
+            docker compose --profile dev config --format json > /tmp/compose-traces-on.json
           COMPOSE_OLLAMA_BASE_URL=http://ollama.example:11434 \
           COMPOSE_PHOENIX_COLLECTOR_ENDPOINT=http://phoenix.example:6006 \
             docker compose --profile dev config --format json > /tmp/compose-override.json
@@ -158,6 +159,7 @@ jobs:
           from pathlib import Path
 
           data = json.loads(Path("/tmp/compose.json").read_text())
+          traces_on = json.loads(Path("/tmp/compose-traces-on.json").read_text())
           override = json.loads(Path("/tmp/compose-override.json").read_text())
           metrics = json.loads(Path("/tmp/compose-metrics.json").read_text())
           loopback = {"127.0.0.1", "::1"}
@@ -194,11 +196,14 @@ jobs:
               if got != want or "localhost" in got:
                   raise SystemExit(f"{service} OLLAMA_BASE_URL={got!r}, want {want!r}")
               traces = env_value(data, service, "EXPORT_TRACES")
-              if traces != "true":
-                  raise SystemExit(f"{service} EXPORT_TRACES={traces!r}, want 'true'")
+              if traces != "false":
+                  raise SystemExit(f"{service} EXPORT_TRACES={traces!r}, want 'false'")
               collector = env_value(data, service, "PHOENIX_COLLECTOR_ENDPOINT")
               if collector != phoenix or "localhost" in collector:
                   raise SystemExit(f"{service} PHOENIX_COLLECTOR_ENDPOINT={collector!r}, want {phoenix!r}")
+          traces = env_value(traces_on, "dev", "EXPORT_TRACES")
+          if traces != "true":
+              raise SystemExit(f"dev EXPORT_TRACES={traces!r} with EXPORT_TRACES=true env, want 'true'")
           overridden = env_value(override, "dev", "OLLAMA_BASE_URL")
           if overridden != "http://ollama.example:11434":
               raise SystemExit(f"COMPOSE_OLLAMA_BASE_URL did not apply: {overridden!r}")
