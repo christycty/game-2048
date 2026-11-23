@@ -14,43 +14,18 @@ import pytest
 from fastapi.testclient import TestClient
 
 from app.cancel import SuggestCancelled
-from app.expectimax import Choice, choose_move
+from app.expectimax import choose_move
 from app.llm import ModelSuggestion, OllamaClient
 from app.main import DisconnectCancelMiddleware, create_app
 from app.rate_limit import DETAIL_MODEL_BUSY, LlmInFlightGate, SuggestRateLimiter
 from app.suggester import MoveSuggester
-from helpers import OPEN_BOARD, BlockingLLM, asgi_suggest, isolated_settings
-
-
-class BlockingExpectimax:
-    """Stand-in for choose_move: blocks until cancel or release (real search is too fast)."""
-
-    def __init__(self) -> None:
-        self.started = threading.Event()
-        self.release = threading.Event()
-        self.cancelled_with: threading.Event | None = None
-        self.calls = 0
-        self._lock = threading.Lock()
-
-    def __call__(
-        self,
-        board: list[list[int]],
-        *,
-        depth: int | None = None,
-        budget_seconds: float | None = None,
-        clock: object | None = None,
-        cancel: threading.Event | None = None,
-    ) -> Choice:
-        with self._lock:
-            self.calls += 1
-        self.started.set()
-        while True:
-            if cancel is not None and cancel.is_set():
-                self.cancelled_with = cancel
-                raise SuggestCancelled()
-            if self.release.is_set():
-                return Choice("right", "Score of each direction: Right = 1.0")
-            time.sleep(0.01)
+from helpers import (
+    OPEN_BOARD,
+    BlockingExpectimax,
+    BlockingLLM,
+    asgi_suggest,
+    isolated_settings,
+)
 
 
 class UnusedLLM:
@@ -472,6 +447,37 @@ def test_cancelled_suggest_releases_llm_in_flight_slot() -> None:
     # Slot freed in finally: a fresh suggest must not get capacity 429.
     with TestClient(app) as client:
         assert client.post("/suggest", json={"board": OPEN_BOARD, "mode": "llm"}).status_code == 200
+
+
+def test_cancelled_expectimax_releases_in_flight_slot(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """499 must free the Expectimax capacity slot so the next search is admitted."""
+    search = BlockingExpectimax()
+    monkeypatch.setattr("app.suggester.choose_move", search)
+    gate = LlmInFlightGate(1)
+    settings = isolated_settings(
+        suggest_rate_limit_expectimax_requests=10,
+        expectimax_max_in_flight=1,
+    )
+    app = create_app(settings, UnusedLLM(), expectimax_in_flight=gate)
+    body = json.dumps({"board": OPEN_BOARD, "mode": "expectimax"}).encode()
+
+    async def call_and_disconnect() -> int | None:
+        disconnect = asyncio.Event()
+        task = asyncio.create_task(asgi_suggest(app, body, disconnect_gate=disconnect))
+        assert await asyncio.to_thread(search.started.wait, 2)
+        disconnect.set()
+        result = await asyncio.wait_for(task, timeout=3)
+        return result.status
+
+    assert asyncio.run(call_and_disconnect()) == 499
+    search.release.set()
+    with TestClient(app) as client:
+        assert (
+            client.post("/suggest", json={"board": OPEN_BOARD, "mode": "expectimax"}).status_code
+            == 200
+        )
 
 
 def test_cancelled_suggest_refunds_rate_limit_hit() -> None:

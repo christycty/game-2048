@@ -1,7 +1,7 @@
 """Opt-in Expectimax Auto Play cadence soak (not required PR CI).
 
 Design load: **4 concurrent Auto Play tabs**. Client cycle is read from
-``client/src/game.js`` (``SETTLE_MS`` + ``AUTO_PLAY_GAP_MS``, ~910ms). That
+``client/src/game/game.js`` (``SETTLE_MS`` + ``AUTO_PLAY_GAP_MS``, ~910ms). That
 cadence is an **upper bound** if search were free (~65 suggests/min/tab);
 real Auto Play is slower because suggest latency is extra. Default spend
 cap ``360`` ≈ ``4 × 65 × 1.4`` uses the upper bound so demos do not false-trip.
@@ -15,8 +15,10 @@ Pass criteria:
   120 — this soak must fail under either).
 - Soft throughput floor: ≥50% of ideal settle+gap volume (search + CI
   contention headroom).
-- With an undersized cap, the same harness **does** trip spend ``429``
+- With an undersized spend cap, the same harness **does** trip spend ``429``
   (proves the soak is sensitive, not a no-op).
+- With ``expectimax_max_in_flight=1`` under four cadence workers, capacity
+  ``429`` appears (spend stays distinct).
 """
 
 from __future__ import annotations
@@ -33,16 +35,20 @@ from fastapi.testclient import TestClient
 from app.config import Settings
 from app.main import create_app
 from app.rate_limit import (
+    DETAIL_MODEL_BUSY,
     DETAIL_SPEND_CAP,
     HEADER_SUGGEST_LIMIT,
+    LIMIT_REASON_CAPACITY,
     LIMIT_REASON_SPEND,
+    InFlightGate,
     SuggestRateLimiter,
 )
 from helpers import OPEN_BOARD, FakeLLM, isolated_settings
 
 pytestmark = pytest.mark.load
 
-_CLIENT_GAME_JS = Path(__file__).resolve().parents[2] / "client" / "src" / "game.js"
+# Maintainability move: constants live under client/src/game/game.js.
+_CLIENT_GAME_JS = Path(__file__).resolve().parents[2] / "client" / "src" / "game" / "game.js"
 _DEMO_CLIENTS = 4
 # Match Settings / Compose window so the positive soak fills one sliding window.
 _WINDOW_SECONDS = 60
@@ -79,12 +85,19 @@ def _default_expectimax_cap() -> int:
     return default
 
 
-def _run_cadence(*, expectimax_cap: int, soak_seconds: float) -> tuple[dict[str, int], FakeLLM]:
+def _run_cadence(
+    *,
+    expectimax_cap: int,
+    soak_seconds: float,
+    max_in_flight: int | None = None,
+) -> tuple[dict[str, int], FakeLLM]:
     """Four workers: suggest → sleep(cycle) until soak ends; account statuses."""
     llm = FakeLLM(["right"] * 8)
+    in_flight = max_in_flight if max_in_flight is not None else 4
     settings = isolated_settings(
         suggest_rate_limit_expectimax_requests=expectimax_cap,
         suggest_rate_limit_window_seconds=_WINDOW_SECONDS,
+        expectimax_max_in_flight=in_flight,
     )
     app = create_app(
         settings,
@@ -93,8 +106,9 @@ def _run_cadence(*, expectimax_cap: int, soak_seconds: float) -> tuple[dict[str,
             "llm": SuggestRateLimiter(settings.suggest_rate_limit_requests, _WINDOW_SECONDS),
             "expectimax": SuggestRateLimiter(expectimax_cap, _WINDOW_SECONDS),
         },
+        expectimax_in_flight=InFlightGate(in_flight),
     )
-    counts = {"starts": 0, "ok": 0, "spend_429": 0, "other": 0}
+    counts = {"starts": 0, "ok": 0, "spend_429": 0, "capacity_429": 0, "other": 0}
     lock = threading.Lock()
     stop_at = time.monotonic() + soak_seconds
 
@@ -105,6 +119,8 @@ def _run_cadence(*, expectimax_cap: int, soak_seconds: float) -> tuple[dict[str,
                 counts["ok"] += 1
             elif status == 429 and detail == DETAIL_SPEND_CAP and limit == LIMIT_REASON_SPEND:
                 counts["spend_429"] += 1
+            elif status == 429 and detail == DETAIL_MODEL_BUSY and limit == LIMIT_REASON_CAPACITY:
+                counts["capacity_429"] += 1
             else:
                 counts["other"] += 1
 
@@ -126,6 +142,7 @@ def _run_cadence(*, expectimax_cap: int, soak_seconds: float) -> tuple[dict[str,
                     limit=response.headers.get(HEADER_SUGGEST_LIMIT.lower()),
                 )
                 # Match Auto Play watchability pause after settle (search time is extra).
+                # Capacity 429: Auto Play retries after Retry-After=1; soak uses the same pause.
                 time.sleep(_CYCLE_S)
 
         with ThreadPoolExecutor(max_workers=_DEMO_CLIENTS) as pool:
@@ -152,6 +169,8 @@ def test_load_expectimax_default_cap_covers_four_autoplay_tabs() -> None:
     assert counts["other"] == 0, counts
     # Primary: no spend 429 at design load; clear the 120 bar.
     assert counts["spend_429"] == 0, counts
+    # Four workers ≤ default max_in_flight=4 → no capacity 429 under cadence.
+    assert counts["capacity_429"] == 0, counts
     assert counts["ok"] > _PRIOR_EXPECTIMAX_CAP, counts
     assert counts["ok"] == counts["starts"], counts
     # Soft throughput floor (not the primary gate).
@@ -159,12 +178,27 @@ def test_load_expectimax_default_cap_covers_four_autoplay_tabs() -> None:
 
 
 def test_load_expectimax_undersized_cap_trips_under_four_tabs() -> None:
-    """Same harness with a tiny cap must produce spend 429 (soak is not a no-op)."""
+    """Same harness with a tiny spend cap must produce spend 429 (soak is not a no-op)."""
     # ~4 × 65/min burns this well before a short soak ends.
     undersized = 40
     counts, llm = _run_cadence(expectimax_cap=undersized, soak_seconds=_TRIP_SOAK_SECONDS)
     assert llm.calls == 0
     assert counts["other"] == 0, counts
     assert counts["spend_429"] >= 1, counts
+    assert counts["capacity_429"] == 0, counts
     assert counts["ok"] + counts["spend_429"] == counts["starts"], counts
     assert counts["ok"] <= undersized, counts
+
+
+def test_load_expectimax_undersized_in_flight_trips_capacity() -> None:
+    """Four cadence workers with max_in_flight=1 must see capacity 429 (distinct from spend)."""
+    counts, llm = _run_cadence(
+        expectimax_cap=360,
+        soak_seconds=_TRIP_SOAK_SECONDS,
+        max_in_flight=1,
+    )
+    assert llm.calls == 0
+    assert counts["other"] == 0, counts
+    assert counts["spend_429"] == 0, counts
+    assert counts["capacity_429"] >= 1, counts
+    assert counts["ok"] + counts["capacity_429"] == counts["starts"], counts
