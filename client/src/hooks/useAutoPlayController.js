@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { hasMoves } from "../game/game";
-import { HINT_SUGGEST_FAILED } from "../suggest/suggestHints";
+import { HINT_SUGGEST_FAILED, isRetryingHint } from "../suggest/suggestHints";
 
 /**
  * Auto Play toggle/stop and autoApplyingRef.
@@ -47,6 +47,8 @@ export function useAutoPlayController({
         setAutoPlaying(false);
         clearGapTimer();
         resetCapacityRetries();
+        // Stopping cancels any scheduled retry, so transient "… Retrying…" copy must not linger.
+        setHint((current) => (isRetryingHint(current) ? null : current));
         // The post-settle gap keeps busy true so AI stays inactive through the pause.
         // Stopping must release that hold when nothing else is in flight.
         if (!animatingRef.current && !suggestingRef.current) {

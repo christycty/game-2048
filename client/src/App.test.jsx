@@ -11,7 +11,11 @@ import {
     createInitialTiles,
     SETTLE_MS,
 } from "./game/game";
-import { HINT_SUGGEST_FAILED, HINT_SUGGEST_RETRYING } from "./suggest/suggestHints";
+import {
+    HINT_CAPACITY_RETRYING,
+    HINT_SUGGEST_FAILED,
+    HINT_SUGGEST_RETRYING,
+} from "./suggest/suggestHints";
 
 // These tests lock input and score timing. The move rules are covered in game.test.js.
 vi.mock("./game/game", async () => {
@@ -1556,7 +1560,7 @@ test("unmount aborts an in-flight suggest", async () => {
     expect(seenSignal.aborted).toBe(true);
 });
 
-test("unmount mid-slide during auto play cancels pending settle and gap timers", async () => {
+test("unmount mid-slide during auto play cancels the pending settle timer", async () => {
     suggestMove.mockResolvedValue({
         move: "right",
         mode: "expectimax",
@@ -1591,6 +1595,44 @@ test("unmount mid-slide during auto play cancels pending settle and gap timers",
     expect(suggestMove).toHaveBeenCalledTimes(1);
 });
 
+test("unmount during the post-settle auto play gap cancels the pending gap timer", async () => {
+    suggestMove.mockResolvedValue({
+        move: "right",
+        mode: "expectimax",
+        source: "expectimax",
+        reason: null,
+    });
+    applyMove.mockReturnValue({
+        moved: true,
+        scoreGained: 0,
+        visualTiles: [{ id: 1, row: 0, col: 3, value: 2, fromRow: 0, fromCol: 0, sliding: true }],
+        resolvedTiles: [{ id: 1, row: 0, col: 3, value: 2 }],
+        lost: false,
+    });
+
+    const { unmount } = render(<App />);
+    fireEvent.click(screen.getByRole("button", { name: "Auto Play" }));
+
+    await act(async () => {
+        await Promise.resolve();
+    });
+
+    await act(async () => {
+        vi.advanceTimersByTime(SETTLE_MS);
+        await Promise.resolve();
+    });
+
+    expect(suggestMove).toHaveBeenCalledTimes(1);
+    unmount();
+
+    await act(async () => {
+        vi.advanceTimersByTime(AUTO_PLAY_GAP_MS);
+        await Promise.resolve();
+    });
+
+    expect(suggestMove).toHaveBeenCalledTimes(1);
+});
+
 test("unmount during a capacity retry backoff cancels the retry timer", async () => {
     suggestMove
         .mockRejectedValueOnce(
@@ -1614,7 +1656,7 @@ test("unmount during a capacity retry backoff cancels the retry timer", async ()
         await Promise.resolve();
     });
 
-    expect(screen.getByRole("status").textContent).toBe("Model busy. Retrying…");
+    expect(screen.getByRole("status").textContent).toBe(HINT_CAPACITY_RETRYING);
     expect(suggestMove).toHaveBeenCalledTimes(1);
 
     unmount();
@@ -1664,7 +1706,7 @@ test("unmount during a fallback retry backoff cancels the retry timer", async ()
     expect(applyMove).not.toHaveBeenCalled();
 });
 
-test("stopping auto play during retry backoff re-enables AI immediately and cancels retry", async () => {
+test("stopping auto play during retry backoff clears retrying copy, re-enables AI, and cancels retry", async () => {
     suggestMove
         .mockRejectedValueOnce(
             new SuggestError("model busy", {
@@ -1687,13 +1729,17 @@ test("stopping auto play during retry backoff re-enables AI immediately and canc
         await Promise.resolve();
     });
 
-    expect(screen.getByRole("status").textContent).toBe("Model busy. Retrying…");
+    expect(screen.getByRole("status").textContent).toBe(HINT_CAPACITY_RETRYING);
     expect(screen.getByRole("button", { name: "AI" }).disabled).toBe(true);
 
     fireEvent.click(screen.getByRole("button", { name: "Stop" }));
 
-    expect(screen.getByRole("button", { name: "Auto Play" }).disabled).toBe(false);
+    const autoPlayButton = screen.getByRole("button", { name: "Auto Play" });
+    expect(autoPlayButton.getAttribute("aria-pressed")).toBe("false");
+    expect(autoPlayButton.disabled).toBe(false);
     expect(screen.getByRole("button", { name: "AI" }).disabled).toBe(false);
+    expect(screen.queryByRole("status")).toBeNull();
+    expect(applyMove).not.toHaveBeenCalled();
 
     await act(async () => {
         vi.advanceTimersByTime(2000);
@@ -1701,17 +1747,22 @@ test("stopping auto play during retry backoff re-enables AI immediately and canc
     });
 
     expect(suggestMove).toHaveBeenCalledTimes(1);
+    expect(applyMove).not.toHaveBeenCalled();
 });
 
-test("manual move during retry backoff takes control and cancels the pending retry", async () => {
+test("manual move during retry backoff invalidates the retry token, clears status, and takes control", async () => {
+    let seenShouldReport;
     suggestMove
-        .mockRejectedValueOnce(
-            new SuggestError("model busy", {
-                status: 429,
-                limitReason: LIMIT_CAPACITY,
-                retryAfter: 2,
-            }),
-        )
+        .mockImplementationOnce((_board, _mode, options = {}) => {
+            seenShouldReport = options.shouldReportOutcome;
+            return Promise.reject(
+                new SuggestError("model busy", {
+                    status: 429,
+                    limitReason: LIMIT_CAPACITY,
+                    retryAfter: 2,
+                }),
+            );
+        })
         .mockResolvedValue({
             move: "right",
             mode: "llm",
@@ -1733,11 +1784,17 @@ test("manual move during retry backoff takes control and cancels the pending ret
         await Promise.resolve();
     });
 
-    expect(screen.getByRole("status").textContent).toBe("Model busy. Retrying…");
+    expect(screen.getByRole("status").textContent).toBe(HINT_CAPACITY_RETRYING);
+    expect(seenShouldReport()).toBe(true);
 
-    fireEvent.keyDown(window, { key: "ArrowDown" });
+    press("ArrowDown");
+    // Proves abortInFlightSuggest ran before stopAutoPlay cleared retryTimerRef.
+    expect(seenShouldReport()).toBe(false);
     expect(applyMove).toHaveBeenCalledWith(expect.anything(), "down");
-    expect(screen.getByRole("button", { name: "Auto Play" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Auto Play" }).getAttribute("aria-pressed")).toBe(
+        "false",
+    );
+    expect(screen.queryByRole("status")).toBeNull();
 
     await act(async () => {
         vi.advanceTimersByTime(SETTLE_MS + 2000);
