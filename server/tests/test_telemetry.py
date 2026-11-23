@@ -1,15 +1,26 @@
+import json
+import threading
+
 import httpx
 import pytest
 from fastapi.testclient import TestClient
+from openinference.semconv.trace import SpanAttributes
 from opentelemetry.sdk.trace.export import SimpleSpanProcessor
 from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
 from opentelemetry.trace import StatusCode
 
+from app.cancel import SuggestCancelled
 from app.config import Settings
+from app.expectimax import choose_move as real_choose_move
 from app.llm import ModelSuggestion, OllamaClient
 from app.main import create_app
-from app.rate_limit import SuggestRateLimiter
+from app.rate_limit import HEADER_SUGGEST_LIMIT, InFlightGate, SuggestRateLimiter
+from app.suggester import MoveSuggester
 from app.telemetry import (
+    CLIENT_OUTCOME_CANCEL,
+    CLIENT_OUTCOME_FAIL,
+    CLIENT_OUTCOME_MODEL_BUSY,
+    CLIENT_OUTCOME_RATE_LIMIT,
     INPUT_VALUE,
     LLM_FINISH_REASON,
     LLM_INPUT_MESSAGE_CONTENT,
@@ -20,20 +31,23 @@ from app.telemetry import (
     LLM_TOKEN_COUNT_CACHE_READ,
     LLM_TOKEN_COUNT_COMPLETION,
     LLM_TOKEN_COUNT_PROMPT,
+    LLM_TOKEN_COUNT_TOTAL,
     OPENINFERENCE_SPAN_KIND,
     OUTPUT_VALUE,
     PROM_CLIENT_SUGGEST_OUTCOME,
     PROM_OPERATION_DURATION,
     PROM_REQUEST_COUNT,
+    PROM_SUGGEST_LIMIT_REJECT,
     PROM_SUGGEST_SOURCE,
     PROM_TOKEN_USAGE,
     SERVICE_NAME,
     SPAN_KIND_CHAIN,
     SPAN_KIND_LLM,
     exporter_headers,
+    record_client_suggest_outcome,
     traces_url,
 )
-from helpers import OPEN_BOARD, STUCK_BOARD, isolated_settings, labeled_counter
+from helpers import OPEN_BOARD, STUCK_BOARD, UnusedLLM, isolated_settings, labeled_counter
 
 
 class _QuietLLM:
@@ -68,11 +82,57 @@ def _ollama_chat_json(content: object) -> httpx.Response:
 
 def _suggest_status_count(body: str, status_code: int) -> float:
     """Count samples for POST /suggest at this HTTP status (Grafana by-status panel)."""
-    marker = f'http_status_code="{status_code}",http_target="/suggest"'
+    status_label = f'http_status_code="{status_code}"'
+    return sum(
+        (
+            float(line.rsplit(" ", 1)[-1])
+            for line in body.splitlines()
+            if line.startswith("http_server_duration_milliseconds_count{")
+            and status_label in line
+            and 'http_target="/suggest"' in line
+        ),
+        0.0,
+    )
+
+
+def _metric_sample_sum(body: str, sample_name: str, *label_fragments: str) -> float:
+    """Sum Prometheus sample lines matching ``sample_name`` and all label fragments."""
+    labeled_prefix = f"{sample_name}{{"
+    bare_prefix = f"{sample_name} "
+    total = 0.0
     for line in body.splitlines():
-        if line.startswith("http_server_duration_milliseconds_count") and marker in line:
-            return float(line.rsplit(" ", 1)[-1])
-    return 0.0
+        if line.startswith(labeled_prefix):
+            if all(fragment in line for fragment in label_fragments):
+                total += float(line.rsplit(" ", 1)[-1])
+        elif not label_fragments and line.startswith(bare_prefix):
+            total += float(line.rsplit(" ", 1)[-1])
+    return total
+
+
+def _assert_usage_histograms_recorded(
+    body: str,
+    *,
+    prompt_tokens: float = 40.0,
+    completion_tokens: float = 12.0,
+) -> None:
+    assert _metric_sample_sum(body, f"{PROM_OPERATION_DURATION}_count") == 1.0
+    assert _metric_sample_sum(body, f"{PROM_TOKEN_USAGE}_count", 'gen_ai_token_type="input"') == 1.0
+    assert (
+        _metric_sample_sum(body, f"{PROM_TOKEN_USAGE}_sum", 'gen_ai_token_type="input"')
+        == prompt_tokens
+    )
+    assert (
+        _metric_sample_sum(body, f"{PROM_TOKEN_USAGE}_count", 'gen_ai_token_type="output"') == 1.0
+    )
+    assert (
+        _metric_sample_sum(body, f"{PROM_TOKEN_USAGE}_sum", 'gen_ai_token_type="output"')
+        == completion_tokens
+    )
+
+
+def _assert_usage_histograms_empty(body: str) -> None:
+    assert _metric_sample_sum(body, f"{PROM_OPERATION_DURATION}_count") == 0.0
+    assert _metric_sample_sum(body, f"{PROM_TOKEN_USAGE}_count") == 0.0
 
 
 def test_phoenix_base_url_gets_traces_path() -> None:
@@ -91,6 +151,7 @@ def test_api_key_is_sent_only_on_https_or_loopback(caplog: pytest.LogCaptureFixt
     }
     assert exporter_headers("http://localhost:6006", "secret") == {"authorization": "Bearer secret"}
     assert exporter_headers("http://127.0.0.1:6006", "secret") == {"authorization": "Bearer secret"}
+    assert exporter_headers("http://[::1]:6006", "secret") == {"authorization": "Bearer secret"}
     assert exporter_headers("https://phoenix.example", None) is None
     with caplog.at_level("WARNING"):
         assert exporter_headers("http://host.docker.internal:6006", "secret") == {
@@ -111,12 +172,12 @@ def test_each_app_keeps_its_own_exporter() -> None:
     first = InMemorySpanExporter()
     second = InMemorySpanExporter()
     app_one = create_app(
-        Settings(export_traces=True, phoenix_collector_endpoint="http://localhost:6006"),
+        isolated_settings(export_traces=True, phoenix_collector_endpoint="http://localhost:6006"),
         _QuietLLM(),
         SimpleSpanProcessor(first),
     )
     app_two = create_app(
-        Settings(export_traces=True, phoenix_collector_endpoint="http://phoenix:6006"),
+        isolated_settings(export_traces=True, phoenix_collector_endpoint="http://phoenix:6006"),
         _QuietLLM(),
         SimpleSpanProcessor(second),
     )
@@ -142,13 +203,15 @@ def test_each_app_keeps_its_own_exporter() -> None:
 def test_health_and_asgi_noise_are_not_traced() -> None:
     exporter = InMemorySpanExporter()
     app = create_app(
-        isolated_settings(export_traces=True),
+        isolated_settings(app_env="dev", export_traces=True),
         _QuietLLM(),
         SimpleSpanProcessor(exporter),
     )
     client = TestClient(app)
     assert client.get("/health").status_code == 200
     assert client.get("/metrics").status_code == 200
+    assert client.get("/docs").status_code == 200
+    assert client.get("/openapi.json").status_code == 200
     assert client.post("/client-events", json={"outcome": "fail"}).status_code == 204
     assert exporter.get_finished_spans() == ()
 
@@ -193,14 +256,6 @@ def test_suggest_continues_client_traceparent() -> None:
 
 
 def test_client_events_increment_scrape_counter() -> None:
-    from app.telemetry import (
-        CLIENT_OUTCOME_CANCEL,
-        CLIENT_OUTCOME_FAIL,
-        CLIENT_OUTCOME_MODEL_BUSY,
-        CLIENT_OUTCOME_RATE_LIMIT,
-        record_client_suggest_outcome,
-    )
-
     app = create_app(isolated_settings(export_traces=False), _QuietLLM())
     client = TestClient(app)
     assert client.post("/client-events", json={"outcome": CLIENT_OUTCOME_FAIL}).status_code == 204
@@ -218,7 +273,6 @@ def test_client_events_increment_scrape_counter() -> None:
     record_client_suggest_outcome("success")
 
     body = client.get("/metrics").text
-    assert PROM_CLIENT_SUGGEST_OUTCOME in body
     assert (
         labeled_counter(body, PROM_CLIENT_SUGGEST_OUTCOME, f'outcome="{CLIENT_OUTCOME_FAIL}"')
         == 1.0
@@ -235,6 +289,7 @@ def test_client_events_increment_scrape_counter() -> None:
         labeled_counter(body, PROM_CLIENT_SUGGEST_OUTCOME, f'outcome="{CLIENT_OUTCOME_CANCEL}"')
         == 1.0
     )
+    assert _metric_sample_sum(body, f"{PROM_CLIENT_SUGGEST_OUTCOME}_total") == 4.0
 
 
 def test_http_body_size_metrics_dropped_active_and_duration_kept() -> None:
@@ -244,7 +299,7 @@ def test_http_body_size_metrics_dropped_active_and_duration_kept() -> None:
     assert client.post("/suggest", json={"board": OPEN_BOARD, "mode": "llm"}).status_code == 200
 
     body = client.get("/metrics").text
-    assert "http_server_duration_milliseconds" in body
+    assert _suggest_status_count(body, 200) == 1.0
     assert "http_server_active_requests" in body
     assert "http_server_request_size_bytes" not in body
     assert "http_server_response_size_bytes" not in body
@@ -252,20 +307,7 @@ def test_http_body_size_metrics_dropped_active_and_duration_kept() -> None:
 
 def test_metrics_exposes_gen_ai_series_after_suggest() -> None:
     def handler(request: httpx.Request) -> httpx.Response:
-        return httpx.Response(
-            200,
-            json={
-                "model": "test-model",
-                "message": {"content": '{"move": "right", "reason": "Opens the row."}'},
-                "done_reason": "stop",
-                "prompt_eval_count": 40,
-                "eval_count": 12,
-                "load_duration": 100_000_000,
-                "prompt_eval_duration": 200_000_000,
-                "eval_duration": 300_000_000,
-                "total_duration": 600_000_000,
-            },
-        )
+        return _ollama_chat_json('{"move": "right", "reason": "Opens the row."}')
 
     settings = isolated_settings(export_traces=False, ollama_model="test-model")
     transport = httpx.MockTransport(handler)
@@ -277,14 +319,14 @@ def test_metrics_exposes_gen_ai_series_after_suggest() -> None:
 
     assert metrics.status_code == 200
     body = metrics.text
-    assert PROM_OPERATION_DURATION in body
-    assert PROM_TOKEN_USAGE in body
-    assert PROM_REQUEST_COUNT in body
-    assert PROM_SUGGEST_SOURCE in body
-    assert 'gen_ai_request_outcome="success"' in body
-    assert 'suggest_source="llm"' in body
-    assert 'gen_ai_token_type="input"' in body
-    assert 'gen_ai_token_type="output"' in body
+    assert labeled_counter(body, PROM_REQUEST_COUNT, 'gen_ai_request_outcome="success"') == 1.0
+    assert labeled_counter(body, PROM_REQUEST_COUNT, 'gen_ai_request_outcome="error"') == 0.0
+    assert labeled_counter(body, PROM_REQUEST_COUNT, 'gen_ai_request_outcome="timeout"') == 0.0
+    assert labeled_counter(body, PROM_REQUEST_COUNT, 'gen_ai_request_outcome="cancelled"') == 0.0
+    assert labeled_counter(body, PROM_SUGGEST_SOURCE, 'suggest_source="llm"') == 1.0
+    assert labeled_counter(body, PROM_SUGGEST_SOURCE, 'suggest_source="fallback"') == 0.0
+    assert labeled_counter(body, PROM_SUGGEST_SOURCE, 'suggest_source="expectimax"') == 0.0
+    _assert_usage_histograms_recorded(body, prompt_tokens=40.0, completion_tokens=12.0)
     assert "time_to_first_token" not in body
     assert "time_per_output_token" not in body
 
@@ -301,10 +343,22 @@ def test_metrics_counts_failed_llm_requests() -> None:
         assert client.post("/suggest", json={"board": OPEN_BOARD, "mode": "llm"}).status_code == 200
         body = client.get("/metrics").text
 
-    assert PROM_REQUEST_COUNT in body
-    assert 'gen_ai_request_outcome="error"' in body
-    assert 'error_type="request"' in body
-    assert 'suggest_source="fallback"' in body
+    assert (
+        _metric_sample_sum(
+            body,
+            f"{PROM_REQUEST_COUNT}_total",
+            'gen_ai_request_outcome="error"',
+            'error_type="request"',
+        )
+        == 1.0
+    )
+    assert labeled_counter(body, PROM_REQUEST_COUNT, 'gen_ai_request_outcome="error"') == 1.0
+    assert labeled_counter(body, PROM_REQUEST_COUNT, 'gen_ai_request_outcome="success"') == 0.0
+    assert labeled_counter(body, PROM_REQUEST_COUNT, 'gen_ai_request_outcome="timeout"') == 0.0
+    assert labeled_counter(body, PROM_REQUEST_COUNT, 'gen_ai_request_outcome="cancelled"') == 0.0
+    assert labeled_counter(body, PROM_SUGGEST_SOURCE, 'suggest_source="fallback"') == 1.0
+    assert labeled_counter(body, PROM_SUGGEST_SOURCE, 'suggest_source="llm"') == 0.0
+    _assert_usage_histograms_empty(body)
 
 
 def test_metrics_counts_timed_out_llm_requests() -> None:
@@ -319,18 +373,17 @@ def test_metrics_counts_timed_out_llm_requests() -> None:
         assert client.post("/suggest", json={"board": OPEN_BOARD, "mode": "llm"}).status_code == 200
         body = client.get("/metrics").text
 
-    assert PROM_REQUEST_COUNT in body
-    assert 'gen_ai_request_outcome="timeout"' in body
-    assert 'gen_ai_request_outcome="error"' not in body
-    assert 'suggest_source="fallback"' in body
+    assert labeled_counter(body, PROM_REQUEST_COUNT, 'gen_ai_request_outcome="timeout"') == 1.0
+    assert labeled_counter(body, PROM_REQUEST_COUNT, 'gen_ai_request_outcome="error"') == 0.0
+    assert labeled_counter(body, PROM_REQUEST_COUNT, 'gen_ai_request_outcome="success"') == 0.0
+    assert labeled_counter(body, PROM_REQUEST_COUNT, 'gen_ai_request_outcome="cancelled"') == 0.0
+    assert labeled_counter(body, PROM_SUGGEST_SOURCE, 'suggest_source="fallback"') == 1.0
+    assert labeled_counter(body, PROM_SUGGEST_SOURCE, 'suggest_source="llm"') == 0.0
+    _assert_usage_histograms_empty(body)
 
 
 def test_cancelled_llm_records_cancelled_not_error() -> None:
     """Disconnect cancel mid-Ollama attempt → gen_ai cancelled + spans not ERROR."""
-    import threading
-
-    from app.telemetry import OUTPUT_VALUE
-
     held: dict[str, threading.Event | None] = {"cancel": None}
     posts = {"n": 0}
 
@@ -382,27 +435,30 @@ def test_cancelled_llm_records_cancelled_not_error() -> None:
     assert response.status_code == 499
     assert response.json()["detail"] == "client cancelled"
     assert posts["n"] == 1
-    assert PROM_REQUEST_COUNT in body
-    assert 'gen_ai_request_outcome="cancelled"' in body
-    assert 'gen_ai_request_outcome="error"' not in body
-    # Cancelled mid-pipeline: no completed suggest_source increment.
-    assert 'suggest_source="llm"' not in body
-    assert 'suggest_source="fallback"' not in body
+    assert labeled_counter(body, PROM_REQUEST_COUNT, 'gen_ai_request_outcome="cancelled"') == 1.0
+    assert labeled_counter(body, PROM_REQUEST_COUNT, 'gen_ai_request_outcome="error"') == 0.0
+    assert labeled_counter(body, PROM_REQUEST_COUNT, 'gen_ai_request_outcome="success"') == 0.0
+    assert labeled_counter(body, PROM_REQUEST_COUNT, 'gen_ai_request_outcome="timeout"') == 0.0
+    # Cancelled mid-pipeline: no completed suggest_source increment or usage histograms.
+    assert labeled_counter(body, PROM_SUGGEST_SOURCE, 'suggest_source="llm"') == 0.0
+    assert labeled_counter(body, PROM_SUGGEST_SOURCE, 'suggest_source="fallback"') == 0.0
+    assert labeled_counter(body, PROM_SUGGEST_SOURCE, 'suggest_source="expectimax"') == 0.0
+    _assert_usage_histograms_empty(body)
 
-    spans = {span.name: span for span in exporter.get_finished_spans()}
-    assert "ollama chat" in spans
-    assert "suggest" in spans
-    assert spans["ollama chat"].status.status_code != StatusCode.ERROR
-    assert spans["suggest"].status.status_code != StatusCode.ERROR
+    finished = exporter.get_finished_spans()
+    assert len(finished) == 3
+    spans = {span.name: span for span in finished}
+    assert set(spans) == {"POST /suggest", "suggest", "ollama chat"}
+    assert spans["ollama chat"].status.status_code == StatusCode.UNSET
+    assert spans["suggest"].status.status_code == StatusCode.UNSET
+    assert spans["POST /suggest"].status.status_code == StatusCode.UNSET
     assert "cancelled" in (spans["ollama chat"].attributes.get(OUTPUT_VALUE) or "")
+    assert "cancelled" in (spans["suggest"].attributes.get(OUTPUT_VALUE) or "")
+    assert "cancelled" in (spans["POST /suggest"].attributes.get(OUTPUT_VALUE) or "")
 
 
 def test_cancel_already_set_records_cancelled_without_ollama_post() -> None:
     """Attempt span opens, cancel already set → gen_ai cancelled, no HTTP to Ollama."""
-    import threading
-
-    from app.telemetry import OUTPUT_VALUE
-
     posts = {"n": 0}
 
     def handler(_request: httpx.Request) -> httpx.Response:
@@ -449,20 +505,24 @@ def test_cancel_already_set_records_cancelled_without_ollama_post() -> None:
 
     assert response.status_code == 499
     assert posts["n"] == 0
-    assert 'gen_ai_request_outcome="cancelled"' in body
-    assert 'gen_ai_request_outcome="error"' not in body
-    spans = {span.name: span for span in exporter.get_finished_spans()}
-    assert "ollama chat" in spans
-    assert spans["ollama chat"].status.status_code != StatusCode.ERROR
+    assert labeled_counter(body, PROM_REQUEST_COUNT, 'gen_ai_request_outcome="cancelled"') == 1.0
+    assert labeled_counter(body, PROM_REQUEST_COUNT, 'gen_ai_request_outcome="error"') == 0.0
+    assert labeled_counter(body, PROM_SUGGEST_SOURCE, 'suggest_source="llm"') == 0.0
+    assert labeled_counter(body, PROM_SUGGEST_SOURCE, 'suggest_source="fallback"') == 0.0
+    _assert_usage_histograms_empty(body)
+
+    finished = exporter.get_finished_spans()
+    assert len(finished) == 3
+    spans = {span.name: span for span in finished}
+    assert spans["ollama chat"].status.status_code == StatusCode.UNSET
+    assert spans["suggest"].status.status_code == StatusCode.UNSET
+    assert spans["POST /suggest"].status.status_code == StatusCode.UNSET
     assert "cancelled" in (spans["ollama chat"].attributes.get(OUTPUT_VALUE) or "")
+    assert "cancelled" in (spans["POST /suggest"].attributes.get(OUTPUT_VALUE) or "")
 
 
 def test_between_attempt_cancel_records_cancelled() -> None:
     """Fail attempt 1, cancel before attempt 2 → cancelled (not a second error)."""
-    import threading
-
-    from app.telemetry import OUTPUT_VALUE
-
     posts = {"n": 0}
     calls = {"n": 0}
 
@@ -514,27 +574,58 @@ def test_between_attempt_cancel_records_cancelled() -> None:
     assert response.status_code == 499
     assert calls["n"] == 2
     assert posts["n"] == 1
-    assert 'gen_ai_request_outcome="cancelled"' in body
     # First attempt still counts as a model error; cancel must not add another.
     assert labeled_counter(body, PROM_REQUEST_COUNT, 'gen_ai_request_outcome="error"') == 1.0
+    assert labeled_counter(body, PROM_REQUEST_COUNT, 'error_type="parse"') == 1.0
     assert labeled_counter(body, PROM_REQUEST_COUNT, 'gen_ai_request_outcome="cancelled"') == 1.0
-    spans = {span.name: span for span in exporter.get_finished_spans()}
-    assert spans["suggest"].status.status_code != StatusCode.ERROR
-    ollama_spans = [s for s in exporter.get_finished_spans() if s.name == "ollama chat"]
-    assert len(ollama_spans) == 2
-    assert any("cancelled" in (s.attributes.get(OUTPUT_VALUE) or "") for s in ollama_spans)
+    assert labeled_counter(body, PROM_SUGGEST_SOURCE, 'suggest_source="llm"') == 0.0
+    assert labeled_counter(body, PROM_SUGGEST_SOURCE, 'suggest_source="fallback"') == 0.0
+
+    finished = exporter.get_finished_spans()
+    attempts = [s for s in finished if s.name == "ollama chat"]
+    assert len(attempts) == 2
+    assert attempts[0].status.status_code == StatusCode.ERROR
+    assert attempts[1].status.status_code == StatusCode.UNSET
+    assert "cancelled" in (attempts[1].attributes.get(OUTPUT_VALUE) or "")
+
+    suggest = next(s for s in finished if s.name == "suggest")
+    root = next(s for s in finished if s.name == "POST /suggest")
+    assert suggest.status.status_code == StatusCode.UNSET
+    assert "cancelled" in (suggest.attributes.get(OUTPUT_VALUE) or "")
+    assert root.status.status_code == StatusCode.UNSET
+    assert "cancelled" in (root.attributes.get(OUTPUT_VALUE) or "")
 
 
 def test_metrics_counts_expectimax_suggest_source() -> None:
-    app = create_app(isolated_settings(export_traces=False), _QuietLLM())
+    app = create_app(isolated_settings(export_traces=False), UnusedLLM())
     client = TestClient(app)
     assert (
         client.post("/suggest", json={"board": OPEN_BOARD, "mode": "expectimax"}).status_code == 200
     )
     body = client.get("/metrics").text
-    assert PROM_SUGGEST_SOURCE in body
-    assert 'suggest_source="expectimax"' in body
-    assert PROM_REQUEST_COUNT not in body or "gen_ai_request_outcome=" not in body
+    assert labeled_counter(body, PROM_SUGGEST_SOURCE, 'suggest_source="expectimax"') == 1.0
+    assert labeled_counter(body, PROM_SUGGEST_SOURCE, 'suggest_source="llm"') == 0.0
+    assert labeled_counter(body, PROM_SUGGEST_SOURCE, 'suggest_source="fallback"') == 0.0
+    assert _metric_sample_sum(body, f"{PROM_REQUEST_COUNT}_total") == 0.0
+    _assert_usage_histograms_empty(body)
+
+
+def test_suggest_status_count_is_order_independent_and_sums_series() -> None:
+    sample = "\n".join(
+        [
+            "http_server_duration_milliseconds_count{"
+            'http_target="/suggest",http_status_code="200",net_host_port="8000"} 2.0',
+            "http_server_duration_milliseconds_count{"
+            'http_status_code="200",http_target="/suggest",net_host_port="8001"} 3.0',
+            "http_server_duration_milliseconds_count{"
+            'http_status_code="200",http_target="/health"} 9.0',
+            "http_server_duration_milliseconds_count{"
+            'http_status_code="429",http_target="/suggest"} 1.0',
+        ]
+    )
+    assert _suggest_status_count(sample, 200) == 5.0
+    assert _suggest_status_count(sample, 429) == 1.0
+    assert _suggest_status_count(sample, 499) == 0.0
 
 
 def test_metrics_records_suggest_http_status_codes() -> None:
@@ -548,13 +639,14 @@ def test_metrics_records_suggest_http_status_codes() -> None:
     assert client.post("/suggest", json={"board": [[0, 0, 0, 0]], "mode": "llm"}).status_code == 422
     assert client.post("/suggest", json={"board": STUCK_BOARD, "mode": "llm"}).status_code == 409
     body = client.get("/metrics").text
-    assert _suggest_status_count(body, 200) >= 1.0
-    assert _suggest_status_count(body, 422) >= 1.0
-    assert _suggest_status_count(body, 409) >= 1.0
-    # 409 returns no body source; 200 did increment llm.
-    assert 'suggest_source="llm"' in body
+    assert _suggest_status_count(body, 200) == 1.0
+    assert _suggest_status_count(body, 422) == 1.0
+    assert _suggest_status_count(body, 409) == 1.0
+    assert labeled_counter(body, PROM_SUGGEST_SOURCE, 'suggest_source="llm"') == 1.0
+    assert labeled_counter(body, PROM_SUGGEST_SOURCE, 'suggest_source="fallback"') == 0.0
 
-    limited = create_app(
+    # Spend 429
+    spend_app = create_app(
         isolated_settings(export_traces=False),
         _QuietLLM(),
         rate_limiters={
@@ -562,20 +654,57 @@ def test_metrics_records_suggest_http_status_codes() -> None:
             "expectimax": SuggestRateLimiter(30, 60),
         },
     )
-    limited_client = TestClient(limited)
+    spend_client = TestClient(spend_app)
     assert (
-        limited_client.post("/suggest", json={"board": OPEN_BOARD, "mode": "llm"}).status_code
-        == 200
+        spend_client.post("/suggest", json={"board": OPEN_BOARD, "mode": "llm"}).status_code == 200
     )
+    spend_429 = spend_client.post("/suggest", json={"board": OPEN_BOARD, "mode": "llm"})
+    assert spend_429.status_code == 429
+    assert spend_429.headers[HEADER_SUGGEST_LIMIT] == "spend"
+    spend_body = spend_client.get("/metrics").text
+    assert _suggest_status_count(spend_body, 200) == 1.0
+    assert _suggest_status_count(spend_body, 429) == 1.0
+    assert labeled_counter(spend_body, PROM_SUGGEST_LIMIT_REJECT, 'reason="spend"') == 1.0
+    assert labeled_counter(spend_body, PROM_SUGGEST_LIMIT_REJECT, 'reason="capacity"') == 0.0
+    assert labeled_counter(spend_body, PROM_SUGGEST_SOURCE, 'suggest_source="llm"') == 1.0
+    assert labeled_counter(spend_body, PROM_SUGGEST_SOURCE, 'suggest_source="fallback"') == 0.0
+
+    # Capacity 429
+    held_gate = InFlightGate(1)
+    held_slot = held_gate.acquire().token
+    try:
+        cap_app = create_app(
+            isolated_settings(export_traces=False),
+            UnusedLLM(),
+            llm_in_flight=held_gate,
+        )
+        cap_client = TestClient(cap_app)
+        cap_429 = cap_client.post("/suggest", json={"board": OPEN_BOARD, "mode": "llm"})
+        assert cap_429.status_code == 429
+        assert cap_429.headers[HEADER_SUGGEST_LIMIT] == "capacity"
+        cap_body = cap_client.get("/metrics").text
+    finally:
+        held_gate.release(held_slot)
+    assert _suggest_status_count(cap_body, 429) == 1.0
+    assert _suggest_status_count(cap_body, 200) == 0.0
+    assert labeled_counter(cap_body, PROM_SUGGEST_LIMIT_REJECT, 'reason="capacity"') == 1.0
+    assert labeled_counter(cap_body, PROM_SUGGEST_LIMIT_REJECT, 'reason="spend"') == 0.0
+    assert _metric_sample_sum(cap_body, f"{PROM_SUGGEST_SOURCE}_total") == 0.0
+
+    # Cancel 499
+    class _CancelLLM:
+        def suggest_move(self, *args: object, **kwargs: object) -> ModelSuggestion:
+            raise SuggestCancelled()
+
+    cancel_app = create_app(isolated_settings(export_traces=False), _CancelLLM())
+    cancel_client = TestClient(cancel_app)
     assert (
-        limited_client.post("/suggest", json={"board": OPEN_BOARD, "mode": "llm"}).status_code
-        == 429
+        cancel_client.post("/suggest", json={"board": OPEN_BOARD, "mode": "llm"}).status_code == 499
     )
-    limited_body = limited_client.get("/metrics").text
-    assert _suggest_status_count(limited_body, 429) >= 1.0
-    # Rate-limit path must not invent an extra suggest_source beyond the 200.
-    assert labeled_counter(limited_body, PROM_SUGGEST_SOURCE, 'suggest_source="llm"') == 1.0
-    assert labeled_counter(limited_body, PROM_SUGGEST_SOURCE, 'suggest_source="fallback"') == 0.0
+    cancel_body = cancel_client.get("/metrics").text
+    assert _suggest_status_count(cancel_body, 499) == 1.0
+    assert _suggest_status_count(cancel_body, 200) == 0.0
+    assert _metric_sample_sum(cancel_body, f"{PROM_SUGGEST_SOURCE}_total") == 0.0
 
 
 def test_metrics_counts_response_error_type() -> None:
@@ -590,9 +719,53 @@ def test_metrics_counts_response_error_type() -> None:
         assert client.post("/suggest", json={"board": OPEN_BOARD, "mode": "llm"}).status_code == 200
         body = client.get("/metrics").text
 
-    assert 'gen_ai_request_outcome="error"' in body
-    assert 'error_type="response"' in body
-    assert 'suggest_source="fallback"' in body
+    assert (
+        _metric_sample_sum(
+            body,
+            f"{PROM_REQUEST_COUNT}_total",
+            'gen_ai_request_outcome="error"',
+            'error_type="response"',
+        )
+        == 1.0
+    )
+    assert labeled_counter(body, PROM_REQUEST_COUNT, 'error_type="request"') == 0.0
+    assert labeled_counter(body, PROM_SUGGEST_SOURCE, 'suggest_source="fallback"') == 1.0
+    assert labeled_counter(body, PROM_SUGGEST_SOURCE, 'suggest_source="llm"') == 0.0
+    _assert_usage_histograms_empty(body)
+
+
+@pytest.mark.parametrize("non_object_json", [[], None, "str", 123])
+def test_metrics_counts_non_object_json_as_response_error_type(non_object_json: object) -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        # Encode explicitly because httpx.Response(json=None) treats None as "no body".
+        return httpx.Response(
+            200,
+            content=json.dumps(non_object_json).encode(),
+            headers={"content-type": "application/json"},
+        )
+
+    settings = isolated_settings(export_traces=False, llm_max_attempts=1)
+    transport = httpx.MockTransport(handler)
+    with httpx.Client(transport=transport, base_url="http://ollama.test") as http:
+        app = create_app(settings, OllamaClient(settings, client=http))
+        client = TestClient(app)
+        assert client.post("/suggest", json={"board": OPEN_BOARD, "mode": "llm"}).status_code == 200
+        body = client.get("/metrics").text
+
+    assert (
+        _metric_sample_sum(
+            body,
+            f"{PROM_REQUEST_COUNT}_total",
+            'error_type="response"',
+            'gen_ai_request_outcome="error"',
+        )
+        == 1.0
+    )
+    assert labeled_counter(body, PROM_REQUEST_COUNT, 'error_type="response"') == 1.0
+    assert labeled_counter(body, PROM_REQUEST_COUNT, 'error_type="request"') == 0.0
+    assert labeled_counter(body, PROM_SUGGEST_SOURCE, 'suggest_source="fallback"') == 1.0
+    assert labeled_counter(body, PROM_SUGGEST_SOURCE, 'suggest_source="llm"') == 0.0
+    _assert_usage_histograms_empty(body)
 
 
 def test_metrics_counts_parse_error_type() -> None:
@@ -607,9 +780,20 @@ def test_metrics_counts_parse_error_type() -> None:
         assert client.post("/suggest", json={"board": OPEN_BOARD, "mode": "llm"}).status_code == 200
         body = client.get("/metrics").text
 
-    assert 'gen_ai_request_outcome="error"' in body
-    assert 'error_type="parse"' in body
-    assert 'suggest_source="fallback"' in body
+    assert (
+        _metric_sample_sum(
+            body,
+            f"{PROM_REQUEST_COUNT}_total",
+            'gen_ai_request_outcome="error"',
+            'error_type="parse"',
+        )
+        == 1.0
+    )
+    assert labeled_counter(body, PROM_REQUEST_COUNT, 'gen_ai_request_outcome="error"') == 1.0
+    assert labeled_counter(body, PROM_REQUEST_COUNT, 'gen_ai_request_outcome="success"') == 0.0
+    assert labeled_counter(body, PROM_SUGGEST_SOURCE, 'suggest_source="fallback"') == 1.0
+    assert labeled_counter(body, PROM_SUGGEST_SOURCE, 'suggest_source="llm"') == 0.0
+    _assert_usage_histograms_recorded(body, prompt_tokens=40.0, completion_tokens=12.0)
 
 
 def test_metrics_counts_illegal_move_error_type() -> None:
@@ -625,9 +809,20 @@ def test_metrics_counts_illegal_move_error_type() -> None:
         assert client.post("/suggest", json={"board": OPEN_BOARD, "mode": "llm"}).status_code == 200
         body = client.get("/metrics").text
 
-    assert 'gen_ai_request_outcome="error"' in body
-    assert 'error_type="illegal_move"' in body
-    assert 'suggest_source="fallback"' in body
+    assert (
+        _metric_sample_sum(
+            body,
+            f"{PROM_REQUEST_COUNT}_total",
+            'gen_ai_request_outcome="error"',
+            'error_type="illegal_move"',
+        )
+        == 1.0
+    )
+    assert labeled_counter(body, PROM_REQUEST_COUNT, 'gen_ai_request_outcome="error"') == 1.0
+    assert labeled_counter(body, PROM_REQUEST_COUNT, 'gen_ai_request_outcome="success"') == 0.0
+    assert labeled_counter(body, PROM_SUGGEST_SOURCE, 'suggest_source="fallback"') == 1.0
+    assert labeled_counter(body, PROM_SUGGEST_SOURCE, 'suggest_source="llm"') == 0.0
+    _assert_usage_histograms_recorded(body, prompt_tokens=40.0, completion_tokens=12.0)
 
 
 def test_suggest_nests_llm_under_suggest_chain() -> None:
@@ -685,6 +880,7 @@ def test_suggest_nests_llm_under_suggest_chain() -> None:
     assert attrs[LLM_PROVIDER] == "ollama"
     assert attrs[LLM_SYSTEM] == "ollama"
     assert attrs[LLM_MODEL_NAME] == "test-model"
+    assert SpanAttributes.LLM_RESPONSE_MODEL_NAME not in attrs
     assert attrs[LLM_FINISH_REASON] == "stop"
     assert "Legal moves:" in attrs[LLM_INPUT_MESSAGE_CONTENT]
     assert attrs[INPUT_VALUE] == attrs[LLM_INPUT_MESSAGE_CONTENT]
@@ -692,6 +888,7 @@ def test_suggest_nests_llm_under_suggest_chain() -> None:
     assert attrs[OUTPUT_VALUE] == attrs[LLM_OUTPUT_MESSAGE_CONTENT]
     assert attrs[LLM_TOKEN_COUNT_PROMPT] == 40
     assert attrs[LLM_TOKEN_COUNT_COMPLETION] == 12
+    assert attrs[LLM_TOKEN_COUNT_TOTAL] == 52
     assert attrs[LLM_TOKEN_COUNT_CACHE_READ] == 10
     assert "metadata" not in attrs
 
@@ -706,6 +903,57 @@ def test_suggest_nests_llm_under_suggest_chain() -> None:
     done = next(event for event in llm_span.events if event.name == "Generation Done")
     assert done.attributes["provider_total"] == pytest.approx(0.6)
     assert done.attributes["time_per_output_token"] == pytest.approx(0.025)
+
+
+def test_record_llm_usage_non_default_branches() -> None:
+    """Response model override, zero cache_read omission, and ttd - eval_time TTFT fallback."""
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            json={
+                "model": "gemma4:27b-q4",
+                "message": {"content": '{"move": "right", "reason": "Opens the row."}'},
+                "done_reason": "stop",
+                "prompt_eval_count": 25,
+                "prompt_eval_cached_count": 0,
+                "eval_count": 5,
+                # Omit load_duration and prompt_eval_duration so TTFT falls back to ttd - eval.
+                "eval_duration": 250_000_000,
+                "total_duration": 600_000_000,
+            },
+        )
+
+    exporter = InMemorySpanExporter()
+    settings = isolated_settings(export_traces=True, ollama_model="test-model")
+    transport = httpx.MockTransport(handler)
+    with httpx.Client(transport=transport, base_url="http://ollama.test") as http:
+        app = create_app(
+            settings,
+            OllamaClient(settings, client=http),
+            SimpleSpanProcessor(exporter),
+        )
+        client = TestClient(app)
+        response = client.post("/suggest", json={"board": OPEN_BOARD, "mode": "llm"})
+        body = client.get("/metrics").text
+
+    assert response.status_code == 200
+    llm_span = next(s for s in exporter.get_finished_spans() if s.name == "ollama chat")
+    attrs = llm_span.attributes
+    assert attrs[LLM_MODEL_NAME] == "test-model"
+    assert attrs[SpanAttributes.LLM_RESPONSE_MODEL_NAME] == "gemma4:27b-q4"
+    assert LLM_TOKEN_COUNT_CACHE_READ not in attrs
+    assert attrs[LLM_TOKEN_COUNT_PROMPT] == 25
+    assert attrs[LLM_TOKEN_COUNT_COMPLETION] == 5
+    assert attrs[LLM_TOKEN_COUNT_TOTAL] == 30
+
+    first_token = next(
+        event for event in llm_span.events if event.name == "First Token Stream Event"
+    )
+    assert first_token.attributes["ttft"] == pytest.approx(0.35)
+    assert "load" not in first_token.attributes
+    assert "prompt_eval" not in first_token.attributes
+    _assert_usage_histograms_recorded(body, prompt_tokens=25.0, completion_tokens=5.0)
 
 
 def test_retries_add_sibling_llm_spans_under_suggest() -> None:
@@ -748,8 +996,8 @@ def test_retries_add_sibling_llm_spans_under_suggest() -> None:
     assert len(llm_spans) == 2
     suggest = next(span for span in finished if span.name == "suggest")
     assert all(span.parent and span.parent.span_id == suggest.context.span_id for span in llm_spans)
-    assert sum(1 for span in llm_spans if span.status.status_code == StatusCode.ERROR) == 1
-    assert sum(1 for span in llm_spans if span.status.status_code != StatusCode.ERROR) == 1
+    assert llm_spans[0].status.status_code == StatusCode.ERROR
+    assert llm_spans[1].status.status_code == StatusCode.UNSET
     assert "failures" in suggest.attributes[OUTPUT_VALUE]
     assert "ollama request failed" in suggest.attributes[OUTPUT_VALUE]
 
@@ -790,7 +1038,7 @@ def test_rejected_move_is_an_llm_error_and_stays_on_the_chain() -> None:
     llm_spans = [span for span in finished if span.name == "ollama chat"]
     assert len(llm_spans) == 2
     assert llm_spans[0].status.status_code == StatusCode.ERROR
-    assert llm_spans[1].status.status_code != StatusCode.ERROR
+    assert llm_spans[1].status.status_code == StatusCode.UNSET
     suggest = next(span for span in finished if span.name == "suggest")
     root = next(span for span in finished if span.name == "POST /suggest")
     assert "illegal move up" in suggest.attributes[OUTPUT_VALUE]
@@ -820,6 +1068,8 @@ def test_failed_ollama_call_marks_llm_error() -> None:
     assert response.json()["source"] == "fallback"
     spans = {span.name: span for span in exporter.get_finished_spans()}
     assert spans["ollama chat"].status.status_code == StatusCode.ERROR
+    assert spans["suggest"].status.status_code == StatusCode.UNSET
+    assert spans["POST /suggest"].status.status_code == StatusCode.UNSET
     assert '"source": "fallback"' in spans["suggest"].attributes[OUTPUT_VALUE]
 
 
@@ -827,7 +1077,7 @@ def test_stuck_board_marks_http_span_without_llm() -> None:
     exporter = InMemorySpanExporter()
     app = create_app(
         isolated_settings(export_traces=True),
-        _QuietLLM(),
+        UnusedLLM(),
         SimpleSpanProcessor(exporter),
     )
     response = TestClient(app).post("/suggest", json={"board": STUCK_BOARD, "mode": "llm"})
@@ -840,6 +1090,220 @@ def test_stuck_board_marks_http_span_without_llm() -> None:
     assert "65536" in root.attributes[INPUT_VALUE]
     assert "no legal move" in root.attributes[OUTPUT_VALUE]
     assert "failures" not in root.attributes[OUTPUT_VALUE]
+
+
+@pytest.mark.parametrize("rejection_kind", ["422", "spend_429", "capacity_429"])
+def test_pre_suggester_422_and_429_emit_single_unset_http_span_without_io(
+    rejection_kind: str,
+) -> None:
+    """422 and both 429 gates stop before set_json_io / suggest child / suggest_source."""
+    exporter = InMemorySpanExporter()
+    held_gate = InFlightGate(1)
+    held_slot: object | None = None
+    rate_limiters = None
+
+    if rejection_kind == "spend_429":
+        exhausted = SuggestRateLimiter(1, 60)
+        assert exhausted.allow().retry_after is None
+        rate_limiters = {
+            "llm": exhausted,
+            "expectimax": SuggestRateLimiter(30, 60),
+        }
+    elif rejection_kind == "capacity_429":
+        held_slot = held_gate.acquire().token
+
+    try:
+        app = create_app(
+            isolated_settings(export_traces=True),
+            UnusedLLM(),
+            SimpleSpanProcessor(exporter),
+            rate_limiters=rate_limiters,
+            llm_in_flight=held_gate if rejection_kind == "capacity_429" else None,
+        )
+        client = TestClient(app)
+        payload = (
+            {"board": [[0, 0, 0, 0]], "mode": "llm"}
+            if rejection_kind == "422"
+            else {"board": OPEN_BOARD, "mode": "llm"}
+        )
+        response = client.post("/suggest", json=payload)
+        body = client.get("/metrics").text
+    finally:
+        if held_slot is not None:
+            held_gate.release(held_slot)
+
+    expected_status = 422 if rejection_kind == "422" else 429
+    assert response.status_code == expected_status
+
+    finished = exporter.get_finished_spans()
+    assert len(finished) == 1
+    root = finished[0]
+    assert root.name == "POST /suggest"
+    assert root.attributes[OPENINFERENCE_SPAN_KIND] == SPAN_KIND_CHAIN
+    assert root.status.status_code == StatusCode.UNSET
+    assert INPUT_VALUE not in root.attributes
+    assert OUTPUT_VALUE not in root.attributes
+
+    assert _suggest_status_count(body, expected_status) == 1.0
+    assert _metric_sample_sum(body, f"{PROM_SUGGEST_SOURCE}_total") == 0.0
+    assert _metric_sample_sum(body, f"{PROM_REQUEST_COUNT}_total") == 0.0
+    if rejection_kind == "spend_429":
+        assert response.headers[HEADER_SUGGEST_LIMIT] == "spend"
+        assert labeled_counter(body, PROM_SUGGEST_LIMIT_REJECT, 'reason="spend"') == 1.0
+        assert labeled_counter(body, PROM_SUGGEST_LIMIT_REJECT, 'reason="capacity"') == 0.0
+    elif rejection_kind == "capacity_429":
+        assert response.headers[HEADER_SUGGEST_LIMIT] == "capacity"
+        assert labeled_counter(body, PROM_SUGGEST_LIMIT_REJECT, 'reason="capacity"') == 1.0
+        assert labeled_counter(body, PROM_SUGGEST_LIMIT_REJECT, 'reason="spend"') == 0.0
+    else:
+        assert _metric_sample_sum(body, f"{PROM_SUGGEST_LIMIT_REJECT}_total") == 0.0
+
+
+def test_expectimax_200_and_fallback_span_and_metric_exit_tuples(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Expectimax 200 vs Expectimax fallback: 2 CHAIN spans, 0 LLM spans, span-only failures."""
+    # (1) Normal 200 expectimax
+    ok_exporter = InMemorySpanExporter()
+    ok_app = create_app(
+        isolated_settings(export_traces=True),
+        UnusedLLM(),
+        SimpleSpanProcessor(ok_exporter),
+    )
+    ok_client = TestClient(ok_app)
+    ok_resp = ok_client.post("/suggest", json={"board": OPEN_BOARD, "mode": "expectimax"})
+    ok_body = ok_client.get("/metrics").text
+
+    assert ok_resp.status_code == 200
+    assert ok_resp.json()["source"] == "expectimax"
+    ok_finished = ok_exporter.get_finished_spans()
+    assert len(ok_finished) == 2
+    assert {s.name for s in ok_finished} == {"POST /suggest", "suggest"}
+    ok_spans = {s.name: s for s in ok_finished}
+    assert ok_spans["POST /suggest"].attributes[OPENINFERENCE_SPAN_KIND] == SPAN_KIND_CHAIN
+    assert ok_spans["suggest"].attributes[OPENINFERENCE_SPAN_KIND] == SPAN_KIND_CHAIN
+    assert ok_spans["POST /suggest"].status.status_code == StatusCode.UNSET
+    assert ok_spans["suggest"].status.status_code == StatusCode.UNSET
+    assert ok_spans["suggest"].parent is not None
+    assert ok_spans["suggest"].parent.span_id == ok_spans["POST /suggest"].context.span_id
+    assert "failures" not in json.loads(ok_spans["suggest"].attributes[OUTPUT_VALUE])
+    assert "failures" not in json.loads(ok_spans["POST /suggest"].attributes[OUTPUT_VALUE])
+    assert labeled_counter(ok_body, PROM_SUGGEST_SOURCE, 'suggest_source="expectimax"') == 1.0
+    assert labeled_counter(ok_body, PROM_SUGGEST_SOURCE, 'suggest_source="fallback"') == 0.0
+    assert _metric_sample_sum(ok_body, f"{PROM_REQUEST_COUNT}_total") == 0.0
+
+    # (2) Expectimax 200 fallback when choose_move returns None
+    monkeypatch.setattr("app.suggester.choose_move", lambda board, cancel=None: None)
+    fb_exporter = InMemorySpanExporter()
+    fb_app = create_app(
+        isolated_settings(export_traces=True),
+        UnusedLLM(),
+        SimpleSpanProcessor(fb_exporter),
+    )
+    fb_client = TestClient(fb_app)
+    fb_resp = fb_client.post("/suggest", json={"board": OPEN_BOARD, "mode": "expectimax"})
+    fb_body = fb_client.get("/metrics").text
+
+    assert fb_resp.status_code == 200
+    assert fb_resp.json()["source"] == "fallback"
+    assert "failures" not in fb_resp.json()
+    fb_finished = fb_exporter.get_finished_spans()
+    assert len(fb_finished) == 2
+    assert {s.name for s in fb_finished} == {"POST /suggest", "suggest"}
+    fb_spans = {s.name: s for s in fb_finished}
+    assert fb_spans["POST /suggest"].attributes[OPENINFERENCE_SPAN_KIND] == SPAN_KIND_CHAIN
+    assert fb_spans["suggest"].attributes[OPENINFERENCE_SPAN_KIND] == SPAN_KIND_CHAIN
+    assert fb_spans["POST /suggest"].status.status_code == StatusCode.UNSET
+    assert fb_spans["suggest"].status.status_code == StatusCode.UNSET
+    assert fb_spans["suggest"].parent is not None
+    assert fb_spans["suggest"].parent.span_id == fb_spans["POST /suggest"].context.span_id
+
+    suggest_out = json.loads(fb_spans["suggest"].attributes[OUTPUT_VALUE])
+    root_out = json.loads(fb_spans["POST /suggest"].attributes[OUTPUT_VALUE])
+    assert suggest_out["source"] == "fallback"
+    assert suggest_out["failures"] == ["no scored move"]
+    assert root_out["source"] == "fallback"
+    assert "failures" not in root_out
+
+    assert labeled_counter(fb_body, PROM_SUGGEST_SOURCE, 'suggest_source="fallback"') == 1.0
+    assert labeled_counter(fb_body, PROM_SUGGEST_SOURCE, 'suggest_source="expectimax"') == 0.0
+    assert labeled_counter(fb_body, PROM_SUGGEST_SOURCE, 'suggest_source="llm"') == 0.0
+    assert _metric_sample_sum(fb_body, f"{PROM_REQUEST_COUNT}_total") == 0.0
+    _assert_usage_histograms_empty(fb_body)
+
+
+def test_pre_suggester_vs_mid_expectimax_499_cancel_span_shapes(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Pre-suggester 499 emits POST /suggest only; mid-Expectimax emits POST /suggest + suggest."""
+    # (1) Pre-suggester cancel: cancel Event already set before MoveSuggester opens `suggest`.
+    real_suggest = MoveSuggester.suggest
+
+    def preset_cancel_suggest(
+        self: MoveSuggester,
+        board: list[list[int]],
+        mode: str,
+        cancel: threading.Event | None = None,
+    ):
+        assert cancel is not None
+        cancel.set()
+        return real_suggest(self, board, mode, cancel)
+
+    pre_exporter = InMemorySpanExporter()
+    with monkeypatch.context() as mp:
+        mp.setattr(MoveSuggester, "suggest", preset_cancel_suggest)
+        pre_app = create_app(
+            isolated_settings(export_traces=True),
+            UnusedLLM(),
+            SimpleSpanProcessor(pre_exporter),
+        )
+        pre_client = TestClient(pre_app)
+        pre_resp = pre_client.post("/suggest", json={"board": OPEN_BOARD, "mode": "llm"})
+        pre_body = pre_client.get("/metrics").text
+
+    assert pre_resp.status_code == 499
+    pre_finished = pre_exporter.get_finished_spans()
+    assert len(pre_finished) == 1
+    pre_root = pre_finished[0]
+    assert pre_root.name == "POST /suggest"
+    assert pre_root.status.status_code == StatusCode.UNSET
+    assert "cancelled" in (pre_root.attributes.get(OUTPUT_VALUE) or "")
+    assert _suggest_status_count(pre_body, 499) == 1.0
+    assert _metric_sample_sum(pre_body, f"{PROM_REQUEST_COUNT}_total") == 0.0
+    assert _metric_sample_sum(pre_body, f"{PROM_SUGGEST_SOURCE}_total") == 0.0
+    _assert_usage_histograms_empty(pre_body)
+
+    # (2) Mid-Expectimax cancel: `suggest` span is open when choose_move sees cancel set.
+    def cancel_inside_expectimax(board: list[list[int]], *, cancel: threading.Event | None = None):
+        assert cancel is not None
+        cancel.set()
+        return real_choose_move(board, cancel=cancel)
+
+    mid_exporter = InMemorySpanExporter()
+    with monkeypatch.context() as mp:
+        mp.setattr("app.suggester.choose_move", cancel_inside_expectimax)
+        mid_app = create_app(
+            isolated_settings(export_traces=True),
+            UnusedLLM(),
+            SimpleSpanProcessor(mid_exporter),
+        )
+        mid_client = TestClient(mid_app)
+        mid_resp = mid_client.post("/suggest", json={"board": OPEN_BOARD, "mode": "expectimax"})
+        mid_body = mid_client.get("/metrics").text
+
+    assert mid_resp.status_code == 499
+    mid_finished = mid_exporter.get_finished_spans()
+    assert len(mid_finished) == 2
+    assert {s.name for s in mid_finished} == {"POST /suggest", "suggest"}
+    mid_spans = {s.name: s for s in mid_finished}
+    assert mid_spans["POST /suggest"].status.status_code == StatusCode.UNSET
+    assert mid_spans["suggest"].status.status_code == StatusCode.UNSET
+    assert "cancelled" in (mid_spans["POST /suggest"].attributes.get(OUTPUT_VALUE) or "")
+    assert "cancelled" in (mid_spans["suggest"].attributes.get(OUTPUT_VALUE) or "")
+    assert _suggest_status_count(mid_body, 499) == 1.0
+    assert _metric_sample_sum(mid_body, f"{PROM_REQUEST_COUNT}_total") == 0.0
+    assert _metric_sample_sum(mid_body, f"{PROM_SUGGEST_SOURCE}_total") == 0.0
+    _assert_usage_histograms_empty(mid_body)
 
 
 def test_labeled_counter_sums_matching_subseries() -> None:

@@ -5,12 +5,20 @@ import threading
 import time
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
+from http.server import ThreadingHTTPServer
 from typing import Any, NoReturn
 
 from app.cancel import SuggestCancelled
 from app.config import Settings
 from app.expectimax import Choice
 from app.llm import ModelSuggestion
+
+
+class DaemonHTTPServer(ThreadingHTTPServer):
+    """Test HTTP server whose worker threads never hang interpreter exit on failure."""
+
+    daemon_threads = True
+
 
 # Right-hand column. Left only slides it, which is also the fallback direction.
 COLUMN_PAIR = [
@@ -196,6 +204,11 @@ class FakeLLM:
     def __init__(self, replies: list) -> None:
         self._replies = list(replies)
         self.calls = 0
+        self.board: list[list[int]] | None = None
+        self.legal: list[str] = []
+        self.rejected: list[str] = []
+        self.invalid_reply = False
+        self.call_history: list[dict[str, object]] = []
         self._lock = threading.Lock()
 
     def suggest_move(
@@ -208,13 +221,22 @@ class FakeLLM:
         cancel: threading.Event | None = None,
     ) -> ModelSuggestion:
         with self._lock:
+            self.board = [list(row) for row in board]
+            self.legal = list(legal)
+            self.rejected = list(rejected)
+            self.invalid_reply = invalid_reply
             self.calls += 1
-        self.legal = legal
-        self.rejected = list(rejected)
-        self.invalid_reply = invalid_reply
-        if cancel is not None and cancel.is_set():
-            raise SuggestCancelled()
-        reply = self._replies.pop(0)
+            self.call_history.append(
+                {
+                    "board": self.board,
+                    "legal": self.legal,
+                    "rejected": self.rejected,
+                    "invalid_reply": self.invalid_reply,
+                }
+            )
+            if cancel is not None and cancel.is_set():
+                raise SuggestCancelled()
+            reply = self._replies.pop(0)
         if isinstance(reply, Exception):
             raise reply
         if isinstance(reply, str):

@@ -73,8 +73,8 @@ Export when `EXPORT_TRACES=true` (off by default; set in root `.env` for Compose
 
 | Span name | Kind | When | Notable attributes / I/O |
 |---|---|---|---|
-| `POST /suggest` | CHAIN (HTTP server) | Every `/suggest` | Request/response JSON after the rate-limit gate (429 has no I/O attrs); ERROR on 409. Stuck board never opens `suggest`. |
-| `suggest` | CHAIN | Suggest pipeline (past rate limit, board has legal moves) | Input: `mode`, `board`, `legal`. Output: suggest result; may include `failures` after retries. Also sets `input.mime_type` / `output.mime_type`. |
+| `POST /suggest` | CHAIN (HTTP server) | Every `/suggest` | Request/response JSON after the rate-limit and capacity gates (`422` and `429` have no I/O attrs, no `suggest` child, and `StatusCode.UNSET`); `ERROR` on `409`. Stuck board and pre-suggester `499` never open `suggest`. |
+| `suggest` | CHAIN | Suggest pipeline (past rate limit, board has legal moves) | Input: `mode`, `board`, `legal`. Output: suggest result; may include `failures` after LLM retries or an Expectimax fallback (`no scored move` / `illegal move {dir}`). Also sets `input.mime_type` / `output.mime_type`. |
 | `ollama chat` | LLM | Each Ollama attempt | See LLM attributes below; status ERROR on request/parse/illegal-move |
 
 Expectimax / rate-limit-before-model paths do not open `ollama chat`. Each HTTP `/suggest` may increment `request_count` once per Ollama attempt (retries → multiple).
@@ -141,7 +141,7 @@ HTTP duration / active series still carry host-ish labels (`http_host`, `http_se
 | `suggest_source` | Meaning |
 |---|---|
 | `llm` | Accepted model move + reason |
-| `fallback` | Heuristic after LLM attempts exhausted / budget |
+| `fallback` | Heuristic after LLM attempts exhausted / budget, or Expectimax miss (`no scored move` / `illegal move`) |
 | `expectimax` | Expectimax search move |
 
 Not incremented on 429 (rate limit) or 409 (no legal move).
@@ -155,7 +155,7 @@ Not incremented on 429 (rate limit) or 409 (no legal move).
 | `timeout` | `httpx.TimeoutException` on the Ollama call |
 | `cancelled` | Client disconnect / abort after an Ollama attempt span opened (including cancel before the HTTP POST); not a model failure |
 
-Histograms for duration/tokens record only when usage mapping runs (successful Ollama body path), including attempts that later fail parse/illegal — those attempts still get `request_count` `error`. Cancelled attempts do not increment `suggest_source`. Cancel before the LLM loop starts (or expectimax-only cancel) has no GenAI series (HTTP `499` + chain span only).
+Histograms for duration/tokens record only when usage mapping runs (successful Ollama body path), including attempts that later fail parse/illegal — those attempts still get `request_count` `error`. Cancelled attempts do not increment `suggest_source`. Pre-suggester cancel (`499` before `suggest` opens) emits only `POST /suggest` (`0` GenAI series, `StatusCode.UNSET`), whereas mid-Expectimax cancel emits `POST /suggest` + `suggest` (`0` GenAI series, `StatusCode.UNSET`).
 
 **`client_suggest_outcome` (one increment per browser `POST /client-events`):**
 
@@ -178,7 +178,7 @@ Not emitted on success. Stale-token ignores that never aborted do not beacon.
 | LLM failures | `error` + `error_type` = `request` \| `response` \| `parse` \| `illegal_move`; `timeout`; `suggest_source=fallback` |
 | LLM cancel | `cancelled` (not `error`); ollama/suggest spans not ERROR; no `suggest_source`; includes pre-POST and between-attempt abort once an attempt span opened |
 | Suggest sources | `llm` / `fallback` / `expectimax` (expectimax does not open Ollama) |
-| HTTP `/suggest` | `http_server_duration_milliseconds_count` for status `200` / `422` / `409` / `429` (429 does not bump `suggest_source`) |
+| HTTP `/suggest` | `http_server_duration_milliseconds_count` for status `200` / `422` / `409` / `429` / `499` (`422` / `429` / `409` / `499` do not bump `suggest_source`) |
 | Client `traceparent` | Fixed header → `/suggest` spans share that `trace_id` and parent span id |
 | Client beacons | `client_suggest_outcome_total` for `fail` / `rate_limit` / `model_busy` / `cancel`; `/client-events` not traced |
 | Suggest limit rejects | `suggest_limit_reject_total` for `capacity` / `spend` |

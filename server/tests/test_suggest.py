@@ -1,7 +1,9 @@
+import asyncio
 import json
 import logging
 import threading
 import time
+from http.server import BaseHTTPRequestHandler
 
 import httpx
 import pytest
@@ -21,6 +23,7 @@ from app.rate_limit import (
 )
 from app.schemas import MAX_TILE
 from app.suggester import MoveSuggester
+from app.telemetry import PROM_REQUEST_COUNT
 from helpers import (
     COLUMN_PAIR,
     E2E_BOARD_COUNT,
@@ -32,9 +35,11 @@ from helpers import (
     STUCK_BOARD,
     BlockingExpectimax,
     BlockingLLM,
+    DaemonHTTPServer,
     FakeLLM,
     FrozenClock,
     isolated_settings,
+    labeled_counter,
 )
 
 MERGE_BOARD = [
@@ -182,6 +187,7 @@ def test_llm_in_flight_blocks_second_call_while_first_holds() -> None:
 
         llm.release.set()
         holder.join(timeout=3)
+        assert not holder.is_alive()
         assert results["first"] == 200
         assert client.post("/suggest", json=body).status_code == 200
         assert llm.calls == 2
@@ -222,6 +228,8 @@ def test_llm_in_flight_two_admits_two_blocks_third() -> None:
         llm.release.set()
         first.join(timeout=3)
         second.join(timeout=3)
+        assert not first.is_alive()
+        assert not second.is_alive()
         assert results == {"first": 200, "second": 200}
         # No leaked slots after drain.
         probe = gate.acquire()
@@ -236,11 +244,12 @@ def test_expectimax_unaffected_by_llm_in_flight_gate() -> None:
     settings = isolated_settings(suggest_rate_limit_requests=10, llm_max_in_flight=1)
     app = create_app(settings, llm)
     body_llm = {"board": OPEN_BOARD, "mode": "llm"}
+    holder_status: dict[str, int] = {}
 
     with TestClient(app) as client:
 
         def hold() -> None:
-            client.post("/suggest", json=body_llm)
+            holder_status["code"] = client.post("/suggest", json=body_llm).status_code
 
         holder = threading.Thread(target=hold)
         holder.start()
@@ -255,6 +264,8 @@ def test_expectimax_unaffected_by_llm_in_flight_gate() -> None:
 
         llm.release.set()
         holder.join(timeout=3)
+        assert not holder.is_alive()
+        assert holder_status == {"code": 200}
 
 
 def test_expectimax_in_flight_blocks_when_full(
@@ -295,6 +306,7 @@ def test_expectimax_in_flight_blocks_when_full(
         search.release.set()
         for thread in holders:
             thread.join(timeout=3)
+            assert not thread.is_alive()
         assert results == {f"h{i}": 200 for i in range(4)}
         probe = gate.acquire()
         assert probe.retry_after is None and probe.token is not None
@@ -314,11 +326,12 @@ def test_llm_unaffected_by_expectimax_in_flight_gate(
     )
     app = create_app(settings, FakeLLM(["right"] * 3))
     body_ex = {"board": OPEN_BOARD, "mode": "expectimax"}
+    holder_status: dict[str, int] = {}
 
     with TestClient(app) as client:
 
         def hold() -> None:
-            client.post("/suggest", json=body_ex)
+            holder_status["code"] = client.post("/suggest", json=body_ex).status_code
 
         holder = threading.Thread(target=hold)
         holder.start()
@@ -334,6 +347,8 @@ def test_llm_unaffected_by_expectimax_in_flight_gate(
 
         search.release.set()
         holder.join(timeout=3)
+        assert not holder.is_alive()
+        assert holder_status == {"code": 200}
 
 
 def test_expectimax_capacity_reject_does_not_burn_hard_ceiling(
@@ -358,11 +373,12 @@ def test_expectimax_capacity_reject_does_not_burn_hard_ceiling(
         expectimax_in_flight=InFlightGate(1),
     )
     body = {"board": OPEN_BOARD, "mode": "expectimax"}
+    holder_status: dict[str, int] = {}
 
     with TestClient(app) as client:
 
         def hold() -> None:
-            client.post("/suggest", json=body)
+            holder_status["code"] = client.post("/suggest", json=body).status_code
 
         holder = threading.Thread(target=hold)
         holder.start()
@@ -375,6 +391,8 @@ def test_expectimax_capacity_reject_does_not_burn_hard_ceiling(
 
         search.release.set()
         holder.join(timeout=3)
+        assert not holder.is_alive()
+        assert holder_status == {"code": 200}
         # Cap 2: holder used one; capacity reject refunded — second spend still free.
         assert client.post("/suggest", json=body).status_code == 200
         spend = client.post("/suggest", json=body)
@@ -397,11 +415,12 @@ def test_capacity_reject_does_not_burn_hard_ceiling() -> None:
         llm_in_flight=InFlightGate(1),
     )
     body = {"board": OPEN_BOARD, "mode": "llm"}
+    holder_status: dict[str, int] = {}
 
     with TestClient(app) as client:
 
         def hold() -> None:
-            client.post("/suggest", json=body)
+            holder_status["code"] = client.post("/suggest", json=body).status_code
 
         holder = threading.Thread(target=hold)
         holder.start()
@@ -422,12 +441,23 @@ def test_capacity_reject_does_not_burn_hard_ceiling() -> None:
 
         llm.release.set()
         holder.join(timeout=3)
+        assert not holder.is_alive()
+        assert holder_status == {"code": 200}
+        assert client.post("/suggest", json=body).status_code == 200
+        spend = client.post("/suggest", json=body)
+        assert spend.status_code == 429
+        assert spend.json()["detail"] == DETAIL_SPEND_CAP
+        assert spend.headers[HEADER_SUGGEST_LIMIT.lower()] == LIMIT_REASON_SPEND
 
 
 def test_invalid_body_and_stuck_board_do_not_leak_capacity() -> None:
-    """422 never takes a slot; 409 releases the slot so the next LLM suggest admits."""
+    """422 skips both gates; 409 releases both the capacity slot and spend token."""
     llm = FakeLLM(["right", "right"])
-    settings = isolated_settings(suggest_rate_limit_requests=10, llm_max_in_flight=1)
+    settings = isolated_settings(
+        suggest_rate_limit_requests=1,
+        suggest_rate_limit_window_seconds=60,
+        llm_max_in_flight=1,
+    )
     client = TestClient(create_app(settings, llm))
 
     bad = client.post("/suggest", json={"board": OPEN_BOARD, "mode": "random"})
@@ -442,12 +472,18 @@ def test_invalid_body_and_stuck_board_do_not_leak_capacity() -> None:
     assert ok.status_code == 200
     assert llm.calls == 1
 
+    limited = client.post("/suggest", json={"board": OPEN_BOARD, "mode": "llm"})
+    assert limited.status_code == 429
+    assert limited.json()["detail"] == DETAIL_SPEND_CAP
+    assert limited.headers[HEADER_SUGGEST_LIMIT.lower()] == LIMIT_REASON_SPEND
+
 
 def test_stuck_board_does_not_leak_expectimax_capacity() -> None:
-    """409 releases the Expectimax slot so the next search admits."""
+    """409 releases both the Expectimax capacity slot and spend token."""
     llm = FakeLLM(["right"])
     settings = isolated_settings(
-        suggest_rate_limit_expectimax_requests=10,
+        suggest_rate_limit_expectimax_requests=1,
+        suggest_rate_limit_window_seconds=60,
         expectimax_max_in_flight=1,
     )
     client = TestClient(create_app(settings, llm))
@@ -461,13 +497,22 @@ def test_stuck_board_does_not_leak_expectimax_capacity() -> None:
     assert ok.json()["source"] in ("expectimax", "fallback")
     assert llm.calls == 0
 
+    limited = client.post("/suggest", json={"board": OPEN_BOARD, "mode": "expectimax"})
+    assert limited.status_code == 429
+    assert limited.json()["detail"] == DETAIL_SPEND_CAP
+    assert limited.headers[HEADER_SUGGEST_LIMIT.lower()] == LIMIT_REASON_SPEND
+
 
 def test_pre_suggester_failure_releases_llm_in_flight_slot(monkeypatch: pytest.MonkeyPatch) -> None:
-    """A raise after acquire but before suggester must not sticky-hold capacity."""
+    """A raise after acquire but before suggester must free both capacity and spend."""
     from app import main as main_mod
 
     llm = FakeLLM(["right"])
-    settings = isolated_settings(suggest_rate_limit_requests=10, llm_max_in_flight=1)
+    settings = isolated_settings(
+        suggest_rate_limit_requests=1,
+        suggest_rate_limit_window_seconds=60,
+        llm_max_in_flight=1,
+    )
     app = create_app(settings, llm)
 
     def boom(*_args: object, **_kwargs: object) -> None:
@@ -479,21 +524,24 @@ def test_pre_suggester_failure_releases_llm_in_flight_slot(monkeypatch: pytest.M
         assert failed.status_code == 500
         assert llm.calls == 0
 
-    monkeypatch.undo()
-    with TestClient(app) as client:
+        monkeypatch.undo()
         assert client.post("/suggest", json={"board": OPEN_BOARD, "mode": "llm"}).status_code == 200
         assert llm.calls == 1
+        limited = client.post("/suggest", json={"board": OPEN_BOARD, "mode": "llm"})
+        assert limited.status_code == 429
+        assert limited.headers[HEADER_SUGGEST_LIMIT.lower()] == LIMIT_REASON_SPEND
 
 
 def test_pre_suggester_failure_releases_expectimax_in_flight_slot(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Pre-suggester raise must free the Expectimax capacity slot too."""
+    """Pre-suggester raise must free both Expectimax capacity and spend."""
     from app import main as main_mod
 
     llm = FakeLLM(["right"])
     settings = isolated_settings(
-        suggest_rate_limit_expectimax_requests=10,
+        suggest_rate_limit_expectimax_requests=1,
+        suggest_rate_limit_window_seconds=60,
         expectimax_max_in_flight=1,
     )
     app = create_app(settings, llm)
@@ -507,12 +555,14 @@ def test_pre_suggester_failure_releases_expectimax_in_flight_slot(
         assert failed.status_code == 500
         assert llm.calls == 0
 
-    monkeypatch.undo()
-    with TestClient(app) as client:
+        monkeypatch.undo()
         ok = client.post("/suggest", json={"board": OPEN_BOARD, "mode": "expectimax"})
         assert ok.status_code == 200
         assert ok.json()["source"] in ("expectimax", "fallback")
         assert llm.calls == 0
+        limited = client.post("/suggest", json={"board": OPEN_BOARD, "mode": "expectimax"})
+        assert limited.status_code == 429
+        assert limited.headers[HEADER_SUGGEST_LIMIT.lower()] == LIMIT_REASON_SPEND
 
 
 def test_concurrent_llm_suggests_fail_fast_without_leaking_capacity() -> None:
@@ -553,6 +603,7 @@ def test_concurrent_llm_suggests_fail_fast_without_leaking_capacity() -> None:
 
         llm.release.set()
         holder.join(timeout=3)
+        assert not holder.is_alive()
         assert holder_status["code"] == 200
         # After drain, the slot is free (v1 has no queue — retries are a follow-up).
         assert client.post("/suggest", json=body).status_code == 200
@@ -603,6 +654,7 @@ def test_concurrent_expectimax_suggests_fail_fast_without_leaking_capacity(
 
         search.release.set()
         holder.join(timeout=3)
+        assert not holder.is_alive()
         assert holder_status["code"] == 200
         assert client.post("/suggest", json=body).status_code == 200
         assert search.calls == 2
@@ -1137,3 +1189,148 @@ def test_suggest_leaves_an_injected_client_open() -> None:
         assert http.is_closed is False
     finally:
         http.close()
+
+
+@pytest.mark.parametrize("raw_json", [b"[]", b"null"])
+def test_non_dict_ollama_json_classified_as_response_error(raw_json: bytes) -> None:
+    """200 non-object JSON ([] / null) must raise LlmError(error_type='response'), not 'request'."""
+
+    def handler(_request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            content=raw_json,
+            headers={"content-type": "application/json"},
+        )
+
+    transport = httpx.MockTransport(handler)
+    with httpx.Client(transport=transport, base_url="http://ollama.test") as http:
+        with pytest.raises(LlmError, match="ollama response is not an object") as exc_info:
+            OllamaClient(isolated_settings(), client=http).suggest_move(
+                OPEN_BOARD,
+                legal=["right", "down"],
+                rejected=[],
+                invalid_reply=False,
+            )
+    assert exc_info.value.error_type == "response"
+
+    # Async production path (client=None) — both without and with a running loop.
+    class _NonDictHandler(BaseHTTPRequestHandler):
+        def do_POST(self) -> None:  # noqa: N802
+            length = int(self.headers.get("Content-Length", "0"))
+            if length:
+                self.rfile.read(length)
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(raw_json)))
+            self.end_headers()
+            self.wfile.write(raw_json)
+
+        def log_message(self, _format: str, *_args: object) -> None:
+            return
+
+    server = DaemonHTTPServer(("127.0.0.1", 0), _NonDictHandler)
+    port = server.server_address[1]
+    server_thread = threading.Thread(target=server.serve_forever, daemon=True)
+    server_thread.start()
+    try:
+        async_client = OllamaClient(
+            isolated_settings(
+                ollama_base_url=f"http://127.0.0.1:{port}",
+                llm_attempt_timeout_seconds=5,
+            )
+        )
+        with pytest.raises(LlmError, match="ollama response is not an object") as async_exc:
+            async_client.suggest_move(
+                OPEN_BOARD,
+                legal=["right", "down"],
+                rejected=[],
+                invalid_reply=False,
+            )
+        assert async_exc.value.error_type == "response"
+
+        async def _call_under_running_loop() -> None:
+            with pytest.raises(LlmError, match="ollama response is not an object") as nested_exc:
+                async_client.suggest_move(
+                    OPEN_BOARD,
+                    legal=["right", "down"],
+                    rejected=[],
+                    invalid_reply=False,
+                )
+            assert nested_exc.value.error_type == "response"
+
+        asyncio.run(_call_under_running_loop())
+    finally:
+        server.shutdown()
+        server.server_close()
+
+    # End-to-end /suggest fallback increments error_type="response" (never "request").
+    client, http = _ollama_client(handler)
+    try:
+        with client:
+            response = client.post("/suggest", json={"board": OPEN_BOARD, "mode": "llm"})
+            assert response.status_code == 200
+            assert response.json() == {
+                "move": "right",
+                "mode": "llm",
+                "source": "fallback",
+                "reason": None,
+            }
+            metrics = client.get("/metrics").text
+            assert labeled_counter(metrics, PROM_REQUEST_COUNT, 'error_type="response"') == 2.0
+            assert labeled_counter(metrics, PROM_REQUEST_COUNT, 'error_type="request"') == 0.0
+    finally:
+        http.close()
+
+
+def test_suggester_mixed_three_attempt_retry_tracks_rejected_and_invalid_reply() -> None:
+    """Mixed illegal-move and parse-error retries preserve rejected and update invalid_reply."""
+    # Sequence 1: illegal move ("up") → parse LlmError → legal move ("down").
+    llm_one = FakeLLM(["up", LlmError("model output is not json", error_type="parse"), "down"])
+    suggester_one = MoveSuggester(
+        llm_one,
+        max_attempts=3,
+        budget_seconds=40,
+        attempt_timeout_seconds=20,
+    )
+    res_one = suggester_one.suggest(OPEN_BOARD, "llm")
+    assert res_one.move == "down"
+    assert res_one.source == "llm"
+    assert llm_one.calls == 3
+    assert llm_one.call_history == [
+        {"board": OPEN_BOARD, "legal": ["right", "down"], "rejected": [], "invalid_reply": False},
+        {
+            "board": OPEN_BOARD,
+            "legal": ["right", "down"],
+            "rejected": ["up"],
+            "invalid_reply": False,
+        },
+        {
+            "board": OPEN_BOARD,
+            "legal": ["right", "down"],
+            "rejected": ["up"],
+            "invalid_reply": True,
+        },
+    ]
+
+    # Sequence 2 (reverse): parse LlmError → well-formed illegal move ("up") resets invalid_reply.
+    llm_two = FakeLLM([LlmError("model output is not json", error_type="parse"), "up", "right"])
+    suggester_two = MoveSuggester(
+        llm_two,
+        max_attempts=3,
+        budget_seconds=40,
+        attempt_timeout_seconds=20,
+    )
+    res_two = suggester_two.suggest(OPEN_BOARD, "llm")
+    assert res_two.move == "right"
+    assert res_two.source == "llm"
+    assert llm_two.calls == 3
+    assert llm_two.call_history == [
+        {"board": OPEN_BOARD, "legal": ["right", "down"], "rejected": [], "invalid_reply": False},
+        {"board": OPEN_BOARD, "legal": ["right", "down"], "rejected": [], "invalid_reply": True},
+        {
+            "board": OPEN_BOARD,
+            "legal": ["right", "down"],
+            "rejected": ["up"],
+            "invalid_reply": False,
+        },
+    ]

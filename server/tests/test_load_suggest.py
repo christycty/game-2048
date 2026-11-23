@@ -17,12 +17,30 @@ import threading
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
+import httpx
 import pytest
 from fastapi.testclient import TestClient
 
 from app.main import create_app
-from app.rate_limit import InFlightGate, SuggestRateLimiter
-from helpers import OPEN_BOARD, BlockingLLM, FrozenClock, asgi_suggest, isolated_settings
+from app.rate_limit import (
+    DETAIL_MODEL_BUSY,
+    DETAIL_SPEND_CAP,
+    HEADER_SUGGEST_LIMIT,
+    LIMIT_REASON_CAPACITY,
+    LIMIT_REASON_SPEND,
+    InFlightGate,
+    SuggestRateLimiter,
+)
+from app.telemetry import PROM_SUGGEST_LIMIT_REJECT, PROM_SUGGEST_SOURCE
+from helpers import (
+    OPEN_BOARD,
+    AsgiSuggestResult,
+    BlockingLLM,
+    FrozenClock,
+    asgi_suggest,
+    isolated_settings,
+    labeled_counter,
+)
 
 pytestmark = pytest.mark.load
 
@@ -32,6 +50,19 @@ _COMPLETES_PER_WORKER = 4
 _BODY = {"board": OPEN_BOARD, "mode": "llm"}
 _CANCEL_WAVES = 6
 _WINDOW_SECONDS = 60
+
+
+def _classify_limit_response(
+    response: httpx.Response | AsgiSuggestResult,
+) -> tuple[str | None, object | None]:
+    headers = response.headers
+    limit = headers.get(HEADER_SUGGEST_LIMIT) or headers.get(HEADER_SUGGEST_LIMIT.lower())
+    detail: object | None = None
+    try:
+        detail = response.json().get("detail")
+    except Exception:
+        detail = None
+    return limit, detail
 
 
 def _run_load(*, max_in_flight: int) -> None:
@@ -47,17 +78,28 @@ def _run_load(*, max_in_flight: int) -> None:
         llm_max_in_flight=max_in_flight,
     )
     app = create_app(settings, llm, llm_in_flight=gate)
-    counts = {"starts": 0, "completes": 0, "capacity_429": 0, "cancels": 0, "other": 0}
+    counts = {
+        "starts": 0,
+        "completes": 0,
+        "capacity_429": 0,
+        "spend_429": 0,
+        "cancels": 0,
+        "other": 0,
+    }
     lock = threading.Lock()
-    holder_codes: list[int] = []
+    holder_responses: list[httpx.Response] = []
 
-    def record(status: int) -> None:
+    def record(response: httpx.Response) -> None:
+        status = response.status_code
+        limit, detail = _classify_limit_response(response) if status == 429 else (None, None)
         with lock:
             counts["starts"] += 1
             if status == 200:
                 counts["completes"] += 1
-            elif status == 429:
+            elif status == 429 and limit == LIMIT_REASON_CAPACITY and detail == DETAIL_MODEL_BUSY:
                 counts["capacity_429"] += 1
+            elif status == 429 and limit == LIMIT_REASON_SPEND and detail == DETAIL_SPEND_CAP:
+                counts["spend_429"] += 1
             elif status == 499:
                 counts["cancels"] += 1
             else:
@@ -68,9 +110,9 @@ def _run_load(*, max_in_flight: int) -> None:
         llm.release.clear()
 
         def hold() -> None:
-            code = client.post("/suggest", json=_BODY).status_code
+            response = client.post("/suggest", json=_BODY)
             with lock:
-                holder_codes.append(code)
+                holder_responses.append(response)
 
         holders = [threading.Thread(target=hold) for _ in range(max_in_flight)]
         for thread in holders:
@@ -84,8 +126,9 @@ def _run_load(*, max_in_flight: int) -> None:
             for _ in range(n):
                 blocked = client.post("/suggest", json=_BODY)
                 assert blocked.status_code == 429
+                assert blocked.headers.get(HEADER_SUGGEST_LIMIT) == LIMIT_REASON_CAPACITY
                 assert blocked.headers.get("retry-after") == "1"
-                record(429)
+                record(blocked)
 
         with ThreadPoolExecutor(max_workers=_WORKERS) as pool:
             futures = [pool.submit(probe_worker, _PROBES_PER_WORKER) for _ in range(_WORKERS)]
@@ -96,17 +139,18 @@ def _run_load(*, max_in_flight: int) -> None:
         # Still full after the wave (holders never released).
         still = client.post("/suggest", json=_BODY)
         assert still.status_code == 429
+        assert still.headers.get(HEADER_SUGGEST_LIMIT) == LIMIT_REASON_CAPACITY
         assert still.headers.get("retry-after") == "1"
-        record(429)
+        record(still)
         assert not getattr(app.state, "telemetry_shutdown", False)
 
         llm.release.set()
         for thread in holders:
             thread.join(timeout=3)
             assert not thread.is_alive()
-        assert holder_codes == [200] * max_in_flight
-        for code in holder_codes:
-            record(code)
+        assert [r.status_code for r in holder_responses] == [200] * max_in_flight
+        for response in holder_responses:
+            record(response)
 
         # --- Completes after drain (release stays set). Parallel workers may still
         # hit capacity 429 briefly while a sibling holds the slot — that is real
@@ -115,10 +159,11 @@ def _run_load(*, max_in_flight: int) -> None:
             for _ in range(n):
                 response = client.post("/suggest", json=_BODY)
                 if response.status_code == 429:
+                    assert response.headers.get(HEADER_SUGGEST_LIMIT) == LIMIT_REASON_CAPACITY
                     assert response.headers.get("retry-after") == "1"
                 else:
                     assert response.status_code == 200
-                record(response.status_code)
+                record(response)
 
         with ThreadPoolExecutor(max_workers=_WORKERS) as pool:
             futures = [pool.submit(complete_worker, _COMPLETES_PER_WORKER) for _ in range(_WORKERS)]
@@ -126,6 +171,7 @@ def _run_load(*, max_in_flight: int) -> None:
                 future.result(timeout=60)
 
         assert counts["other"] == 0, counts
+        assert counts["spend_429"] == 0, counts
         expected_starts = probe_total + 1 + max_in_flight + complete_total
         assert counts["starts"] == expected_starts, counts
         accounted = counts["completes"] + counts["capacity_429"] + counts["cancels"]
@@ -137,7 +183,23 @@ def _run_load(*, max_in_flight: int) -> None:
         probe = gate.acquire()
         assert probe.retry_after is None and probe.token is not None
         gate.release(probe.token)
-        assert client.post("/suggest", json=_BODY).status_code == 200
+        final = client.post("/suggest", json=_BODY)
+        assert final.status_code == 200
+        record(final)
+
+        metrics = client.get("/metrics").text
+        assert labeled_counter(
+            metrics, PROM_SUGGEST_LIMIT_REJECT, f'reason="{LIMIT_REASON_CAPACITY}"'
+        ) == float(counts["capacity_429"])
+        assert (
+            labeled_counter(metrics, PROM_SUGGEST_LIMIT_REJECT, f'reason="{LIMIT_REASON_SPEND}"')
+            == 0.0
+        )
+        assert labeled_counter(metrics, PROM_SUGGEST_SOURCE, 'suggest_source="llm"') == float(
+            counts["completes"]
+        )
+        assert labeled_counter(metrics, PROM_SUGGEST_SOURCE, 'suggest_source="fallback"') == 0.0
+        assert labeled_counter(metrics, PROM_SUGGEST_SOURCE, 'suggest_source="expectimax"') == 0.0
 
 
 @pytest.mark.parametrize("max_in_flight", [1, 2])
@@ -148,8 +210,8 @@ def test_load_suggest_accounts_and_drains(max_in_flight: int) -> None:
 def test_load_mixed_429_layers_classified_by_retry_after() -> None:
     """One app: capacity 429 while held, then hard-ceiling 429 after drain.
 
-    Details / X-Suggest-Limit distinguish layers; frozen clock keeps spend
-    Retry-After at the full window (60) so Retry-After still differs in this soak.
+    Classified via X-Suggest-Limit + detail (including when spend Retry-After
+    collapses to 1 near window end).
     """
     hard_ceiling = 4
     clock = FrozenClock()
@@ -176,15 +238,18 @@ def test_load_mixed_429_layers_classified_by_retry_after() -> None:
         "other": 0,
     }
     lock = threading.Lock()
+    holder_status: dict[str, int] = {}
 
-    def record(status: int, *, retry: str | None = None) -> None:
+    def record(response: httpx.Response) -> None:
+        status = response.status_code
+        limit, detail = _classify_limit_response(response) if status == 429 else (None, None)
         with lock:
             counts["starts"] += 1
             if status == 200:
                 counts["completes"] += 1
-            elif status == 429 and retry == "1":
+            elif status == 429 and limit == LIMIT_REASON_CAPACITY and detail == DETAIL_MODEL_BUSY:
                 counts["capacity_429"] += 1
-            elif status == 429 and retry == str(_WINDOW_SECONDS):
+            elif status == 429 and limit == LIMIT_REASON_SPEND and detail == DETAIL_SPEND_CAP:
                 counts["hard_ceiling_429"] += 1
             else:
                 counts["other"] += 1
@@ -193,7 +258,9 @@ def test_load_mixed_429_layers_classified_by_retry_after() -> None:
         llm.release.clear()
 
         def hold() -> None:
-            record(client.post("/suggest", json=_BODY).status_code)
+            response = client.post("/suggest", json=_BODY)
+            holder_status["code"] = response.status_code
+            record(response)
 
         holder = threading.Thread(target=hold)
         holder.start()
@@ -203,9 +270,9 @@ def test_load_mixed_429_layers_classified_by_retry_after() -> None:
             for _ in range(n):
                 blocked = client.post("/suggest", json=_BODY)
                 assert blocked.status_code == 429
-                retry = blocked.headers.get("retry-after")
-                assert retry == "1"
-                record(429, retry=retry)
+                assert blocked.headers.get(HEADER_SUGGEST_LIMIT) == LIMIT_REASON_CAPACITY
+                assert blocked.headers.get("retry-after") == "1"
+                record(blocked)
 
         with ThreadPoolExecutor(max_workers=4) as pool:
             futures = [pool.submit(capacity_worker, 5) for _ in range(4)]
@@ -216,21 +283,43 @@ def test_load_mixed_429_layers_classified_by_retry_after() -> None:
         llm.release.set()
         holder.join(timeout=3)
         assert not holder.is_alive()
+        assert holder_status == {"code": 200}
 
-        # Holder burned 1 hard-ceiling hit. Fill the rest, then assert window Retry-After.
+        # Holder burned 1 hard-ceiling hit. Fill the rest, then assert spend 429s.
         remaining_ok = hard_ceiling - 1
         for _ in range(remaining_ok):
-            assert client.post("/suggest", json=_BODY).status_code == 200
-            record(200)
+            ok = client.post("/suggest", json=_BODY)
+            assert ok.status_code == 200
+            record(ok)
         spend = client.post("/suggest", json=_BODY)
         assert spend.status_code == 429
-        retry = spend.headers.get("retry-after")
-        assert retry == str(_WINDOW_SECONDS)
-        record(429, retry=retry)
+        assert spend.headers.get(HEADER_SUGGEST_LIMIT) == LIMIT_REASON_SPEND
+        assert spend.headers.get("retry-after") == str(_WINDOW_SECONDS)
+        record(spend)
+
+        # Near window end, spend Retry-After collapses to "1" — header + detail still say spend.
+        clock.now = _WINDOW_SECONDS - 0.5
+        spend_collapsed = client.post("/suggest", json=_BODY)
+        assert spend_collapsed.status_code == 429
+        assert spend_collapsed.headers.get(HEADER_SUGGEST_LIMIT) == LIMIT_REASON_SPEND
+        assert spend_collapsed.headers.get("retry-after") == "1"
+        record(spend_collapsed)
+
+        metrics = client.get("/metrics").text
+        assert labeled_counter(
+            metrics, PROM_SUGGEST_LIMIT_REJECT, f'reason="{LIMIT_REASON_CAPACITY}"'
+        ) == float(counts["capacity_429"])
+        assert labeled_counter(
+            metrics, PROM_SUGGEST_LIMIT_REJECT, f'reason="{LIMIT_REASON_SPEND}"'
+        ) == float(counts["hard_ceiling_429"])
+        assert labeled_counter(metrics, PROM_SUGGEST_SOURCE, 'suggest_source="llm"') == float(
+            counts["completes"]
+        )
+        assert labeled_counter(metrics, PROM_SUGGEST_SOURCE, 'suggest_source="fallback"') == 0.0
 
     assert counts["other"] == 0, counts
-    assert counts["capacity_429"] >= 1, counts
-    assert counts["hard_ceiling_429"] >= 1, counts
+    assert counts["capacity_429"] == 20, counts
+    assert counts["hard_ceiling_429"] == 2, counts
     assert counts["completes"] == hard_ceiling, counts
     accounted = counts["completes"] + counts["capacity_429"] + counts["hard_ceiling_429"]
     assert accounted == counts["starts"], counts
@@ -241,23 +330,47 @@ def test_load_mixed_429_layers_classified_by_retry_after() -> None:
 
 
 def test_load_cancel_under_capacity_accounts_and_drains() -> None:
-    """ASGI disconnect under capacity: mid-hold capacity 429; cancels + completes account."""
+    """ASGI disconnect under capacity: mid-hold capacity 429; cancels refund spend tokens."""
     llm = BlockingLLM()
+    clock = FrozenClock()
     gate = InFlightGate(2)
+    # Tight ceiling on a frozen window: 6 completed B calls + 2 in-flight/probe slack = 8.
+    # Without cancel token refunds, 6 waves × 2 calls = 12 hits would trip spend 429 mid-soak.
+    hard_ceiling = _CANCEL_WAVES + 2
+    limiter = SuggestRateLimiter(hard_ceiling, _WINDOW_SECONDS, clock)
     settings = isolated_settings(
-        suggest_rate_limit_requests=120,
+        suggest_rate_limit_requests=hard_ceiling,
         llm_max_in_flight=2,
     )
-    app = create_app(settings, llm, llm_in_flight=gate)
+    app = create_app(
+        settings,
+        llm,
+        rate_limiters={
+            "llm": limiter,
+            "expectimax": SuggestRateLimiter(30, _WINDOW_SECONDS, clock),
+        },
+        llm_in_flight=gate,
+    )
     raw_body = json.dumps(_BODY).encode()
-    counts = {"starts": 0, "completes": 0, "capacity_429": 0, "cancels": 0, "other": 0}
+    counts = {
+        "starts": 0,
+        "completes": 0,
+        "capacity_429": 0,
+        "spend_429": 0,
+        "cancels": 0,
+        "other": 0,
+    }
 
-    def record(status: int | None) -> None:
+    def record(result: AsgiSuggestResult | httpx.Response) -> None:
+        status = result.status if isinstance(result, AsgiSuggestResult) else result.status_code
+        limit, detail = _classify_limit_response(result) if status == 429 else (None, None)
         counts["starts"] += 1
         if status == 200:
             counts["completes"] += 1
-        elif status == 429:
+        elif status == 429 and limit == LIMIT_REASON_CAPACITY and detail == DETAIL_MODEL_BUSY:
             counts["capacity_429"] += 1
+        elif status == 429 and limit == LIMIT_REASON_SPEND and detail == DETAIL_SPEND_CAP:
+            counts["spend_429"] += 1
         elif status == 499:
             counts["cancels"] += 1
         else:
@@ -279,8 +392,9 @@ def test_load_cancel_under_capacity_accounts_and_drains() -> None:
             # Raw ASGI — TestClient lifespan would shutdown_telemetry mid-flight.
             blocked = await asgi_suggest(app, raw_body, disconnect_gate=None)
             assert blocked.status == 429
+            assert blocked.headers.get(HEADER_SUGGEST_LIMIT.lower()) == LIMIT_REASON_CAPACITY
             assert blocked.headers.get("retry-after") == "1"
-            record(429)
+            record(blocked)
             assert not getattr(app.state, "telemetry_shutdown", False)
 
             disconnect.set()
@@ -289,12 +403,13 @@ def test_load_cancel_under_capacity_accounts_and_drains() -> None:
             llm.release.set()
             result_b = await asyncio.wait_for(task_b, timeout=5)
             assert result_b.status == 200
-            record(result_a.status)
-            record(result_b.status)
+            record(result_a)
+            record(result_b)
 
         assert counts["cancels"] == _CANCEL_WAVES, counts
         assert counts["completes"] == _CANCEL_WAVES, counts
         assert counts["capacity_429"] == _CANCEL_WAVES, counts
+        assert counts["spend_429"] == 0, counts
         assert counts["other"] == 0, counts
         accounted = counts["completes"] + counts["capacity_429"] + counts["cancels"]
         assert accounted == counts["starts"], counts
@@ -304,6 +419,23 @@ def test_load_cancel_under_capacity_accounts_and_drains() -> None:
         assert probe.retry_after is None and probe.token is not None
         gate.release(probe.token)
         with TestClient(app) as client:
-            assert client.post("/suggest", json=_BODY).status_code == 200
+            final = client.post("/suggest", json=_BODY)
+            assert final.status_code == 200
+            record(final)
+
+            metrics = client.get("/metrics").text
+            assert labeled_counter(
+                metrics, PROM_SUGGEST_LIMIT_REJECT, f'reason="{LIMIT_REASON_CAPACITY}"'
+            ) == float(counts["capacity_429"])
+            assert (
+                labeled_counter(
+                    metrics, PROM_SUGGEST_LIMIT_REJECT, f'reason="{LIMIT_REASON_SPEND}"'
+                )
+                == 0.0
+            )
+            assert labeled_counter(metrics, PROM_SUGGEST_SOURCE, 'suggest_source="llm"') == float(
+                counts["completes"]
+            )
+            assert labeled_counter(metrics, PROM_SUGGEST_SOURCE, 'suggest_source="fallback"') == 0.0
 
     asyncio.run(run())

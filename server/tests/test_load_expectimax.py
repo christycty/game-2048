@@ -43,7 +43,8 @@ from app.rate_limit import (
     InFlightGate,
     SuggestRateLimiter,
 )
-from helpers import OPEN_BOARD, FakeLLM, isolated_settings
+from app.telemetry import PROM_SUGGEST_LIMIT_REJECT, PROM_SUGGEST_SOURCE
+from helpers import OPEN_BOARD, FakeLLM, isolated_settings, labeled_counter
 
 pytestmark = pytest.mark.load
 
@@ -106,15 +107,33 @@ def _run_cadence(
         },
         expectimax_in_flight=InFlightGate(in_flight),
     )
-    counts = {"starts": 0, "ok": 0, "spend_429": 0, "capacity_429": 0, "other": 0}
+    counts = {
+        "starts": 0,
+        "ok": 0,
+        "source_expectimax": 0,
+        "source_fallback": 0,
+        "spend_429": 0,
+        "capacity_429": 0,
+        "other": 0,
+    }
     lock = threading.Lock()
     stop_at = time.monotonic() + soak_seconds
 
-    def record(status: int, *, detail: object | None = None, limit: str | None = None) -> None:
+    def record(
+        status: int,
+        *,
+        source: object | None = None,
+        detail: object | None = None,
+        limit: str | None = None,
+    ) -> None:
         with lock:
             counts["starts"] += 1
-            if status == 200:
+            if status == 200 and source in ("expectimax", "fallback"):
                 counts["ok"] += 1
+                if source == "expectimax":
+                    counts["source_expectimax"] += 1
+                else:
+                    counts["source_fallback"] += 1
             elif status == 429 and detail == DETAIL_SPEND_CAP and limit == LIMIT_REASON_SPEND:
                 counts["spend_429"] += 1
             elif status == 429 and detail == DETAIL_MODEL_BUSY and limit == LIMIT_REASON_CAPACITY:
@@ -128,15 +147,22 @@ def _run_cadence(
         def worker() -> None:
             while time.monotonic() < stop_at:
                 response = client.post("/suggest", json=_BODY)
+                source = None
                 detail = None
-                if response.status_code == 429:
+                if response.status_code == 200:
+                    try:
+                        source = response.json().get("source")
+                    except Exception:
+                        source = None
+                elif response.status_code == 429:
                     try:
                         detail = response.json().get("detail")
                     except Exception:
                         detail = None
-                limit = response.headers.get(HEADER_SUGGEST_LIMIT.lower())
+                limit = response.headers.get(HEADER_SUGGEST_LIMIT)
                 record(
                     response.status_code,
+                    source=source,
                     detail=detail,
                     limit=limit,
                 )
@@ -156,6 +182,22 @@ def _run_cadence(
             futures = [pool.submit(worker) for _ in range(_DEMO_CLIENTS)]
             for future in as_completed(futures):
                 future.result(timeout=soak_seconds + 60)
+
+        metrics = client.get("/metrics").text
+        assert labeled_counter(
+            metrics, PROM_SUGGEST_LIMIT_REJECT, f'reason="{LIMIT_REASON_SPEND}"'
+        ) == float(counts["spend_429"])
+        assert labeled_counter(
+            metrics, PROM_SUGGEST_LIMIT_REJECT, f'reason="{LIMIT_REASON_CAPACITY}"'
+        ) == float(counts["capacity_429"])
+        assert labeled_counter(
+            metrics, PROM_SUGGEST_SOURCE, 'suggest_source="expectimax"'
+        ) == float(counts["source_expectimax"])
+        assert labeled_counter(metrics, PROM_SUGGEST_SOURCE, 'suggest_source="fallback"') == float(
+            counts["source_fallback"]
+        )
+        assert labeled_counter(metrics, PROM_SUGGEST_SOURCE, 'suggest_source="llm"') == 0.0
+        assert counts["source_expectimax"] + counts["source_fallback"] == counts["ok"]
 
     return counts, llm
 

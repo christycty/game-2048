@@ -11,6 +11,7 @@ import json
 import os
 import re
 import threading
+from collections.abc import Iterator
 
 import httpx
 import pytest
@@ -69,7 +70,7 @@ def _ollama_env() -> tuple[str, str]:
 
 
 @pytest.fixture(scope="module")
-def suggest_client() -> TestClient:
+def suggest_client() -> Iterator[TestClient]:
     model, base_url = _ollama_env()
     reason = _unavailable(base_url, model)
     if reason:
@@ -85,7 +86,8 @@ def suggest_client() -> TestClient:
     )
     # Prod parses the prompt's JSON. The schema format stays off.
     assert settings.ollama_structured_output is False
-    return TestClient(create_app(settings))
+    with TestClient(create_app(settings)) as client:
+        yield client
 
 
 @pytest.mark.e2e
@@ -123,19 +125,43 @@ def test_llm_suggest_with_client_traceparent_header(suggest_client: TestClient) 
     assert body["move"] in legal_moves(OPEN_BOARD)
 
 
+def _duration_count(body: str) -> float:
+    prefix = "gen_ai_client_operation_duration_seconds_count{"
+    return sum(
+        (float(line.rsplit(" ", 1)[-1]) for line in body.splitlines() if line.startswith(prefix)),
+        0.0,
+    )
+
+
 @pytest.mark.e2e
 def test_metrics_expose_gen_ai_after_real_llm(suggest_client: TestClient) -> None:
+    before = suggest_client.get("/metrics").text
+    prior_success = labeled_counter(
+        before, "gen_ai_client_request_count", 'gen_ai_request_outcome="success"'
+    )
+    prior_llm_source = labeled_counter(before, "suggest_source", 'suggest_source="llm"')
+    prior_fallback_source = labeled_counter(before, "suggest_source", 'suggest_source="fallback"')
+    prior_duration_count = _duration_count(before)
+
     response = suggest_client.post("/suggest", json={"board": MERGE_BOARD, "mode": "llm"})
     assert response.status_code == 200
     assert response.json()["source"] == "llm"
 
     metrics = suggest_client.get("/metrics")
     assert metrics.status_code == 200
-    text = metrics.text
-    assert "gen_ai_client_request_count_total" in text
-    assert 'gen_ai_request_outcome="success"' in text
-    assert 'suggest_source="llm"' in text
-    assert "gen_ai_client_operation_duration_seconds" in text
+    after = metrics.text
+    assert (
+        labeled_counter(after, "gen_ai_client_request_count", 'gen_ai_request_outcome="success"')
+        == prior_success + 1.0
+    )
+    assert (
+        labeled_counter(after, "suggest_source", 'suggest_source="llm"') == prior_llm_source + 1.0
+    )
+    assert (
+        labeled_counter(after, "suggest_source", 'suggest_source="fallback"')
+        == prior_fallback_source
+    )
+    assert _duration_count(after) >= prior_duration_count + 1.0
 
 
 @pytest.mark.e2e

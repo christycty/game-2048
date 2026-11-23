@@ -4,28 +4,43 @@ from __future__ import annotations
 
 import asyncio
 import json
+import select
+import socket
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
-from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from http.server import BaseHTTPRequestHandler
 
 import httpx
 import pytest
 from fastapi.testclient import TestClient
+from opentelemetry.sdk.trace.export import SimpleSpanProcessor
+from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
+from opentelemetry.trace import StatusCode
 
 from app.cancel import SuggestCancelled
 from app.expectimax import choose_move
-from app.llm import ModelSuggestion, OllamaClient
+from app.llm import ModelSuggestion, OllamaClient, _wait_chat_post_or_cancel
 from app.main import DisconnectCancelMiddleware, create_app
-from app.rate_limit import DETAIL_MODEL_BUSY, InFlightGate, SuggestRateLimiter
+from app.rate_limit import (
+    DETAIL_MODEL_BUSY,
+    HEADER_SUGGEST_LIMIT,
+    LIMIT_REASON_SPEND,
+    InFlightGate,
+    SuggestRateLimiter,
+)
 from app.suggester import MoveSuggester
+from app.telemetry import OUTPUT_VALUE, PROM_REQUEST_COUNT, PROM_SUGGEST_SOURCE
 from helpers import (
     OPEN_BOARD,
     BlockingExpectimax,
     BlockingLLM,
+    DaemonHTTPServer,
+    FrozenClock,
     UnusedLLM,
     asgi_suggest,
     isolated_settings,
+    labeled_counter,
 )
 
 
@@ -43,10 +58,16 @@ def test_suggester_propagates_cancel_from_llm() -> None:
     cancel = threading.Event()
     llm = BlockingLLM()
     suggester = MoveSuggester(llm, max_attempts=1, budget_seconds=40, attempt_timeout_seconds=20)
+    caught: list[BaseException] = []
+    completed = False
 
     def run() -> None:
-        with pytest.raises(SuggestCancelled):
+        nonlocal completed
+        try:
             suggester.suggest(OPEN_BOARD, "llm", cancel)
+            completed = True
+        except BaseException as exc:  # noqa: BLE001 — asserted on the main thread
+            caught.append(exc)
 
     thread = threading.Thread(target=run)
     thread.start()
@@ -54,6 +75,9 @@ def test_suggester_propagates_cancel_from_llm() -> None:
     cancel.set()
     thread.join(timeout=2)
     assert not thread.is_alive()
+    assert not completed
+    assert len(caught) == 1
+    assert isinstance(caught[0], SuggestCancelled)
     assert llm.cancelled_with is cancel
 
 
@@ -178,42 +202,44 @@ def test_ollama_client_cancel_interrupts_in_flight_post() -> None:
         def log_message(self, _format: str, *_args: object) -> None:
             return
 
-    server = ThreadingHTTPServer(("127.0.0.1", 0), HangHandler)
+    server = DaemonHTTPServer(("127.0.0.1", 0), HangHandler)
     port = server.server_address[1]
     server_thread = threading.Thread(target=server.serve_forever, daemon=True)
     server_thread.start()
-    cancel = threading.Event()
-    settings = isolated_settings(
-        ollama_base_url=f"http://127.0.0.1:{port}",
-        llm_attempt_timeout_seconds=10,
-    )
-    client = OllamaClient(settings)
-    outcomes: dict[str, str] = {}
+    try:
+        cancel = threading.Event()
+        settings = isolated_settings(
+            ollama_base_url=f"http://127.0.0.1:{port}",
+            llm_attempt_timeout_seconds=10,
+        )
+        client = OllamaClient(settings)
+        outcomes: dict[str, str] = {}
 
-    def run() -> None:
-        try:
-            client.suggest_move(
-                OPEN_BOARD,
-                legal=["left", "right", "up", "down"],
-                rejected=[],
-                invalid_reply=False,
-                cancel=cancel,
-            )
-            outcomes["result"] = "ok"
-        except SuggestCancelled:
-            outcomes["result"] = "cancelled"
-        except Exception as exc:  # noqa: BLE001 — assert exact path below
-            outcomes["result"] = f"error:{type(exc).__name__}"
+        def run() -> None:
+            try:
+                client.suggest_move(
+                    OPEN_BOARD,
+                    legal=["left", "right", "up", "down"],
+                    rejected=[],
+                    invalid_reply=False,
+                    cancel=cancel,
+                )
+                outcomes["result"] = "ok"
+            except SuggestCancelled:
+                outcomes["result"] = "cancelled"
+            except Exception as exc:  # noqa: BLE001 — assert exact path below
+                outcomes["result"] = f"error:{type(exc).__name__}"
 
-    thread = threading.Thread(target=run)
-    thread.start()
-    assert accepted.wait(2)
-    cancel.set()
-    thread.join(timeout=3)
-    assert not thread.is_alive()
-    assert outcomes.get("result") == "cancelled"
-    server.shutdown()
-    server.server_close()
+        thread = threading.Thread(target=run)
+        thread.start()
+        assert accepted.wait(2)
+        cancel.set()
+        thread.join(timeout=3)
+        assert not thread.is_alive()
+        assert outcomes.get("result") == "cancelled"
+    finally:
+        server.shutdown()
+        server.server_close()
 
 
 def test_ollama_client_posts_once_when_caller_has_running_loop() -> None:
@@ -235,30 +261,32 @@ def test_ollama_client_posts_once_when_caller_has_running_loop() -> None:
         def log_message(self, _format: str, *_args: object) -> None:
             return
 
-    server = ThreadingHTTPServer(("127.0.0.1", 0), CountingHandler)
+    server = DaemonHTTPServer(("127.0.0.1", 0), CountingHandler)
     port = server.server_address[1]
     server_thread = threading.Thread(target=server.serve_forever, daemon=True)
     server_thread.start()
-    settings = isolated_settings(
-        ollama_base_url=f"http://127.0.0.1:{port}",
-        llm_attempt_timeout_seconds=5,
-    )
-    client = OllamaClient(settings)
-
-    async def call_while_loop_running() -> ModelSuggestion:
-        # Sync suggest_move while this thread already has a running loop → fresh-thread path.
-        return client.suggest_move(
-            OPEN_BOARD,
-            legal=["left", "right", "up", "down"],
-            rejected=[],
-            invalid_reply=False,
+    try:
+        settings = isolated_settings(
+            ollama_base_url=f"http://127.0.0.1:{port}",
+            llm_attempt_timeout_seconds=5,
         )
+        client = OllamaClient(settings)
 
-    suggestion = asyncio.run(call_while_loop_running())
-    assert suggestion.move == "right"
-    assert posts["n"] == 1
-    server.shutdown()
-    server.server_close()
+        async def call_while_loop_running() -> ModelSuggestion:
+            # Sync suggest_move while this thread already has a running loop → fresh-thread path.
+            return client.suggest_move(
+                OPEN_BOARD,
+                legal=["left", "right", "up", "down"],
+                rejected=[],
+                invalid_reply=False,
+            )
+
+        suggestion = asyncio.run(call_while_loop_running())
+        assert suggestion.move == "right"
+        assert posts["n"] == 1
+    finally:
+        server.shutdown()
+        server.server_close()
 
 
 def test_suggest_endpoint_maps_cancel_to_499() -> None:
@@ -306,9 +334,15 @@ def test_disconnect_middleware_sets_cancel_on_disconnect() -> None:
         {"type": "http.request", "body": body, "more_body": False},
         {"type": "http.disconnect"},
     ]
+    extra_receives = 0
 
     async def receive() -> dict:
-        return messages.pop(0)
+        nonlocal extra_receives
+        if messages:
+            return messages.pop(0)
+        extra_receives += 1
+        await asyncio.sleep(60)
+        return {"type": "http.disconnect"}
 
     sent: list[dict] = []
 
@@ -331,6 +365,7 @@ def test_disconnect_middleware_sets_cancel_on_disconnect() -> None:
     asyncio.run(app(scope, receive, send))
     assert seen["cancel"].is_set()  # type: ignore[union-attr]
     assert sent[0]["status"] == 204
+    assert extra_receives == 0
 
 
 def test_asgi_disconnect_cancels_blocking_llm() -> None:
@@ -567,3 +602,187 @@ def test_release_only_refunds_the_matching_hit() -> None:
 
     limiter.release(gate_b.token)
     assert limiter.allow().retry_after is None
+
+
+def test_wait_chat_post_or_cancel_maps_racing_http_and_json_errors_to_cancel() -> None:
+    """Cancel racing raise_for_status() or response.json() must raise SuggestCancelled."""
+    request = httpx.Request("POST", "http://ollama.test/api/chat")
+
+    class _CancelOnStatusResponse(httpx.Response):
+        def __init__(self, cancel_event: threading.Event | None) -> None:
+            super().__init__(500, content=b"boom", request=request)
+            self._cancel_event = cancel_event
+
+        def raise_for_status(self) -> httpx.Response:
+            if self._cancel_event is not None:
+                self._cancel_event.set()
+            return super().raise_for_status()
+
+    class _CancelOnJsonResponse(httpx.Response):
+        def __init__(self, cancel_event: threading.Event | None) -> None:
+            super().__init__(200, content=b"not-json", request=request)
+            self._cancel_event = cancel_event
+
+        def json(self, **kwargs: object) -> object:
+            if self._cancel_event is not None:
+                self._cancel_event.set()
+            return super().json(**kwargs)
+
+    async def run() -> None:
+        # Racing HTTP 500 with cancel → SuggestCancelled (not HTTPStatusError).
+        cancel_http = threading.Event()
+        task_http = asyncio.create_task(
+            asyncio.sleep(0, result=_CancelOnStatusResponse(cancel_http))
+        )
+        with pytest.raises(SuggestCancelled):
+            await _wait_chat_post_or_cancel(task_http, cancel_http)
+
+        # Non-cancelled HTTP 500 still raises HTTPStatusError.
+        uncancelled_http = threading.Event()
+        task_http_err = asyncio.create_task(asyncio.sleep(0, result=_CancelOnStatusResponse(None)))
+        with pytest.raises(httpx.HTTPStatusError):
+            await _wait_chat_post_or_cancel(task_http_err, uncancelled_http)
+
+        # Racing malformed JSON with cancel → SuggestCancelled (not ValueError).
+        cancel_json = threading.Event()
+        task_json = asyncio.create_task(asyncio.sleep(0, result=_CancelOnJsonResponse(cancel_json)))
+        with pytest.raises(SuggestCancelled):
+            await _wait_chat_post_or_cancel(task_json, cancel_json)
+
+        # Non-cancelled malformed JSON still raises ValueError("ollama response is not json").
+        uncancelled_json = threading.Event()
+        task_json_err = asyncio.create_task(asyncio.sleep(0, result=_CancelOnJsonResponse(None)))
+        with pytest.raises(ValueError, match="ollama response is not json"):
+            await _wait_chat_post_or_cancel(task_json_err, uncancelled_json)
+
+    asyncio.run(run())
+
+
+def test_asgi_disconnect_cancels_async_ollama_and_refunds_gates() -> None:
+    """Default-CI end-to-end async cancel: HTTP server + OllamaClient(client=None) + telemetry."""
+    request_arrived = threading.Event()
+    release_hang = threading.Event()
+    call_lock = threading.Lock()
+    calls = {"n": 0}
+
+    class _ChatHandler(BaseHTTPRequestHandler):
+        def do_POST(self) -> None:  # noqa: N802
+            if self.path != "/api/chat":
+                self.send_error(404)
+                return
+            length = int(self.headers.get("Content-Length", "0"))
+            if length:
+                self.rfile.read(length)
+            with call_lock:
+                calls["n"] += 1
+                call_num = calls["n"]
+            if call_num == 1:
+                request_arrived.set()
+                deadline = time.monotonic() + 5
+                while not release_hang.is_set() and time.monotonic() < deadline:
+                    readable, _, _ = select.select([self.connection], [], [], 0.05)
+                    if readable:
+                        try:
+                            if self.connection.recv(1, socket.MSG_PEEK) == b"":
+                                return
+                        except OSError:
+                            return
+                return
+            reply = b'{"message":{"content":"{\\"move\\":\\"right\\",\\"reason\\":\\"ok\\"}"}}'
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(reply)))
+            self.end_headers()
+            self.wfile.write(reply)
+
+        def log_message(self, _format: str, *_args: object) -> None:
+            return
+
+    server = DaemonHTTPServer(("127.0.0.1", 0), _ChatHandler)
+    port = server.server_address[1]
+    server_thread = threading.Thread(target=server.serve_forever, daemon=True)
+    server_thread.start()
+
+    try:
+        exporter = InMemorySpanExporter()
+        clock = FrozenClock()
+        limiter = SuggestRateLimiter(1, 60, clock)
+        in_flight = InFlightGate(1)
+        settings = isolated_settings(
+            export_traces=True,
+            ollama_base_url=f"http://127.0.0.1:{port}",
+            ollama_model="test-model",
+            llm_max_attempts=1,
+            llm_attempt_timeout_seconds=10,
+            suggest_rate_limit_requests=1,
+            llm_max_in_flight=1,
+        )
+        app = create_app(
+            settings,
+            OllamaClient(settings),
+            SimpleSpanProcessor(exporter),
+            rate_limiters={"llm": limiter, "expectimax": SuggestRateLimiter(30, 60, clock)},
+            llm_in_flight=in_flight,
+        )
+        raw_body = json.dumps({"board": OPEN_BOARD, "mode": "llm"}).encode()
+
+        async def cancel_first_request():
+            disconnect = asyncio.Event()
+            task = asyncio.create_task(asgi_suggest(app, raw_body, disconnect_gate=disconnect))
+            assert await asyncio.to_thread(request_arrived.wait, 2)
+            disconnect.set()
+            return await asyncio.wait_for(task, timeout=3)
+
+        result = asyncio.run(cancel_first_request())
+        assert result.status == 499
+        assert result.json() == {"detail": "client cancelled"}
+        assert request_arrived.is_set()
+
+        # Capacity slot freed immediately after 499.
+        probe = in_flight.acquire()
+        assert probe.retry_after is None and probe.token is not None
+        in_flight.release(probe.token)
+
+        # Span tree: POST /suggest + suggest + ollama chat all UNSET with cancelled output.
+        finished = exporter.get_finished_spans()
+        assert len(finished) == 3
+        spans_by_name = {span.name: span for span in finished}
+        assert set(spans_by_name) == {"POST /suggest", "suggest", "ollama chat"}
+        for name, span in spans_by_name.items():
+            assert span.status.status_code == StatusCode.UNSET, name
+            assert span.attributes.get(OUTPUT_VALUE) == '{"detail": "cancelled"}', name
+
+        with TestClient(app) as client:
+            metrics = client.get("/metrics").text
+            assert (
+                labeled_counter(metrics, PROM_REQUEST_COUNT, 'gen_ai_request_outcome="cancelled"')
+                == 1.0
+            )
+            assert (
+                labeled_counter(metrics, PROM_REQUEST_COUNT, 'gen_ai_request_outcome="error"')
+                == 0.0
+            )
+            assert (
+                labeled_counter(metrics, PROM_REQUEST_COUNT, 'gen_ai_request_outcome="timeout"')
+                == 0.0
+            )
+            assert labeled_counter(metrics, PROM_SUGGEST_SOURCE, 'suggest_source="llm"') == 0.0
+            assert labeled_counter(metrics, PROM_SUGGEST_SOURCE, 'suggest_source="fallback"') == 0.0
+
+            # Spend token refunded under limit=1: a subsequent normal request succeeds,
+            # and a third request in the same frozen window hits spend 429.
+            ok = client.post("/suggest", json={"board": OPEN_BOARD, "mode": "llm"})
+            assert ok.status_code == 200
+            assert ok.json() == {
+                "move": "right",
+                "mode": "llm",
+                "source": "llm",
+                "reason": "ok",
+            }
+            limited = client.post("/suggest", json={"board": OPEN_BOARD, "mode": "llm"})
+            assert limited.status_code == 429
+            assert limited.headers.get(HEADER_SUGGEST_LIMIT) == LIMIT_REASON_SPEND
+    finally:
+        release_hang.set()
+        server.shutdown()
+        server.server_close()

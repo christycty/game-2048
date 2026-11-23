@@ -12,7 +12,7 @@ DETAIL_SPEND_CAP = "too many suggestions"
 DETAIL_MODEL_BUSY = "model busy"
 LIMIT_REASON_SPEND = "spend"
 LIMIT_REASON_CAPACITY = "capacity"
-# Surfaced on capacity/spend 429s (detail is the primary contract; header is explicit).
+# Surfaced on capacity/spend 429s (explicit header; detail is fallback).
 HEADER_SUGGEST_LIMIT = "X-Suggest-Limit"
 
 
