@@ -2,7 +2,7 @@ import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
-import { SLIDE_MS } from "../game";
+import { SLIDE_MS } from "../game/game";
 import Board from "./Board.jsx";
 
 // jsdom does not load the component CSS, so stacking and slide distance use the real file.

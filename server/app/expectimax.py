@@ -15,7 +15,7 @@ from collections.abc import Callable
 from typing import NamedTuple
 
 from app.cancel import SuggestCancelled
-from app.moves import DIRECTIONS, FALLBACK_ORDER, apply_move
+from app.moves import DIRECTIONS, FALLBACK_ORDER, apply_move, legal_moves
 
 Board = tuple[tuple[int, ...], ...]
 # Tests inject a fake clock; production uses monotonic time.
@@ -290,13 +290,12 @@ def _monotonicity(board: Board) -> float:
 
 
 def _legal_directions(board: Board) -> list[str]:
-    legal = [direction for direction in DIRECTIONS if _apply(board, direction) != board]
-    # Tie-break matches FALLBACK_ORDER (same as the old stub).
+    # Same legality as the API; sort so equal scores keep FALLBACK_ORDER.
+    legal = legal_moves([list(row) for row in board])
     return sorted(legal, key=_FALLBACK_RANK.__getitem__)
 
 
 def _apply(board: Board, direction: str) -> Board:
-    # Same slider as legal_moves — a second copy can drift from the API.
     moved = apply_move([list(row) for row in board], direction)
     return _freeze(moved)
 

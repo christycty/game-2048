@@ -11,7 +11,7 @@ From `client/`:
 ```bash
 npm install
 npm run dev       # Vite on CLIENT_HOST_PORT (default 5173; reads repo-root .env)
-npm test          # Vitest for React components, then node:test for game.js, swipe.js, and api.js
+npm test          # Vitest for React components, then node:test under src/game and src/suggest
 npm run lint      # oxlint
 npm run build     # production bundle
 ```
@@ -24,12 +24,16 @@ Stack: React 19, Vite, plain JavaScript. The page title is 2048. The app mounts 
 
 | Path | Role |
 |---|---|
-| `src/App.jsx` | Score, best score, tiles, loss, AI suggestion and Auto Play state. Owns input and the slide timer. |
-| `src/game.js` | Board rules. Pure functions. No DOM. Includes `tilesToBoard` for the API. |
-| `src/swipe.js` | Turns a pointer delta into a direction. |
-| `src/api.js` | `POST /suggest` with W3C `traceparent` and optional `AbortSignal`; beacons fail / spend `rate_limit` / capacity `model_busy` to `/client-events` unless `shouldReportOutcome` is false (stale token). Classifies 429 via `X-Suggest-Limit` / detail onto `SuggestError.limitReason`. Abort / HTTP `499` beacons `cancel` (not fail) and throws `AbortError`. Throws `SuggestError` on network, HTTP, or unusable body. |
-| `src/trace.js` | Hand-rolled W3C `traceparent` (no browser OTel SDK). |
-| `src/utils.js` | Unused `getRandomInt`. Moves pass `Math.random` in instead. |
+| `src/App.jsx` | Score, best score, tiles, loss/win, busy, mode, pending hint. Wires hooks to `ActionPanel` / `Board`; owns `startGame` and derived `canSuggest` / `canApplySuggestion` / `canToggleAutoPlay`. |
+| `src/hooks/useKeyboardMoves.js` | Arrow keys → move; unmount aborts in-flight suggest + bumps token. |
+| `src/hooks/useSuggestSession.js` | Suggest token, abort, capacity retries, beacon gate, `handleSuggest`. |
+| `src/hooks/useMoveController.js` | `handleMove`, settle `SETTLE_MS`, Auto Play gap → suggest. |
+| `src/hooks/useAutoPlayController.js` | Toggle/stop, `autoApplyingRef`; shared failed-apply exit; busy release on Stop. |
+| `src/game/game.js` | Board rules. Pure functions. No DOM. Includes `tilesToBoard` for the API. |
+| `src/game/swipe.js` | Turns a pointer delta into a direction. |
+| `src/suggest/api.js` | `POST /suggest` with W3C `traceparent` and optional `AbortSignal`; beacons fail / spend `rate_limit` / capacity `model_busy` to `/client-events` unless `shouldReportOutcome` is false (stale token). Classifies 429 via `X-Suggest-Limit` / detail onto `SuggestError.limitReason`. Abort / HTTP `499` beacons `cancel` (not fail) and throws `AbortError`. Throws `SuggestError` on network, HTTP, or unusable body. |
+| `src/suggest/trace.js` | Hand-rolled W3C `traceparent` (no browser OTel SDK). |
+| `src/suggest/suggestHints.js` | Pure 429/fallback hint copy + `capitalize` / `formatSuggestionHint`. |
 | `src/components/Board.jsx` | Cells, sliding tiles, game-over overlay, pointer gestures. |
 | `src/components/ScoreCard.jsx` | Title, help, SCORE, BEST. |
 | `src/components/ActionPanel.jsx` | New Game, AI, Auto Play / Stop, mode radios, hint, confirm. |
@@ -55,16 +59,16 @@ Best score lives in component state for the page session. A reload clears it. Ne
 
 ## A move
 
-`App` listens for arrow keys once. The board reports swipes through the same `handleMove`. Both paths are ignored while a slide is in progress or the game is lost. A direction that does not change the board returns immediately, so the next input is accepted.
+`useKeyboardMoves` binds arrow keys once (mirrors `onMove` into a ref so the listener stays stable). The board reports swipes through the same `handleMove` from `useMoveController`. Both paths are ignored while a slide is in progress or the game is lost. A direction that does not change the board returns immediately, so the next input is accepted.
 
 `applyMove` returns two boards:
 
 - `visualTiles` is what plays during the slide. Numbers are still the old values. The tile that slides into a merge is still there. The spawned tile is not.
 - `resolvedTiles` is the board after the slide: doubled values, the spawn, and `lost` if that board has no move.
 
-`App` renders `visualTiles` right away, then after `SETTLE_MS` swaps in `resolvedTiles`, adds `scoreGained`, and updates best score. `SETTLE_MS` is the slide duration plus 20ms so the last frame of the transition has painted. Input during that window is dropped. New Game increments a token so a settle callback from the previous game does not write into the new one.
+`useMoveController` renders `visualTiles` right away, then after `SETTLE_MS` swaps in `resolvedTiles`, adds `scoreGained`, and updates best score. `SETTLE_MS` is the slide duration plus 20ms so the last frame of the transition has painted. Input during that window is dropped. New Game increments a move token so a settle callback from the previous game does not write into the new one.
 
-The key listener is not re-bound when state changes. The latest board, score, loss flag, and animation flag are kept in refs so a keypress reads the current game.
+Keyboard / async suggest / Auto Play keep board, score, loss/win, busy, and loop flags in refs (plus cross-hook refs for `stopAutoPlay` / `handleMove` / `handleSuggest` assigned after render) so a keypress or late timer reads the current game.
 
 A board-changing move clears the pending suggestion. A manual (non–Auto Play) board-changing move also clears the hint. An Auto Play–applied move keeps the hint through the slide. A blocked move leaves pending state alone. A board-changing move while a suggestion request is still in flight aborts the fetch (`AbortSignal`) and drops the token so a late response cannot open **Play** or continue Auto Play. **Stop** during Thinking, a mode change during Thinking, **New Game**, and unmount do the same. An abort is silent (no failure hint). Mode radios stay usable during Thinking (so a switch can abort); they stay disabled while Auto Play is on.
 
@@ -74,24 +78,24 @@ A manual board-changing move while Auto Play is running stops Auto Play.
 
 `canSuggest` is true when the game is not lost, nothing is busy (slide or in-flight request), Auto Play is off, and `hasMoves` is true. `canApplySuggestion` needs a pending move and the same not-lost / not-busy checks. `canToggleAutoPlay` is true while Auto Play is on (so **Stop** works), or when the game can start a loop (not lost, not busy, and either a pending move or `hasMoves`).
 
-`handleSuggest`:
+`useSuggestSession.handleSuggest` (hint strings from `suggestHints.js`):
 
 1. Clears any previous pending move. Clears the hint only when Auto Play is off (Auto Play keeps the last hint through Thinking).
 2. Calls `suggestMove(tilesToBoard(tiles), aiMode, { signal, shouldReportOutcome })` with an `AbortController` for this request; a stale token after abandon does not beacon fail/rate_limit/model_busy; abort beacons `cancel`.
 3. If `source` is `"fallback"`, shows **AI could not suggest a move**, does not offer **Play**, and stops Auto Play. The fixed fallback order is not treated as a model choice.
-4. On a usable body, shows `Suggested: {Move}.` plus the reason when present. If Auto Play is off, sets `pendingMove`. If Auto Play is on, applies the move immediately via `handleMove` (marked as an auto-apply so the loop is not treated as a manual takeover). Resets capacity-retry count.
+4. On a usable body, shows `Suggested: {Move}.` plus the reason when present. If Auto Play is off, sets `pendingMove`. If Auto Play is on, applies the move immediately via `handleMoveRef` (marked as an auto-apply so the loop is not treated as a manual takeover). Resets capacity-retry count.
 5. On capacity `429` (`limitReason === capacity`): during Auto Play, shows **Model busy. Retrying…**, waits `Retry-After` (default 1s), and retries up to `AUTO_PLAY_CAPACITY_MAX_RETRIES` (3); after exhaustion shows **Model busy. Wait a moment and try again.** and stops. Manual AI shows the busy hint without retrying. Does not offer **Play**.
 6. On spend `429`, shows **Too many suggestions. Wait a moment and try again.**, does not offer **Play**, and stops Auto Play.
 7. On other network or HTTP failure, shows the same error line as fallback and stops Auto Play.
 8. On abort (`AbortError`), stays silent: no hint change from the failure path, no **Play**. A stale abort (token already bumped by Stop / move / New Game / mode / unmount) leaves cleanup to that caller. A token-matched abort (e.g. HTTP `499` without a local `abort()`) still stops Auto Play so the loop cannot stall on **Stop**.
 
-After an Auto Play move settles, if Auto Play is still on and the game is not lost, `App` waits `AUTO_PLAY_GAP_MS` (750ms) then calls `handleSuggest` again. The gap keeps `busy` true so **AI** stays inactive through the pause; **Stop** clears that hold immediately when nothing else is in flight. Loss, **Stop**, **New Game**, a manual move, a blocked auto-applied move, spend 429, exhausted capacity retries, or an unusable suggestion ends the loop (including during the gap).
+After an Auto Play move settles, if Auto Play is still on and the game is not lost, `useMoveController` waits `AUTO_PLAY_GAP_MS` (750ms) then calls `handleSuggest` again (via `handleSuggestRef`). The gap keeps `busy` true so **AI** stays inactive through the pause; **Stop** (`useAutoPlayController`) clears that hold immediately when nothing else is in flight. Loss, **Stop**, **New Game**, a manual move, a blocked auto-applied move, spend 429, exhausted capacity retries, or an unusable suggestion ends the loop (including during the gap).
 
 Changing the mode clears a pending suggestion and aborts an in-flight suggest when Thinking. Choosing the same mode again is a no-op. **Play {Direction}** calls `handleMove` with that direction, so confirm shares the swipe and key path. Starting Auto Play keeps the selected mode, applies a pending suggestion first when one exists, then continues the loop after settle.
 
 The UI does not show the response `mode` or `source` fields beyond treating `"fallback"` as failure. Expectimax reasons are the server score line and appear in the same hint as LLM reasons.
 
-## Rules (`game.js`)
+## Rules (`game/game.js`)
 
 The grid is 4×4. Row 0 is the top. Column 0 is the left.
 
@@ -108,7 +112,7 @@ The grid is 4×4. Row 0 is the top. Column 0 is the left.
 
 `hasMoves` is true when any cell is empty, or when a horizontal or vertical neighbor matches. Each pair is checked once, from the top or left cell.
 
-`hasWon` is true when any tile value is ≥ `WIN_TILE` (2048).
+`hasWon` is true when any tile value is ≥ `WIN_TILE` (2048). Tests import `WIN_TILE` / `SWIPE_THRESHOLD` rather than repeating those numbers.
 
 `tilesToBoard` builds the 4×4 value grid the API expects. Empty cells are `0`. Animation fields are dropped.
 
@@ -124,17 +128,18 @@ On each move, a tile is parked on `fromRow` / `fromCol` for one frame with trans
 
 Tiles are rendered in id order so a merge does not reorder DOM nodes mid-slide. The tile sliding into a merge paints above a tile that only changes cell.
 
-A swipe starts on pointer down (left button only for a mouse), captures the pointer so a release outside the board still counts, and ends on pointer up for that same pointer. A release from a different pointer leaves the gesture alone. Pointer cancel drops it. `swipeDirection` ignores a drag shorter than 24px. The longer axis wins. When the distances match, the vertical axis wins.
+A swipe starts on pointer down (left button only for a mouse), captures the pointer so a release outside the board still counts, and ends on pointer up for that same pointer. A release from a different pointer leaves the gesture alone. Pointer cancel drops it. `swipeDirection` ignores a drag shorter than `SWIPE_THRESHOLD` (24px). The longer axis wins. When the distances match, the vertical axis wins.
 
 `touch-action: none` on the board keeps the browser from scrolling the gesture away.
 
 ## Tests
 
-- `src/game.test.js` covers the deal, ids, slides, single merges, blocked moves, spawn timing, win, loss, and `tilesToBoard`.
-- `src/swipe.test.js` covers the threshold and axis choice.
-- `src/api.test.js` covers same-origin `/suggest` + `traceparent`, success body, `SuggestError` statuses including spend vs capacity 429 classification, fail/rate_limit/model_busy beacons, skipping those when `shouldReportOutcome` is false, re-checking that gate after the suggest await, abort paths beaconing `cancel` (including during `json()`, HTTP `499`, aborted-but-resolved, and when `shouldReportOutcome` is false), and preserving `AbortError`.
-- `src/trace.test.js` covers W3C `traceparent` shape and retry when `getRandomValues` returns all zeros.
-- `src/App.test.jsx` covers score timing, shared swipe and key paths, best score across a new game, a cancelled slide, a lost game ignoring input, suggest-then-confirm, Auto Play apply/gap/loop/stop (including Stop during the gap re-enabling AI, Stop during Thinking aborting the fetch, a token-matched AbortError during Thinking stopping the loop, and keeping the selected LLM mode), hint kept through the next Thinking step, pending-start and in-loop blocked apply, loss / spend 429 / capacity retry + exhaustion / New Game exits, fallback/manual takeover, mode selection (including mode change during Thinking aborting the fetch), fallback / rate-limit / failed requests, dropping a stale suggestion after a board-changing move (asserts `signal.aborted` and `shouldReportOutcome` flipping false), New Game during Thinking aborting the fetch, and unmount aborting an in-flight suggest.
+- `src/game/game.test.js` covers the deal, ids, slides, single merges, blocked moves, spawn timing, win, loss, and `tilesToBoard`.
+- `src/game/swipe.test.js` covers the threshold and axis choice (asserts via shared `SWIPE_THRESHOLD`).
+- `src/suggest/api.test.js` covers same-origin `/suggest` + `traceparent`, success body, `SuggestError` statuses including spend vs capacity 429 classification, fail/rate_limit/model_busy beacons, skipping those when `shouldReportOutcome` is false, re-checking that gate after the suggest await, abort paths beaconing `cancel` (including during `json()`, HTTP `499`, aborted-but-resolved, and when `shouldReportOutcome` is false), and preserving `AbortError`.
+- `src/suggest/trace.test.js` covers W3C `traceparent` shape and retry when `getRandomValues` returns all zeros.
+- `src/suggest/suggestHints.test.js` covers `capitalize`, `formatSuggestionHint`, and `hintForSuggestFailure` copy branches.
+- `src/App.test.jsx` is the behavior contract for the hooks (not rewritten per hook): score timing, shared swipe and key paths, best score across a new game, a cancelled slide, a lost game ignoring input, suggest-then-confirm, Auto Play apply/gap/loop/stop (including Stop during the gap re-enabling AI, Stop during Thinking aborting the fetch, a token-matched AbortError during Thinking stopping the loop, and keeping the selected LLM mode), hint kept through the next Thinking step, pending-start and in-loop blocked apply, loss / spend 429 / capacity retry + exhaustion / New Game exits, fallback/manual takeover, mode selection (including mode change during Thinking aborting the fetch), fallback / rate-limit / failed requests, dropping a stale suggestion after a board-changing move (asserts `signal.aborted` and `shouldReportOutcome` flipping false), New Game during Thinking aborting the fetch, and unmount aborting an in-flight suggest.
 - `src/components/Board.test.jsx` covers the slide, overlay stacking, and pointer capture.
 - `src/components/ScoreCard.test.jsx` covers opening and closing help.
 

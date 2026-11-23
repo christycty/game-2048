@@ -9,8 +9,8 @@ import httpx
 from app import telemetry as tel
 from app.cancel import SuggestCancelled
 from app.config import Settings
+from app.moves import DIRECTIONS
 
-DIRECTIONS = ("up", "down", "left", "right")
 REASON_WORD_LIMIT = 50
 # A single token has one word, so the word cap alone would not bound the payload.
 REASON_CHAR_LIMIT = 400
@@ -50,7 +50,6 @@ class OllamaClient:
             if client is not None
             else settings.ollama_base_url.rstrip("/")
         )
-        self._closed = False
 
     def suggest_move(
         self,
@@ -244,40 +243,23 @@ class OllamaClient:
         payload: dict[str, object],
         cancel: threading.Event | None,
     ) -> dict:
+        """POST /api/chat on a dedicated async client with cancel polling.
+
+        Sync-vs-async entry (exactly one POST; never fall through both branches)::
+
+            _post_chat_async
+              ├─ no running loop  → asyncio.run(_run)     # FastAPI to_thread
+              └─ loop already on  → fresh thread + run     # tests / nested callers
+                   (avoid awaiting here: would block the outer loop)
+
+            _run: AsyncClient → create_task(POST) → _wait_chat_post_or_cancel
+        """
         timeout = self._attempt_timeout
 
         async def _run() -> dict:
             async with httpx.AsyncClient(base_url=self._base_url, timeout=timeout) as client:
                 task = asyncio.create_task(client.post("/api/chat", json=payload))
-                while True:
-                    if cancel is not None and cancel.is_set():
-                        task.cancel()
-                        try:
-                            await task
-                        except (asyncio.CancelledError, httpx.HTTPError, httpx.StreamError):
-                            pass
-                        raise SuggestCancelled()
-                    done, _ = await asyncio.wait({task}, timeout=0.05)
-                    if not done:
-                        continue
-                    try:
-                        response = task.result()
-                    except asyncio.CancelledError as exc:
-                        raise SuggestCancelled() from exc
-                    except (httpx.HTTPError, httpx.StreamError, ValueError) as exc:
-                        if cancel is not None and cancel.is_set():
-                            raise SuggestCancelled() from exc
-                        raise
-                    if cancel is not None and cancel.is_set():
-                        raise SuggestCancelled()
-                    response.raise_for_status()
-                    try:
-                        body = response.json()
-                    except json.JSONDecodeError as exc:
-                        raise ValueError("ollama response is not json") from exc
-                    if not isinstance(body, dict):
-                        raise ValueError("ollama response is not an object")
-                    return body
+                return await _wait_chat_post_or_cancel(task, cancel)
 
         # Prefer asyncio.run when this thread has no loop (normal FastAPI to_thread).
         # A broad except RuntimeError would re-enter _run after a mid-flight failure
@@ -308,7 +290,43 @@ class OllamaClient:
 
     def close(self) -> None:
         # No long-lived pool; attempts own their clients. Keep the hook for lifespan.
-        self._closed = True
+        pass
+
+
+async def _wait_chat_post_or_cancel(
+    task: asyncio.Task,
+    cancel: threading.Event | None,
+) -> dict:
+    """Poll cancel while an httpx POST task runs; map cancel to SuggestCancelled."""
+    while True:
+        if cancel is not None and cancel.is_set():
+            task.cancel()
+            try:
+                await task
+            except (asyncio.CancelledError, httpx.HTTPError, httpx.StreamError):
+                pass
+            raise SuggestCancelled()
+        done, _ = await asyncio.wait({task}, timeout=0.05)
+        if not done:
+            continue
+        try:
+            response = task.result()
+        except asyncio.CancelledError as exc:
+            raise SuggestCancelled() from exc
+        except (httpx.HTTPError, httpx.StreamError, ValueError) as exc:
+            if cancel is not None and cancel.is_set():
+                raise SuggestCancelled() from exc
+            raise
+        if cancel is not None and cancel.is_set():
+            raise SuggestCancelled()
+        response.raise_for_status()
+        try:
+            body = response.json()
+        except json.JSONDecodeError as exc:
+            raise ValueError("ollama response is not json") from exc
+        if not isinstance(body, dict):
+            raise ValueError("ollama response is not an object")
+        return body
 
 
 class _NonClosingTransport(httpx.BaseTransport):

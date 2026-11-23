@@ -22,7 +22,7 @@ Human docs are orientation only. **Implementation truth is under `docs/agents/`.
 
 ## Client
 
-- Vite + JS. Game rules in `game.js`; UI in components; suggest HTTP in `api.js`.
+- Vite + JS. Domain folders: `src/game/` (rules + swipe), `src/suggest/` (api, trace, hint copy). `App.jsx` wires hooks (`useKeyboardMoves`, `useSuggestSession`, `useMoveController`, `useAutoPlayController`) to the board and action panel — detail in [docs/agents/client.md](docs/agents/client.md).
 
 ## Server
 

@@ -9,6 +9,7 @@ import {
     MAX_START_TILES,
     MIN_START_TILES,
     tilesToBoard,
+    WIN_TILE,
 } from "./game.js";
 
 // One line of the array is one row of the board, from the top. A 0 is an empty cell.
@@ -63,7 +64,7 @@ function expectMove(start, direction, expected, score) {
     }
 
     assert.equal(result.lost, false, "a board with room left is not a loss");
-    assert.equal(result.won, false, "a board without 2048 is not a win");
+    assert.equal(result.won, false, `a board without ${WIN_TILE} is not a win`);
     // During the slide the numbers still add up to the board from before the move.
     const startSum = start.flat().reduce((sum, value) => sum + value, 0);
     const visualSum = result.visualTiles.reduce((sum, tile) => sum + tile.value, 0);
@@ -268,23 +269,25 @@ test("a spawn of 4 that matches a neighbor keeps the game going", () => {
 
 test("merging two 1024s wins", () => {
     const empty = [0, 0, 0, 0];
+    const half = WIN_TILE / 2;
     const result = applyMove(
-        board([[1024, 1024, 0, 0], empty, empty, empty]),
+        board([[half, half, 0, 0], empty, empty, empty]),
         "left",
         () => 0.5,
     );
     assert.equal(result.moved, true);
-    assert.equal(result.scoreGained, 2048);
+    assert.equal(result.scoreGained, WIN_TILE);
     assert.equal(result.won, true);
     assert.equal(result.lost, false);
     assert.equal(hasWon(result.resolvedTiles), true);
-    assert.ok(result.resolvedTiles.some((tile) => tile.value === 2048 && tile.isMerged));
+    assert.ok(result.resolvedTiles.some((tile) => tile.value === WIN_TILE && tile.isMerged));
 });
 
-test("reaching 2048 wins even when the spawn leaves no moves", () => {
-    // Left merges to 2048 and opens (0,3); spawn fills it → full board with no matches.
+test("reaching WIN_TILE wins even when the spawn leaves no moves", () => {
+    // Left merges to WIN_TILE and opens (0,3); spawn fills it → full board with no matches.
+    const half = WIN_TILE / 2;
     const start = [
-        [1024, 1024, 2, 4],
+        [half, half, 2, 4],
         [8, 16, 32, 64],
         [128, 256, 512, 8],
         [16, 32, 64, 128],

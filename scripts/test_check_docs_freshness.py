@@ -43,7 +43,7 @@ class EvaluateFreshnessTests(unittest.TestCase):
         self.assertIn("agent docs updated", msg)
 
     def test_code_with_only_agents_md_ok(self) -> None:
-        kind, _ = evaluate_freshness(["client/src/api.js", "AGENTS.md"])
+        kind, _ = evaluate_freshness(["client/src/suggest/api.js", "AGENTS.md"])
         self.assertEqual(kind, "ok")
 
     def test_code_without_agent_docs_warns(self) -> None:

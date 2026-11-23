@@ -40,7 +40,7 @@ Excluded from tracing: `/health`, `/metrics`, `/client-events`, `/docs`, `/opena
 
 ## Client → server correlation
 
-The browser does **not** run an OpenTelemetry SDK. Each `POST /suggest` from [`client/src/api.js`](../../client/src/api.js) sends a hand-rolled W3C `traceparent` header (`client/src/trace.js`). FastAPI’s OTel instrumentor extracts it so the HTTP + `suggest` + `ollama chat` spans share the client’s `trace_id` in Phoenix.
+The browser does **not** run an OpenTelemetry SDK. Each `POST /suggest` from [`client/src/suggest/api.js`](../../client/src/suggest/api.js) sends a hand-rolled W3C `traceparent` header (`client/src/suggest/trace.js`). FastAPI’s OTel instrumentor extracts it so the HTTP + `suggest` + `ollama chat` spans share the client’s `trace_id` in Phoenix.
 
 Coarse client fail / spend `rate_limit` / capacity `model_busy` / cancel counts go to scrape metrics via `POST /client-events` (same-origin; Vite and nginx proxy it). Prompt forensics stay in Phoenix — do not duplicate them in the browser.
 

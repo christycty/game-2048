@@ -41,6 +41,13 @@ class DisconnectCancelMiddleware:
     the body is read can still miss disconnects under instrumentation. One pump
     task owns the raw receive channel, forwards messages to the app, and sets
     ``request.state.suggest_cancel`` on ``http.disconnect``.
+
+    Flow (do not redesign the pump)::
+
+        uvicorn receive ──► pump ──► bridge queue ──► FastAPI /suggest
+                         │
+                         └─ on http.disconnect: cancel.set()
+        finally: cancel.set() + cancel pump_task (covers response-complete path)
     """
 
     def __init__(self, app: ASGIApp) -> None:
@@ -80,6 +87,12 @@ class DisconnectCancelMiddleware:
             pump_task.cancel()
             with contextlib.suppress(asyncio.CancelledError):
                 await pump_task
+
+
+def _release_spend_token(limiter: SuggestRateLimiter, token: object | None) -> None:
+    """Refund one hard-ceiling hit when this request did not consume model work."""
+    if token is not None:
+        limiter.release(token)
 
 
 def create_app(
@@ -178,13 +191,14 @@ def create_app(
                 },
             )
         # Layer 2 (LLM only): in-flight capacity before calling Ollama.
+        # Suggest flow: spend allow → (llm) capacity acquire → to_thread(suggester)
+        #   → cancel → 499 + refund spend; finally always releases capacity slot.
         slot: object | None = None
         if body.mode == "llm":
             capacity = in_flight.acquire()
             if capacity.retry_after is not None:
                 # Rejected before Ollama — do not burn the hard-ceiling hit.
-                if gate.token is not None:
-                    limiters[body.mode].release(gate.token)
+                _release_spend_token(limiters[body.mode], gate.token)
                 record_suggest_limit_reject(LIMIT_REASON_CAPACITY)
                 raise HTTPException(
                     status_code=429,
@@ -205,8 +219,7 @@ def create_app(
             result = await asyncio.to_thread(suggester.suggest, body.board, body.mode, cancel)
         except SuggestCancelled:
             # Refund this request's hit only (token), so concurrent siblings keep theirs.
-            if gate.token is not None:
-                limiters[body.mode].release(gate.token)
+            _release_spend_token(limiters[body.mode], gate.token)
             # Disconnect is not a model failure — leave HTTP span unset of ERROR pollution.
             set_json_io(span, output_payload={"detail": "cancelled"})
             # 499 = client closed request (nginx convention). Best-effort if already gone.

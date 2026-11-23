@@ -58,12 +58,16 @@ The API stays healthy when Ollama is down (`GET /health` never calls the model).
 flowchart LR
   subgraph client [client/]
     App[App.jsx]
-    Game[game.js]
-    Api[api.js]
+    Hooks[suggest / move / auto / keyboard hooks]
+    GameDir[game/]
+    SuggestDir[suggest/]
     UI[Board / Score / Actions]
-    App --> Game
-    App --> Api
+    App --> Hooks
     App --> UI
+    Hooks --> GameDir
+    Hooks --> SuggestDir
+    UI --> GameDir
+    UI --> SuggestDir
   end
   subgraph server [server/]
     Main[main.py]
@@ -82,11 +86,11 @@ flowchart LR
     Suggester --> Telemetry
     LLM --> Telemetry
   end
-  Api --> Main
+  SuggestDir --> Main
   Telemetry -.->|OTLP when EXPORT_TRACES| Phoenix[Phoenix]
 ```
 
-Client owns the playable rules and UI. Server owns suggestion modes, per-mode process-wide rate limits, legality checks for the coach, expectimax search, the Ollama client, Phoenix OTLP tracing when `EXPORT_TRACES` is on (default; collector optional), and always-on `GET /metrics` (optional Compose Prometheus/Grafana). Both sides implement the same slide/merge rules so “legal” means the same thing.
+Client owns the playable rules and UI; `App.jsx` wires named hooks for suggest / move / Auto Play / keyboard; pure leaves live under `src/game/` and `src/suggest/` (file map in [agents/client.md](agents/client.md)). Server owns suggestion modes, per-mode process-wide rate limits, legality checks for the coach, expectimax search, the Ollama client (cancel-wait helper in `llm.py`), Phoenix OTLP tracing when `EXPORT_TRACES` is on (default; collector optional), and always-on `GET /metrics` (optional Compose Prometheus/Grafana). Both sides implement the same slide/merge rules so “legal” means the same thing.
 
 ## Stack
 
