@@ -24,10 +24,11 @@ Someone who wants a local or self-hosted 2048 session with an optional coach. Th
 | Slide | All tiles move as far as they can in that direction. |
 | Merge | Two equal tiles that collide combine into one tile with double the value. Each tile merges at most once per move. Score increases by the new value. |
 | After a successful move | One new tile appears on a random empty cell: usually a **2**, sometimes a **4**. A move that does not change the board does nothing. |
+| Win | Any tile reaches **2048**. The board shows **You win!** and input stops; win takes precedence over loss if the spawn fills the board. |
 | Loss | No empty cell and no two equal neighbors can merge. The board shows game over. Input no longer moves tiles. |
 | New Game | Clears the board and current score, deals a fresh start, keeps best score for this page session. |
 
-Help on the page explains arrow keys or swipe. Best score is for the current browser session only; a reload resets it.
+Help on the page explains arrow keys or swipe, AI preview (Expectimax without setup; LLM via Ollama), and Auto Play. Best score is for the current browser session only; a reload resets it.
 
 ## Scoring
 
@@ -65,7 +66,7 @@ AI is unavailable when the game is over, while a move animation is playing, whil
 1. Player presses **Auto Play**. The control becomes **Stop** (`aria-pressed` true). Auto Play uses the currently selected mode (**LLM** or **Expectimax**).
 2. If a usable suggestion is already pending, Auto Play applies it immediately. Otherwise it requests one.
 3. On a usable suggestion, the client applies the move without waiting for **Play**, keeps the hint visible during the slide, waits a short pause after the slide settles, then requests the next suggestion.
-4. Auto Play stops when the player presses **Stop**, starts **New Game**, loses, takes a manual key/swipe move, or when a suggestion is unusable after retries (exhausted fallback retries, spend hard ceiling, exhausted capacity retries, or transport failure). **Stop** (and other takeover paths) abort an in-flight suggest so the client does not wait on a late response and the server can cancel that run. Abort is silent (no failure hint); a server-side cancel that still reaches the client as abort (e.g. HTTP `499`) also ends Auto Play so the loop cannot stall. Fallback (model miss) shows **AI could not suggest a move. Retrying…** and retries a few times with a short pause before stopping with **AI could not suggest a move. Try again in a moment.** Transport failure uses the same stop copy without Auto Play retry. Spend ceiling shows **Too many suggestions. Wait a moment and try again.** Capacity busy shows **Model busy. Retrying…** and retries a few times with short backoff before stopping with **Model busy. Wait a moment and try again.** The board is unchanged for that step.
+4. Auto Play stops when the player presses **Stop**, starts **New Game**, wins or loses, takes a manual key/swipe move, or when a suggestion is unusable after retries (exhausted fallback retries, spend hard ceiling, exhausted capacity retries, or transport failure). **Stop** (and other takeover paths) abort an in-flight suggest so the client does not wait on a late response and the server can cancel that run. Abort is silent (no failure hint); a server-side cancel that still reaches the client as abort (e.g. HTTP `499`) also ends Auto Play so the loop cannot stall. Fallback (model miss) shows **AI could not suggest a move. Retrying…** and retries a few times with a short pause before stopping with **AI could not suggest a move. Try again in a moment.** Transport failure uses the same stop copy without Auto Play retry. Spend ceiling shows **Too many suggestions. Wait a moment and try again.** Capacity busy shows **Model busy. Retrying…** and retries a few times with short backoff before stopping with **Model busy. Wait a moment and try again.** The board is unchanged for that step.
 5. Auto Play does not invent moves on a timer without asking the API. Each applied move comes from a fresh suggestion for the current board.
 
 ### Product rules for suggestions
@@ -87,10 +88,10 @@ AI is unavailable when the game is over, while a move animation is playing, whil
 
 A release matches this product when:
 
-- A new visitor can start a game, move with keys or swipe, see score update, lose, and start over without confusion.
+- A new visitor can start a game, move with keys or swipe, see score update, win or lose, and start over without confusion.
 - Best score survives New Game within the same page load and resets on full reload.
 - The player can request an LLM or Expectimax suggestion, read the reason when one is returned, confirm with **Play**, and see that move applied like any other move.
-- The player can start **Auto Play** in the selected mode, watch usable suggestions apply in a loop, and stop with **Stop**, New Game, a manual move, loss, or a failed suggestion. Abort / server cancel during Thinking ends the loop without a failure hint.
+- The player can start **Auto Play** in the selected mode, watch usable suggestions apply in a loop, and stop with **Stop**, New Game, a manual move, win or loss, or a failed suggestion. Abort / server cancel during Thinking ends the loop without a failure hint.
 - A failed or unusable suggestion leaves the board unchanged and shows a clear failure message (including a distinct rate-limit message). Abort is silent (not a failure message).
 - Expectimax returns a legal search move with a per-direction score line the player can read.
 

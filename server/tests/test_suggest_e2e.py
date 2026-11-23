@@ -83,7 +83,7 @@ def suggest_client() -> TestClient:
         ollama_model=model,
         ollama_base_url=base_url,
         llm_max_attempts=3,
-        # Default process cap is 5; this suite shares one app for more posts.
+        # Default LLM hard ceiling is 60; pin an explicit budget sized for this shared suite.
         suggest_rate_limit_requests=E2E_RATE_LIMIT_REQUESTS,
         suggest_rate_limit_window_seconds=60,
     )

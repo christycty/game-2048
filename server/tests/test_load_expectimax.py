@@ -76,9 +76,6 @@ def _autoplay_cycle_seconds() -> float:
     return (settle_ms + gap) / 1000.0
 
 
-_CYCLE_S = _autoplay_cycle_seconds()
-
-
 def _default_expectimax_cap() -> int:
     default = Settings.model_fields["suggest_rate_limit_expectimax_requests"].default
     assert isinstance(default, int)
@@ -92,6 +89,7 @@ def _run_cadence(
     max_in_flight: int | None = None,
 ) -> tuple[dict[str, int], FakeLLM]:
     """Four workers: suggest → sleep(cycle) until soak ends; account statuses."""
+    cycle_s = _autoplay_cycle_seconds()
     llm = FakeLLM(["right"] * 8)
     in_flight = max_in_flight if max_in_flight is not None else 4
     settings = isolated_settings(
@@ -152,7 +150,7 @@ def _run_cadence(
                         pause = 1.0
                     time.sleep(pause)
                 else:
-                    time.sleep(_CYCLE_S)
+                    time.sleep(cycle_s)
 
         with ThreadPoolExecutor(max_workers=_DEMO_CLIENTS) as pool:
             futures = [pool.submit(worker) for _ in range(_DEMO_CLIENTS)]
@@ -166,9 +164,10 @@ def test_load_expectimax_default_cap_covers_four_autoplay_tabs() -> None:
     """Design load: 4 cadence clients stay under the default expectimax spend cap."""
     cap = _default_expectimax_cap()
     assert cap == 360
-    assert _CYCLE_S == pytest.approx(0.91, abs=0.001)
+    cycle_s = _autoplay_cycle_seconds()
+    assert cycle_s == pytest.approx(0.91, abs=0.001)
     # Ideal if search were free; soft floor leaves headroom for expectimax + CI.
-    ideal = _DEMO_CLIENTS * (_SOAK_SECONDS / _CYCLE_S)
+    ideal = _DEMO_CLIENTS * (_SOAK_SECONDS / cycle_s)
     min_expected = int(ideal * _THROUGHPUT_FRACTION)
     # Must exceed the interim 120 bar so this soak would fail under that default.
     assert min_expected > _PRIOR_EXPECTIMAX_CAP, (min_expected, ideal)

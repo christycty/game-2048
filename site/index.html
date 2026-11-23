@@ -93,8 +93,8 @@ flowchart LR
             Board starts with a random count of <strong>2</strong>s (1–16); hard win at
             <strong>2048</strong>. Pick mode → <strong>AI</strong> (or <strong>Auto Play</strong>) →
             hint + <strong>Play</strong>. <strong>Stop</strong> during Thinking aborts the in-flight
-            suggest. Auto Play <strong>retries</strong> on capacity-busy 429; <strong>stops</strong>
-            on spend-cap 429.
+            suggest. Auto Play <strong>retries</strong> on capacity-busy 429 and model fallback;
+            <strong>stops</strong> on spend-cap 429.
           </p>
           <figure class="figure">
             <img
@@ -112,9 +112,9 @@ flowchart LR
         <section id="path">
           <h2>4. Suggest path</h2>
           <p>
-            Order: <strong>validate → spend ceiling → capacity gate (LLM) → legality → mode</strong>.
+            Order: <strong>validate → spend ceiling → capacity gate → legality → mode</strong>.
             Invalid bodies do not consume either gate. Two distinct
-            <strong>429</strong>s: spend (<code>too many suggestions</code> /
+            <strong>429</strong>s per mode: spend (<code>too many suggestions</code> /
             <code>X-Suggest-Limit: spend</code>) vs capacity (<code>model busy</code> /
             <code>X-Suggest-Limit: capacity</code>). Disconnect returns <strong>499</strong> and
             refunds the spend token / frees the in-flight slot.
@@ -125,16 +125,17 @@ flowchart TD
   V -->|no| X422[422]
   V -->|yes| S{spend ceiling}
   S -->|over| X429s["429 spend"]
-  S -->|ok| C{LLM capacity?}
+  S -->|ok| C{mode capacity?}
   C -->|full| X429c["429 capacity + refund spend"]
-  C -->|ok / expectimax| L{legal moves?}
+  C -->|ok| L{legal moves?}
   L -->|none| X409[409]
   L -->|yes| M{mode}
   M -->|expectimax| EX[search + scores]
   M -->|llm| LLM[Ollama + retries]
   EX --> OK[SuggestResponse]
   LLM --> OK
-  LLM -->|disconnect| C499[499 + refund]
+  EX -->|disconnect| C499[499 + refund]
+  LLM -->|disconnect| C499
           </pre>
         </section>
 
@@ -322,11 +323,7 @@ flowchart LR
           <ul class="bullets">
             <li>Stale-token ignores do <strong>not</strong> beacon; aborts beacon <code>cancel</code>, not
               <code>fail</code>.</li>
-            <li>
-              Still open (separate PRs): process-wide rate limit on <code>/client-events</code>
-              (beacon integrity) and a verification ladder (checklist + opt-in
-              <code>pytest --load</code>).
-            </li>
+            <li>Process-wide rate limit on <code>/client-events</code> bounds beacon volume independently of suggest buckets.</li>
           </ul>
           <details class="shot">
             <summary>UI screenshot — Grafana GenAI ops (API / Client / LLM)</summary>
@@ -402,8 +399,10 @@ flowchart LR
           </ol>
           <p class="note">
             Phoenix is host-side (not Compose). Board + Expectimax alone is enough for a fast product
-            pass; full ops needs Ollama + collector + metrics profile. Deeper “verify without reading
-            code” ladder (incl. opt-in load) is the open verification PR.
+            pass; full ops needs Ollama + collector + metrics profile. For deeper automated proof
+            without reading code (unit, HTTP contract, disconnect cancel, image smokes, and opt-in
+            <code>pytest --load</code>), see the verification checklist in
+            <code>docs/agents/server.md</code>.
           </p>
         </section>
       </main>

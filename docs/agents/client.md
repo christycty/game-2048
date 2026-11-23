@@ -34,7 +34,7 @@ Stack: React 19, Vite, plain JavaScript. The page title is 2048. The app mounts 
 | `src/suggest/api.js` | `POST /suggest` with W3C `traceparent` and optional `AbortSignal`; beacons fail / spend `rate_limit` / capacity `model_busy` to `/client-events` unless `shouldReportOutcome` is false (stale token). Classifies 429 via `X-Suggest-Limit` / detail onto `SuggestError.limitReason`. Abort / HTTP `499` beacons `cancel` (not fail) and throws `AbortError`. Throws `SuggestError` on network, HTTP, or unusable body. |
 | `src/suggest/trace.js` | Hand-rolled W3C `traceparent` (no browser OTel SDK). |
 | `src/suggest/suggestHints.js` | Pure 429/fallback hint copy + `capitalize` / `formatSuggestionHint`. |
-| `src/components/Board.jsx` | Cells, sliding tiles, game-over overlay, pointer gestures. |
+| `src/components/Board.jsx` | Cells, sliding tiles, win / game-over overlays, pointer gestures. |
 | `src/components/ScoreCard.jsx` | Title, help, SCORE, BEST. |
 | `src/components/ActionPanel.jsx` | New Game, AI, Auto Play / Stop, mode radios, hint, confirm. |
 
@@ -42,9 +42,9 @@ Stack: React 19, Vite, plain JavaScript. The page title is 2048. The app mounts 
 
 The column is at most 420px wide and shrinks with the viewport. Colors follow the usual 2048 palette: beige page, brown board, tiles from 2 through 2048, and one shared style for 4096 and above.
 
-Top row: the title, a `?` that opens "Arrow keys or swipe", then SCORE and BEST. The help closes on Escape, a click outside it, or another press of `?`.
+Top row: the title, a `?` that opens "Arrow keys or swipe. AI previews a move (Expectimax needs no setup; LLM uses Ollama); Auto Play loops.", then SCORE and BEST. The help closes on Escape, a click outside it, or another press of `?`.
 
-The board is a 4×4 grid. Empty cells stay fixed. Tiles sit in a layer above them and slide between cells. A new tile scales in. A merged tile pops. When the game is lost, a "Game over" overlay covers the board.
+The board is a 4×4 grid. Empty cells stay fixed. Tiles sit in a layer above them and slide between cells. A new tile scales in. A merged tile pops. When the game reaches 2048 a "You win!" overlay covers the board; when no moves remain, "Game over" covers it.
 
 Bottom of the page:
 
@@ -59,12 +59,12 @@ Best score lives in component state for the page session. A reload clears it. Ne
 
 ## A move
 
-`useKeyboardMoves` binds arrow keys once (mirrors `onMove` into a ref so the listener stays stable). The board reports swipes through the same `handleMove` from `useMoveController`. Both paths are ignored while a slide is in progress or the game is lost. A direction that does not change the board returns immediately, so the next input is accepted.
+`useKeyboardMoves` binds arrow keys once (mirrors `onMove` into a ref so the listener stays stable). The board reports swipes through the same `handleMove` from `useMoveController`. Both paths are ignored while a slide is in progress or the game is won or lost. A direction that does not change the board returns immediately, so the next input is accepted.
 
 `applyMove` returns two boards:
 
 - `visualTiles` is what plays during the slide. Numbers are still the old values. The tile that slides into a merge is still there. The spawned tile is not.
-- `resolvedTiles` is the board after the slide: doubled values, the spawn, and `lost` if that board has no move.
+- `resolvedTiles` is the board after the slide: doubled values, the spawn, and `won` / `lost` flags for that board.
 
 `useMoveController` renders `visualTiles` right away, then after `SETTLE_MS` swaps in `resolvedTiles`, adds `scoreGained`, and updates best score. `SETTLE_MS` is the slide duration plus 20ms so the last frame of the transition has painted. Input during that window is dropped. New Game increments a move token so a settle callback from the previous game does not write into the new one.
 
@@ -76,7 +76,7 @@ A manual board-changing move while Auto Play is running stops Auto Play.
 
 ## AI suggestion
 
-`canSuggest` is true when the game is not lost, nothing is busy (slide or in-flight request), Auto Play is off, and `hasMoves` is true. `canApplySuggestion` needs a pending move and the same not-lost / not-busy checks. `canToggleAutoPlay` is true while Auto Play is on (so **Stop** works), or when the game can start a loop (not lost, not busy, and either a pending move or `hasMoves`).
+`canSuggest` is true when the game is not lost or won, nothing is busy (slide or in-flight request), Auto Play is off, and `hasMoves` is true. `canApplySuggestion` needs a pending move and the same not-lost-or-won / not-busy checks. `canToggleAutoPlay` is true while Auto Play is on (so **Stop** works), or when the game can start a loop (not lost or won, not busy, and either a pending move or `hasMoves`).
 
 `useSuggestSession.handleSuggest` (hint strings from `suggestHints.js`):
 
@@ -89,7 +89,7 @@ A manual board-changing move while Auto Play is running stops Auto Play.
 7. On other network or HTTP failure, shows **AI could not suggest a move. Try again in a moment.** and stops Auto Play (no Auto Play retry — unlike fallback).
 8. On abort (`AbortError`), stays silent: no hint change from the failure path, no **Play**. A stale abort (token already bumped by Stop / move / New Game / mode / unmount) leaves cleanup to that caller. A token-matched abort (e.g. HTTP `499` without a local `abort()`) still stops Auto Play so the loop cannot stall on **Stop**.
 
-After an Auto Play move settles, if Auto Play is still on and the game is not lost, `useMoveController` waits `AUTO_PLAY_GAP_MS` (750ms) then calls `handleSuggest` again (via `handleSuggestRef`). The gap keeps `busy` true so **AI** stays inactive through the pause; **Stop** (`useAutoPlayController`) clears that hold immediately when nothing else is in flight. Loss, **Stop**, **New Game**, a manual move, a blocked auto-applied move, spend 429, exhausted capacity or fallback retries, or an unusable suggestion ends the loop (including during the gap).
+After an Auto Play move settles, if Auto Play is still on and the game is not lost or won, `useMoveController` waits `AUTO_PLAY_GAP_MS` (750ms) then calls `handleSuggest` again (via `handleSuggestRef`). The gap keeps `busy` true so **AI** stays inactive through the pause; **Stop** (`useAutoPlayController`) clears that hold immediately when nothing else is in flight. Win, loss, **Stop**, **New Game**, a manual move, a blocked auto-applied move, spend 429, exhausted capacity or fallback retries, or an unusable suggestion ends the loop (including during the gap).
 
 Changing the mode clears a pending suggestion and aborts an in-flight suggest when Thinking. Choosing the same mode again is a no-op. **Play {Direction}** calls `handleMove` with that direction, so confirm shares the swipe and key path. Starting Auto Play keeps the selected mode, applies a pending suggestion first when one exists, then continues the loop after settle.
 
@@ -145,4 +145,4 @@ A swipe starts on pointer down (left button only for a mouse), captures the poin
 
 ## Not built yet
 
-There is no undo, no leaderboard, and no saved best score. The client does not surface `source` beyond treating `"fallback"` as an error. Help text still mentions only keys and swipe.
+There is no undo, no leaderboard, and no saved best score. The client does not surface `source` beyond treating `"fallback"` as an error.

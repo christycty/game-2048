@@ -109,17 +109,17 @@ docker build -t game-2048-server ./server
 docker build -t game-2048-client ./client   # default target is prod (nginx)
 ```
 
-Server image: `python:3.12-slim`, `pip install -e .`, uvicorn on `0.0.0.0:8000`. Client Dockerfile stages: `dev` (Vite), `build`, `prod` (nginx serving `dist`, SPA `try_files`, plus `/suggest` and `/client-events` proxies). Local env files are dockerignored.
+Server image: `python:3.12-slim`, locked `uv sync --frozen --no-dev` into `/opt/venv` (`UV_PROJECT_ENVIRONMENT=/opt/venv`, keeping the virtualenv outside `/app` so Compose `dev` `./server:/app` bind-mounts do not shadow it), running uvicorn on `0.0.0.0:8000` as non-root `appuser`. Client Dockerfile stages: `dev` (Vite), `build`, `prod` (nginx serving `dist`, SPA `try_files`, plus `/suggest` and `/client-events` proxies). Local env files are dockerignored.
 
 ## CI
 
-`.github/workflows/ci.yml` (pull requests + `workflow_dispatch`; four required jobs + optional load):
+`.github/workflows/ci.yml` (`pull_request`, `push` to `main`, and `workflow_dispatch`; four required jobs + optional load):
 
 - Docs (Python 3.12): script unit tests, `check_doc_links.py` (**fails** on broken links), freshness nudge (`check_docs_freshness.py`, warn-only).
-- Server: install, `ruff format --check`, `ruff check`, `pytest` (e2e and load off; `EXPORT_TRACES` off for tests). Metrics stay on regardless.
+- Server: locked `uv sync --frozen --extra dev`, `ruff format --check`, `ruff check`, `pytest` (e2e and load off; `EXPORT_TRACES` off for tests). Metrics stay on regardless.
 - Client (Node 22): install, lint, test, build.
 - Docker: build both images; client image smoke (`id="root"`); API image with `APP_ENV=prod` + `EXPORT_TRACES=false` (health); **`scripts/smoke_api_images.sh`** (CI `docker run` + `prod` alias) — health, prod `/docs`+`/openapi.json` 404, expectimax `/suggest` + `/client-events` through nginx, `GET /metrics` with joined `/suggest`+`200` sample + `outcome="fail"`, nginx does not proxy `/health` or `/metrics`; Compose config checks for default Ollama/Phoenix URLs on `host.docker.internal`, loopback publish binds, **prod API unpublished** (client still publishes `${CLIENT_HOST_PORT}`→80), the `api` alias, metrics-profile ports, `API_HOST_PORT` / `CLIENT_HOST_PORT` / `PROMETHEUS_HOST_PORT` / `GRAFANA_HOST_PORT` remaps, Compose API `EXPORT_TRACES=true`, and `COMPOSE_OLLAMA_BASE_URL` / `COMPOSE_PHOENIX_COLLECTOR_ENDPOINT` overrides.
-- **Load** (manual only): `workflow_dispatch` with `run_load` (default on) runs `pytest --load -m load` against FakeLLM; set `load_only` to skip docs/lint/client/docker. Not required on every PR. Local checklist: [server.md](server.md#verification-checklist).
+- **Load** (manual only): `workflow_dispatch` with `run_load` (default on) installs locked deps via `uv sync --frozen --extra dev` and runs `pytest --load -m load` against FakeLLM; set `load_only` to skip docs/lint/client/docker. Not required on every PR. Local checklist: [server.md](server.md#verification-checklist).
 
 ## Not in this layout
 

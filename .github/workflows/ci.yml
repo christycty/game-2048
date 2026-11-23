@@ -1,6 +1,8 @@
 name: ci
 
 on:
+  push:
+    branches: [main]
   pull_request:
   workflow_dispatch:
     inputs:
@@ -45,16 +47,17 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
+      - uses: astral-sh/setup-uv@v5
       - name: Install
-        run: pip install -e ".[dev]"
+        run: uv sync --frozen --extra dev
       - name: Ruff
         run: |
-          ruff format --check .
-          ruff check .
+          uv run ruff format --check .
+          uv run ruff check .
       - name: Test
         env:
           EXPORT_TRACES: "false"
-        run: pytest
+        run: uv run pytest
 
   load:
     # Opt-in FakeLLM soak — not on every PR. Trigger via Actions → Run workflow
@@ -69,12 +72,13 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
+      - uses: astral-sh/setup-uv@v5
       - name: Install
-        run: pip install -e ".[dev]"
+        run: uv sync --frozen --extra dev
       - name: Load (FakeLLM)
         env:
           EXPORT_TRACES: "false"
-        run: pytest --load -m load
+        run: uv run pytest --load -m load
 
   client:
     if: github.event_name != 'workflow_dispatch' || inputs.load_only == false

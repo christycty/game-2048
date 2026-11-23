@@ -11,11 +11,11 @@ From `server/`:
 ```bash
 # copy server/.env.example if you want local overrides
 uv sync --extra dev          # or: pip install -e ".[dev]"
-uvicorn app.main:app --reload --host 127.0.0.1 --port "${API_HOST_PORT:-8000}"
-pytest                       # unit/API/concurrency; skips e2e + load
-pytest --e2e                 # needs a local Ollama and the configured model
-pytest --load -m load        # opt-in FakeLLM soak (not required PR CI)
-ruff format --check . && ruff check .
+uv run uvicorn app.main:app --reload --host 127.0.0.1 --port "${API_HOST_PORT:-8000}"
+uv run pytest                # unit/API/concurrency; skips e2e + load
+uv run pytest --e2e          # needs a local Ollama and the configured model
+uv run pytest --load -m load # opt-in FakeLLM soak (not required PR CI)
+uv run ruff format --check . && uv run ruff check .
 ```
 
 Package name: `game-2048-server`. Entry: `app.main:app`. Python ≥ 3.11 (images use 3.12). See [runtime.md](runtime.md) for Compose, Docker, and env names shared with the host Ollama.
@@ -144,13 +144,13 @@ Typical LLM tree: FastAPI `POST /suggest` → `suggest` chain → sibling `ollam
 
 Shared Fake/Blocking LLM doubles and `asgi_suggest` live in `tests/helpers.py` (used by suggest, cancel, contract, and load).
 
-- `tests/test_helpers.py` asserts `isolated_settings` pins every `Settings` field and ignores hostile `SUGGEST_RATE_LIMIT_*` / `LLM_MAX_IN_FLIGHT` / `EXPECTIMAX_MAX_IN_FLIGHT` / `CLIENT_EVENTS_RATE_LIMIT_*` env.
+- `tests/test_helpers.py` asserts `isolated_settings` pins every `Settings` field and ignores hostile `SUGGEST_RATE_LIMIT_*` / `LLM_MAX_IN_FLIGHT` / `EXPECTIMAX_MAX_IN_FLIGHT` / `CLIENT_EVENTS_RATE_LIMIT_*` env, and verifies `_CLIENT_GAME_JS` (`client/src/game/game.js`) and the Expectimax load cycle parser in default CI.
 - `tests/test_rate_limit.py` covers `InFlightGate` admit/block, token-safe release under `max_in_flight > 1`, and invalid max.
 - `tests/test_suggest.py` covers health, CORS, per-mode hard ceilings before the suggester (including the **default** 60-call LLM hard ceiling and a separate Expectimax bucket), LLM and Expectimax in-flight capacity (LLM: second call `model busy` 429 while first holds; two slots then third blocked; Expectimax: fifth of four blocked; capacity reject does not burn either hard ceiling; modes do not share slots; 422/409 and pre-suggester failure do not leak slots for either mode; held-slot overlap gets fail-fast 429 then frees for LLM and Expectimax), LLM success and reason, illegal-move retry, exhausted fallback, expectimax search + score reason, illegal-search fallback, stuck-board 409, bad payload 422, Ollama HTTP failures, prod schema omission, attempt bounds, and the time budget stop.
 - `tests/test_suggest_http_contract.py` covers health, `/metrics`, `422` (no rate-limit spend), stuck-board `409`, spend `429` (`too many suggestions` + `X-Suggest-Limit: spend`) vs capacity `429` (`model busy` + `X-Suggest-Limit: capacity`) for **LLM and Expectimax**, spend `Retry-After` collapse to `1` near window end, expectimax search, unreachable-Ollama `fallback`, `/client-events` beacons (`fail` / `rate_limit` / `model_busy` / `cancel`) → scrape series, beacon `422` (no integrity-cap spend), beacon-cap exhaust → `429` with counter unchanged, and independence from the suggest bucket (default suite / CI). Cancel `499` lives in `test_cancel.py`.
 - `tests/test_cancel.py` covers per-request cancel through suggester / expectimax (pre-set and mid-search via `_check`) / Ollama client (pre-set, mid-flight hanging POST with `task.cancel`, and single-POST when the caller already has a running loop), concurrent isolation (cancel A, B still completes; LLM isolation raises `LLM_MAX_IN_FLIGHT`), endpoint `499` mapping, disconnect middleware, concurrent ASGI disconnect cancelling A while B completes (LLM and Expectimax) **and mid-flight occupancy for both modes** (after A’s 499 with `max_in_flight=2`, a third `/suggest` admits while B holds and a fourth is capacity-429), rate-limit token refund and in-flight slot release after cancel (LLM and Expectimax), and concurrent release not popping a sibling’s hit.
 - `tests/test_load_suggest.py` is marked `load` (opt-in soak): **sustained** capacity hold while workers hammer `429`, then drain + completes at `LLM_MAX_IN_FLIGHT` 1 then 2; mixed hard-ceiling + capacity `429` on **one** app with a frozen clock; ASGI disconnect-under-capacity waves with a mid-hold capacity probe; asserts accounting and no slot leak after drain.
-- `tests/test_load_expectimax.py` is marked `load`: four Auto Play–cadence workers (cycle read from `client/src/game/game.js`) for **one full 60s window** against Expectimax; default spend (360) + `EXPECTIMAX_MAX_IN_FLIGHT=4` yields **0** spend/capacity `429` and `ok` above the interim single-tab-ish 120 bar; undersized spend trips spend `429`; undersized `max_in_flight=1` trips capacity `429` (workers back off `Retry-After` on capacity, settle+gap otherwise).
+- `tests/test_load_expectimax.py` is marked `load`: four Auto Play–cadence workers (cycle read lazily from `client/src/game/game.js` when the soak runs, not at pytest import time) for **one full 60s window** against Expectimax; default spend (360) + `EXPECTIMAX_MAX_IN_FLIGHT=4` yields **0** spend/capacity `429` and `ok` above the interim single-tab-ish 120 bar; undersized spend trips spend `429`; undersized `max_in_flight=1` trips capacity `429` (workers back off `Retry-After` on capacity, settle+gap otherwise).
 - `tests/test_expectimax.py` covers legality, spawn odds, win-at-2048 preference, depth/budget cutoffs, and the reason format.
 - `tests/test_moves.py` covers the slide and merge rules used for legality.
 - `tests/test_telemetry.py` covers Phoenix URL/header rules, per-app exporters, excluded `/health` / `/metrics` / `/client-events`, client `traceparent` continuation, client beacon counters (incl. `cancel` / `model_busy`), HTTP body-size series dropped (duration + active kept), span nesting, retries, errors, cancel → `gen_ai_request_outcome=cancelled` (mid-POST, pre-POST, between-attempt; spans not ERROR), stuck-board span shape, GenAI series on `/metrics` after a suggest (success / request / response / parse / illegal_move / timeout + suggest sources), and HTTP scrape status codes for `/suggest` (200 / 422 / 409 / 429).

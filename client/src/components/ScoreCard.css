@@ -1,4 +1,5 @@
 .scorecard-background {
+    position: relative;
     box-sizing: border-box;
     width: 100%;
     margin: 0;
@@ -16,7 +17,6 @@
 }
 
 .help {
-    position: relative;
     margin-right: auto;
     margin-left: 6px;
 }
@@ -47,17 +47,20 @@
 
 .help-text {
     position: absolute;
-    top: calc(100% + 8px);
+    top: calc(100% + 6px);
     left: 0;
     z-index: 5;
+    box-sizing: border-box;
     margin: 0;
     padding: 8px 12px;
     border-radius: 6px;
     background: #776e65;
     color: #f9f6f2;
     font-size: 14px;
-    line-height: 1.3;
-    white-space: nowrap;
+    line-height: 1.4;
+    width: max-content;
+    max-width: min(320px, 100%);
+    white-space: normal;
 }
 
 .scorecard {
