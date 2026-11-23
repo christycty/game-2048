@@ -23,14 +23,10 @@ from helpers import (
     OPEN_BOARD,
     BlockingExpectimax,
     BlockingLLM,
+    UnusedLLM,
     asgi_suggest,
     isolated_settings,
 )
-
-
-class UnusedLLM:
-    def suggest_move(self, *args: object, **kwargs: object) -> ModelSuggestion:
-        raise AssertionError("llm must not run for expectimax suggest")
 
 
 def test_suggester_raises_when_cancel_set_before_llm() -> None:
@@ -216,7 +212,6 @@ def test_ollama_client_cancel_interrupts_in_flight_post() -> None:
     thread.join(timeout=3)
     assert not thread.is_alive()
     assert outcomes.get("result") == "cancelled"
-    client.close()
     server.shutdown()
     server.server_close()
 
@@ -262,7 +257,6 @@ def test_ollama_client_posts_once_when_caller_has_running_loop() -> None:
     suggestion = asyncio.run(call_while_loop_running())
     assert suggestion.move == "right"
     assert posts["n"] == 1
-    client.close()
     server.shutdown()
     server.server_close()
 

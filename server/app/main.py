@@ -24,7 +24,6 @@ from app.rate_limit import (
 from app.schemas import ClientEventRequest, HealthResponse, SuggestRequest, SuggestResponse
 from app.suggester import MoveSuggester, NoLegalMove
 from app.telemetry import (
-    mark_chain_io,
     mark_span_error,
     record_client_suggest_outcome,
     record_suggest_limit_reject,
@@ -105,7 +104,6 @@ def create_app(
     client_events_rate_limiter: SuggestRateLimiter | None = None,
 ) -> FastAPI:
     settings = settings or Settings()
-    owns_llm = llm_client is None
     llm = llm_client or OllamaClient(settings)
     window = settings.suggest_rate_limit_window_seconds
     limiters = rate_limiters or {
@@ -133,8 +131,6 @@ def create_app(
     @asynccontextmanager
     async def lifespan(_app: FastAPI):
         yield
-        if owns_llm:
-            llm.close()
         shutdown_telemetry(_app)
 
     docs_url = "/docs" if settings.app_env == "dev" else None
@@ -233,11 +229,7 @@ def create_app(
             raise HTTPException(status_code=409, detail="no legal move") from None
         finally:
             capacity_gate.release(slot)
-        mark_chain_io(
-            span,
-            input_payload={"board": body.board, "mode": body.mode},
-            output_payload=result.model_dump(),
-        )
+        set_json_io(span, output_payload=result.model_dump())
         return result
 
     return app

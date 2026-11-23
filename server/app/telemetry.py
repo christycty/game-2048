@@ -357,12 +357,6 @@ def set_json_io(
         span.set_attribute(OUTPUT_MIME_TYPE, OpenInferenceMimeTypeValues.JSON.value)
 
 
-def mark_chain_io(span: Span, *, input_payload: object, output_payload: object) -> None:
-    """Tag a span as CHAIN and set its JSON I/O."""
-    span.set_attribute(OPENINFERENCE_SPAN_KIND, SPAN_KIND_CHAIN)
-    set_json_io(span, input_payload=input_payload, output_payload=output_payload)
-
-
 def annotate_llm_span(span: Span, model: str) -> None:
     """OpenInference LLM labels for an Ollama chat call."""
     span.set_attribute(OPENINFERENCE_SPAN_KIND, SPAN_KIND_LLM)

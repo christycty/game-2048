@@ -34,6 +34,7 @@ Package name: `game-2048-server`. Entry: `app.main:app`. Python ≥ 3.11 (images
 | `app/rate_limit.py` | Per-mode sliding-window hard ceiling (`SuggestRateLimiter.release` refunds after cancel) + `InFlightGate` token-tracked capacity gates (separate LLM and Expectimax instances). Shared detail/header constants: `DETAIL_SPEND_CAP` / `DETAIL_MODEL_BUSY`, `X-Suggest-Limit`. Same limiter type gates `/client-events` (separate settings). |
 | `app/config.py` | Env-backed settings. |
 | `app/telemetry.py` | Phoenix OTLP traces + Prometheus `/metrics` (GenAI histograms + request_count). |
+| `tests/` | Pytest suite; `tests/helpers.py` holds shared boards (`OPEN_BOARD`, `STUCK_BOARD`, `COLUMN_PAIR`, `SORTED_ROW`), `isolated_settings`, `FrozenClock`, `FakeLLM` / `BlockingLLM` / `UnusedLLM` / `BlockingExpectimax`, `labeled_counter`, and `asgi_suggest`. |
 
 ## HTTP
 
@@ -142,7 +143,7 @@ Typical LLM tree: FastAPI `POST /suggest` → `suggest` chain → sibling `ollam
 
 ## Tests
 
-Shared Fake/Blocking LLM doubles and `asgi_suggest` live in `tests/helpers.py` (used by suggest, cancel, contract, and load).
+Shared boards (`OPEN_BOARD`, `STUCK_BOARD`, `COLUMN_PAIR`, `SORTED_ROW`), `isolated_settings`, `FrozenClock`, Fake/Blocking/`UnusedLLM` + `BlockingExpectimax` doubles, `labeled_counter`, and `asgi_suggest` live in `tests/helpers.py` (used by suggest, cancel, contract, telemetry, e2e, and load).
 
 - `tests/test_helpers.py` asserts `isolated_settings` pins every `Settings` field and ignores hostile `SUGGEST_RATE_LIMIT_*` / `LLM_MAX_IN_FLIGHT` / `EXPECTIMAX_MAX_IN_FLIGHT` / `CLIENT_EVENTS_RATE_LIMIT_*` env, and verifies `_CLIENT_GAME_JS` (`client/src/game/game.js`) and the Expectimax load cycle parser in default CI.
 - `tests/test_rate_limit.py` covers `InFlightGate` admit/block, token-safe release under `max_in_flight > 1`, and invalid max.

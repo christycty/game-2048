@@ -30,44 +30,19 @@ from app.telemetry import PROM_CLIENT_SUGGEST_OUTCOME, PROM_SUGGEST_LIMIT_REJECT
 from helpers import (
     OPEN_BOARD,
     SORTED_ROW,
+    STUCK_BOARD,
     BlockingExpectimax,
     BlockingLLM,
     FakeLLM,
     FrozenClock,
+    UnusedLLM,
     isolated_settings,
+    labeled_counter,
 )
 
 
-def _labeled_counter(body: str, metric: str, label_fragment: str) -> float:
-    prefix = f"{metric}_total{{"
-    for line in body.splitlines():
-        if line.startswith(prefix) and label_fragment in line:
-            return float(line.rsplit(" ", 1)[-1])
-    return 0.0
-
-
-CORNER_BOARD = [
-    [2, 0, 0, 0],
-    [0, 0, 0, 0],
-    [0, 0, 0, 0],
-    [0, 0, 0, 0],
-]
-
-STUCK_BOARD = [
-    [2, 4, 8, 16],
-    [32, 64, 128, 256],
-    [512, 1024, 2048, 4096],
-    [8192, 16384, 32768, 65536],
-]
-
-
-class _UnusedLLM:
-    def suggest_move(self, *args, **kwargs):
-        raise AssertionError("expectimax / stuck / validation must not call the model")
-
-
 def test_health_ok_without_ollama() -> None:
-    client = TestClient(create_app(isolated_settings(app_env="prod"), _UnusedLLM()))
+    client = TestClient(create_app(isolated_settings(app_env="prod"), UnusedLLM()))
     response = client.get("/health")
     assert response.status_code == 200
     assert response.json() == {"status": "ok"}
@@ -75,7 +50,7 @@ def test_health_ok_without_ollama() -> None:
 
 def test_metrics_always_on() -> None:
     # Endpoint is registered even with no series yet (empty scrape is fine).
-    client = TestClient(create_app(isolated_settings(app_env="prod"), _UnusedLLM()))
+    client = TestClient(create_app(isolated_settings(app_env="prod"), UnusedLLM()))
     assert client.get("/metrics").status_code == 200
 
 
@@ -88,7 +63,7 @@ _BAD_TILE_BOARDS = [
 
 @pytest.mark.parametrize("board", _BAD_TILE_BOARDS)
 def test_suggest_non_power_of_two_tile_is_422(board: list[list[int]]) -> None:
-    client = TestClient(create_app(isolated_settings(app_env="prod"), _UnusedLLM()))
+    client = TestClient(create_app(isolated_settings(app_env="prod"), UnusedLLM()))
     response = client.post("/suggest", json={"board": board, "mode": "expectimax"})
     assert response.status_code == 422
 
@@ -101,7 +76,7 @@ def test_suggest_bad_payload_is_422_and_skips_rate_limit() -> None:
                 suggest_rate_limit_requests=1,
                 suggest_rate_limit_window_seconds=60,
             ),
-            _UnusedLLM(),
+            UnusedLLM(),
         )
     )
     bad = client.post("/suggest", json={"board": [[0]], "mode": "llm"})
@@ -112,7 +87,7 @@ def test_suggest_bad_payload_is_422_and_skips_rate_limit() -> None:
 
 
 def test_suggest_stuck_board_is_409() -> None:
-    client = TestClient(create_app(isolated_settings(app_env="prod"), _UnusedLLM()))
+    client = TestClient(create_app(isolated_settings(app_env="prod"), UnusedLLM()))
     for mode in ("llm", "expectimax"):
         response = client.post("/suggest", json={"board": STUCK_BOARD, "mode": mode})
         assert response.status_code == 409, mode
@@ -195,7 +170,7 @@ def test_expectimax_capacity_429_uses_model_busy_detail(
     )
     app = create_app(
         settings,
-        _UnusedLLM(),
+        UnusedLLM(),
         expectimax_in_flight=InFlightGate(1),
     )
     body = {"board": OPEN_BOARD, "mode": "expectimax"}
@@ -281,7 +256,7 @@ def test_expectimax_capacity_and_spend_429_have_distinct_details(
             suggest_rate_limit_expectimax_requests=2,
             expectimax_max_in_flight=1,
         ),
-        _UnusedLLM(),
+        UnusedLLM(),
         rate_limiters={"llm": SuggestRateLimiter(30, 60, clock), "expectimax": limiter},
         expectimax_in_flight=InFlightGate(1),
     )
@@ -358,7 +333,7 @@ def test_hard_ceiling_retry_after_can_collapse_to_one() -> None:
 
 
 def test_expectimax_returns_a_legal_search_move() -> None:
-    client = TestClient(create_app(isolated_settings(app_env="prod"), _UnusedLLM()))
+    client = TestClient(create_app(isolated_settings(app_env="prod"), UnusedLLM()))
     response = client.post("/suggest", json={"board": SORTED_ROW, "mode": "expectimax"})
     assert response.status_code == 200
     body = response.json()
@@ -383,17 +358,17 @@ def test_unreachable_ollama_falls_back_with_null_reason() -> None:
         suggest_rate_limit_requests=5,
     )
     client = TestClient(create_app(settings))
-    response = client.post("/suggest", json={"board": CORNER_BOARD, "mode": "llm"})
+    response = client.post("/suggest", json={"board": OPEN_BOARD, "mode": "llm"})
     assert response.status_code == 200
     body = response.json()
     assert body["mode"] == "llm"
     assert body["source"] == "fallback"
     assert body["reason"] is None
-    assert body["move"] in legal_moves(CORNER_BOARD)
+    assert body["move"] in legal_moves(OPEN_BOARD)
 
 
 def test_client_events_beacons_and_metrics() -> None:
-    client = TestClient(create_app(isolated_settings(app_env="prod"), _UnusedLLM()))
+    client = TestClient(create_app(isolated_settings(app_env="prod"), UnusedLLM()))
     assert client.post("/client-events", json={"outcome": "fail"}).status_code == 204
     assert client.post("/client-events", json={"outcome": "rate_limit"}).status_code == 204
     assert client.post("/client-events", json={"outcome": "model_busy"}).status_code == 204
@@ -414,7 +389,7 @@ def test_client_events_rate_limit_is_429_and_skips_counter() -> None:
     client = TestClient(
         create_app(
             isolated_settings(app_env="prod"),
-            _UnusedLLM(),
+            UnusedLLM(),
             client_events_rate_limiter=limiter,
         )
     )
@@ -425,7 +400,7 @@ def test_client_events_rate_limit_is_429_and_skips_counter() -> None:
     assert limited.headers.get("retry-after") is not None
 
     text = client.get("/metrics").text
-    assert _labeled_counter(text, PROM_CLIENT_SUGGEST_OUTCOME, 'outcome="fail"') == 1.0
+    assert labeled_counter(text, PROM_CLIENT_SUGGEST_OUTCOME, 'outcome="fail"') == 1.0
 
 
 def test_client_events_bad_payload_is_422_and_skips_rate_limit() -> None:
@@ -436,7 +411,7 @@ def test_client_events_bad_payload_is_422_and_skips_rate_limit() -> None:
                 client_events_rate_limit_requests=1,
                 client_events_rate_limit_window_seconds=60,
             ),
-            _UnusedLLM(),
+            UnusedLLM(),
         )
     )
     assert client.post("/client-events", json={"outcome": "success"}).status_code == 422
