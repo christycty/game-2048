@@ -2,9 +2,12 @@ import asyncio
 import json
 import threading
 import time
+from collections.abc import Iterator
+from contextlib import contextmanager
 from typing import NamedTuple, Protocol
 
 import httpx
+from opentelemetry.trace import Span
 
 from app import telemetry as tel
 from app.cancel import SuggestCancelled
@@ -19,10 +22,73 @@ REASON_CHAR_LIMIT = 400
 class LlmError(Exception):
     """The model call failed or its output could not be used."""
 
+    def __init__(
+        self,
+        message: str,
+        *,
+        outcome: str | None = None,
+        error_type: str | None = None,
+    ) -> None:
+        super().__init__(message)
+        self.outcome = outcome if outcome is not None else tel.REQUEST_OUTCOME_ERROR
+        self.error_type = error_type
+
 
 class ModelSuggestion(NamedTuple):
     move: str
     reason: str | None = None
+
+
+@contextmanager
+def _ollama_attempt_span(
+    model: str,
+    prompt: str,
+    invocation: dict[str, object],
+) -> Iterator[Span]:
+    # Manual status: cancel must not look like a model ERROR in Phoenix.
+    with tel.tracer().start_as_current_span(
+        "ollama chat",
+        record_exception=False,
+        set_status_on_exception=False,
+    ) as span:
+        tel.annotate_llm_span(span, model)
+        # Attach the prompt now so a failed request still has it.
+        tel.set_llm_messages(
+            span,
+            prompt=prompt,
+            invocation=invocation,
+        )
+        try:
+            yield span
+        except SuggestCancelled:
+            tel.record_llm_request_count(
+                model,
+                outcome=tel.REQUEST_OUTCOME_CANCELLED,
+            )
+            tel.mark_span_cancelled(span)
+            raise
+        except LlmError as exc:
+            tel.mark_span_error(span, exc)
+            tel.record_llm_request_count(
+                model,
+                outcome=exc.outcome,
+                error_type=exc.error_type,
+            )
+            raise
+
+
+def _record_parsed_attempt(span: Span, model: str, move: str, legal: list[str]) -> None:
+    # An illegal move is a usable reply (the suggester retries with feedback), so it
+    # marks the span without raising.
+    if move in legal:
+        tel.record_llm_request_count(model, outcome=tel.REQUEST_OUTCOME_SUCCESS)
+        return
+    tel.mark_span_error(span, LlmError(f"illegal move {move}"))
+    tel.record_llm_request_count(
+        model,
+        outcome=tel.REQUEST_OUTCOME_ERROR,
+        error_type="illegal_move",
+    )
 
 
 class LlmClient(Protocol):
@@ -79,70 +145,32 @@ class OllamaClient:
         # Event stamps need a unix time; the duration stays on a monotonic clock.
         started_ns = time.time_ns()
         wall_start = time.perf_counter()
-        # Manual status: cancel must not look like a model ERROR in Phoenix.
-        with tel.tracer().start_as_current_span(
-            "ollama chat",
-            record_exception=False,
-            set_status_on_exception=False,
-        ) as span:
-            tel.annotate_llm_span(span, self._model)
-            # Attach the prompt now so a failed request still has it.
-            tel.set_llm_messages(
-                span,
-                prompt=prompt,
-                invocation={
-                    "structured_output": self._structured_output,
-                    "timeout_seconds": self._attempt_timeout,
-                    "stream": False,
-                },
-            )
+        invocation = {
+            "structured_output": self._structured_output,
+            "timeout_seconds": self._attempt_timeout,
+            "stream": False,
+        }
+
+        with _ollama_attempt_span(self._model, prompt, invocation) as span:
             try:
                 body = self._post_chat(payload, cancel)
-            except SuggestCancelled:
-                tel.record_llm_request_count(
-                    self._model,
-                    outcome=tel.REQUEST_OUTCOME_CANCELLED,
-                )
-                tel.mark_span_cancelled(span)
-                raise
             except httpx.TimeoutException as exc:
-                error = LlmError(f"ollama request failed: {exc}")
-                tel.mark_span_error(span, error)
-                tel.record_llm_request_count(
-                    self._model,
+                raise LlmError(
+                    f"ollama request failed: {exc}",
                     outcome=tel.REQUEST_OUTCOME_TIMEOUT,
-                )
-                raise error from exc
+                ) from exc
             except (httpx.HTTPError, ValueError) as exc:
-                error = LlmError(f"ollama request failed: {exc}")
-                tel.mark_span_error(span, error)
-                tel.record_llm_request_count(
-                    self._model,
-                    outcome=tel.REQUEST_OUTCOME_ERROR,
+                raise LlmError(
+                    f"ollama request failed: {exc}",
                     error_type="request",
-                )
-                raise error from exc
+                ) from exc
 
             wall_seconds = time.perf_counter() - wall_start
             if not isinstance(body, dict):
-                error = LlmError("ollama response is not an object")
-                tel.mark_span_error(span, error)
-                tel.record_llm_request_count(
-                    self._model,
-                    outcome=tel.REQUEST_OUTCOME_ERROR,
-                    error_type="response",
-                )
-                raise error
+                raise LlmError("ollama response is not an object", error_type="response")
             message = body.get("message")
             if not isinstance(message, dict):
-                error = LlmError("ollama response has no message")
-                tel.mark_span_error(span, error)
-                tel.record_llm_request_count(
-                    self._model,
-                    outcome=tel.REQUEST_OUTCOME_ERROR,
-                    error_type="response",
-                )
-                raise error
+                raise LlmError("ollama response has no message", error_type="response")
 
             raw_content = message.get("content", "")
             output_text = (
@@ -163,29 +191,12 @@ class OllamaClient:
                 started_ns=started_ns,
             )
 
-            # The span closes when suggest_move returns, so the status has to be set here.
             try:
                 parsed = parse_move(raw_content)
             except LlmError as exc:
-                tel.mark_span_error(span, exc)
-                tel.record_llm_request_count(
-                    self._model,
-                    outcome=tel.REQUEST_OUTCOME_ERROR,
-                    error_type="parse",
-                )
-                raise
-            if parsed.move not in legal:
-                tel.mark_span_error(span, LlmError(f"illegal move {parsed.move}"))
-                tel.record_llm_request_count(
-                    self._model,
-                    outcome=tel.REQUEST_OUTCOME_ERROR,
-                    error_type="illegal_move",
-                )
-            else:
-                tel.record_llm_request_count(
-                    self._model,
-                    outcome=tel.REQUEST_OUTCOME_SUCCESS,
-                )
+                raise LlmError(str(exc), error_type="parse") from exc
+
+            _record_parsed_attempt(span, self._model, parsed.move, legal)
             return parsed
 
     def _post_chat(
@@ -285,7 +296,7 @@ class OllamaClient:
             raise error
         body = outcome.get("body")
         if not isinstance(body, dict):
-            raise LlmError("ollama response is not an object")
+            raise LlmError("ollama response is not an object", error_type="response")
         return body
 
     def close(self) -> None:
