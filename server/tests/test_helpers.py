@@ -2,6 +2,7 @@ import pytest
 
 from app.config import Settings
 from helpers import ISOLATED_SETTINGS_DEFAULTS, isolated_settings
+from test_load_expectimax import _CLIENT_GAME_JS, _autoplay_cycle_seconds
 
 
 def test_isolated_settings_pins_every_settings_field() -> None:
@@ -25,3 +26,9 @@ def test_isolated_settings_ignores_hostile_rate_limit_env(
     assert settings.llm_max_in_flight == 1
     assert settings.client_events_rate_limit_requests == 60
     assert settings.client_events_rate_limit_window_seconds == 60
+
+
+def test_expectimax_load_client_cycle_parser_matches_game_js() -> None:
+    """Catch client game.js moves or cadence formula drift in default PR CI."""
+    assert _CLIENT_GAME_JS.is_file()
+    assert _autoplay_cycle_seconds() == pytest.approx(0.91, abs=0.001)

@@ -19,14 +19,22 @@ flowchart LR
 ## Quick start
 
 ```bash
-# Terminal 1 — Ollama on the host (model from OLLAMA_MODEL, default gemma4:latest)
-# Terminal 2
-cd server && uv sync --extra dev && uvicorn app.main:app --reload --host 127.0.0.1 --port "${API_HOST_PORT:-8000}"
-# Terminal 3
+# Terminal 1 — API
+cd server && uv sync --extra dev && uv run uvicorn app.main:app --reload --host 127.0.0.1 --port "${API_HOST_PORT:-8000}"
+# Terminal 2 — Client
 cd client && npm install && npm run dev
 ```
 
-Open `http://127.0.0.1:${CLIENT_HOST_PORT:-5173}`. Or use Compose: `cp .env.example .env` then `docker compose --profile dev up` (see [getting started](docs/getting-started.md)). Per-worktree ports: `API_HOST_PORT`, `CLIENT_HOST_PORT`, `COMPOSE_PROJECT_NAME`.
+Open `http://127.0.0.1:${CLIENT_HOST_PORT:-5173}` (or run `cp .env.example .env && docker compose --profile dev up`; see [getting started](docs/getting-started.md)). Select **Expectimax** in the UI to test AI move suggestions immediately with **no external model setup**; start [Ollama](https://ollama.com) on the host (`OLLAMA_MODEL`, default `gemma4:latest`) when testing **LLM** mode.
+
+## Assumptions & scope
+
+- **Opening deal:** deals a uniform `1–16` count of `2`s on random empty cells (following prompt rule 1 over classic two-tile 2048).
+- **Tile spawn:** spawns `2` (`90%`) or `4` (`10%`) on a random empty cell only after a move that changes the board.
+- **Endgame:** reaching `2048` is an immediate win (`You win!`, taking precedence if the spawn fills the board); no legal moves left is `Game over`.
+- **API wire format:** `POST /suggest` sends a 4×4 integer grid with `0` for empty cells (`null` in prompt examples represents empty UI cells).
+- **AI & credentials:** **Expectimax** runs offline in-process; **LLM** queries local Ollama with retries and legal-move fallback; no API keys or credentials are required or committed.
+- **Scope split:** core game rules and AI search/LLM live in `client/src/game/` and `server/app/`; Auto Play, per-request cancel, Phoenix traces, and Prometheus/Grafana (`--profile metrics`) are optional production-practice layers.
 
 ## Docs
 

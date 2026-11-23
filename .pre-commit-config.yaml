@@ -7,3 +7,17 @@ repos:
         files: ^server/
       - id: ruff-format
         files: ^server/
+  - repo: local
+    hooks:
+      - id: client-oxlint
+        name: client oxlint
+        entry: bash -c 'cd client && npm run lint'
+        language: system
+        files: ^client/src/
+        pass_filenames: false
+      - id: check-doc-links
+        name: check relative markdown links
+        entry: python3 scripts/check_doc_links.py
+        language: system
+        files: ^(README\.md|AGENTS\.md|client/README\.md|docs/.*\.md)$
+        pass_filenames: false

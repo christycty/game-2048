@@ -1,11 +1,20 @@
 FROM python:3.12-slim
 
+RUN pip install --no-cache-dir uv \
+    && useradd --create-home --uid 10001 appuser
+
+ENV UV_PROJECT_ENVIRONMENT=/opt/venv
+ENV PATH="/opt/venv/bin:$PATH"
+
 WORKDIR /app
 
-COPY pyproject.toml ./
+COPY pyproject.toml uv.lock ./
 COPY app ./app
 
-RUN pip install --no-cache-dir -e .
+RUN uv sync --frozen --no-dev --no-cache \
+    && chown -R appuser:appuser /app
+
+USER appuser
 
 EXPOSE 8000
 

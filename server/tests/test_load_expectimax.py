@@ -1,7 +1,7 @@
 """Opt-in Expectimax Auto Play cadence soak (not required PR CI).
 
 Design load: **4 concurrent Auto Play tabs**. Client cycle is read from
-``client/src/game.js`` (``SETTLE_MS`` + ``AUTO_PLAY_GAP_MS``, ~910ms). That
+``client/src/game/game.js`` (``SETTLE_MS`` + ``AUTO_PLAY_GAP_MS``, ~910ms). That
 cadence is an **upper bound** if search were free (~65 suggests/min/tab);
 real Auto Play is slower because suggest latency is extra. Default spend
 cap ``360`` ≈ ``4 × 65 × 1.4`` uses the upper bound so demos do not false-trip.
@@ -42,7 +42,7 @@ from helpers import OPEN_BOARD, FakeLLM, isolated_settings
 
 pytestmark = pytest.mark.load
 
-_CLIENT_GAME_JS = Path(__file__).resolve().parents[2] / "client" / "src" / "game.js"
+_CLIENT_GAME_JS = Path(__file__).resolve().parents[2] / "client" / "src" / "game" / "game.js"
 _DEMO_CLIENTS = 4
 # Match Settings / Compose window so the positive soak fills one sliding window.
 _WINDOW_SECONDS = 60
@@ -70,9 +70,6 @@ def _autoplay_cycle_seconds() -> float:
     return (settle_ms + gap) / 1000.0
 
 
-_CYCLE_S = _autoplay_cycle_seconds()
-
-
 def _default_expectimax_cap() -> int:
     default = Settings.model_fields["suggest_rate_limit_expectimax_requests"].default
     assert isinstance(default, int)
@@ -81,6 +78,7 @@ def _default_expectimax_cap() -> int:
 
 def _run_cadence(*, expectimax_cap: int, soak_seconds: float) -> tuple[dict[str, int], FakeLLM]:
     """Four workers: suggest → sleep(cycle) until soak ends; account statuses."""
+    cycle_s = _autoplay_cycle_seconds()
     llm = FakeLLM(["right"] * 8)
     settings = isolated_settings(
         suggest_rate_limit_expectimax_requests=expectimax_cap,
@@ -126,7 +124,7 @@ def _run_cadence(*, expectimax_cap: int, soak_seconds: float) -> tuple[dict[str,
                     limit=response.headers.get(HEADER_SUGGEST_LIMIT.lower()),
                 )
                 # Match Auto Play watchability pause after settle (search time is extra).
-                time.sleep(_CYCLE_S)
+                time.sleep(cycle_s)
 
         with ThreadPoolExecutor(max_workers=_DEMO_CLIENTS) as pool:
             futures = [pool.submit(worker) for _ in range(_DEMO_CLIENTS)]
@@ -140,9 +138,10 @@ def test_load_expectimax_default_cap_covers_four_autoplay_tabs() -> None:
     """Design load: 4 cadence clients stay under the default expectimax spend cap."""
     cap = _default_expectimax_cap()
     assert cap == 360
-    assert _CYCLE_S == pytest.approx(0.91, abs=0.001)
+    cycle_s = _autoplay_cycle_seconds()
+    assert cycle_s == pytest.approx(0.91, abs=0.001)
     # Ideal if search were free; soft floor leaves headroom for expectimax + CI.
-    ideal = _DEMO_CLIENTS * (_SOAK_SECONDS / _CYCLE_S)
+    ideal = _DEMO_CLIENTS * (_SOAK_SECONDS / cycle_s)
     min_expected = int(ideal * _THROUGHPUT_FRACTION)
     # Must exceed the interim 120 bar so this soak would fail under that default.
     assert min_expected > _PRIOR_EXPECTIMAX_CAP, (min_expected, ideal)

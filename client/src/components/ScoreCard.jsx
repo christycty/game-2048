@@ -1,6 +1,8 @@
 import { useEffect, useRef, useState } from "react";
 import "./ScoreCard.css";
 
+export const HELP_TEXT = "Arrow keys or swipe. AI previews a move (Expectimax needs no setup; LLM uses Ollama); Auto Play loops.";
+
 function ScoreCard({ score, bestScore }) {
     const [helpOpen, setHelpOpen] = useState(false);
     const helpRef = useRef(null);
@@ -39,7 +41,7 @@ function ScoreCard({ score, bestScore }) {
                     ?
                 </button>
                 {helpOpen && (
-                    <p className="help-text" id="how-to-play">Arrow keys or swipe</p>
+                    <p className="help-text" id="how-to-play">{HELP_TEXT}</p>
                 )}
             </div>
             <div className="scorecard">

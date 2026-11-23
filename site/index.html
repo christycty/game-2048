@@ -322,11 +322,7 @@ flowchart LR
           <ul class="bullets">
             <li>Stale-token ignores do <strong>not</strong> beacon; aborts beacon <code>cancel</code>, not
               <code>fail</code>.</li>
-            <li>
-              Still open (separate PRs): process-wide rate limit on <code>/client-events</code>
-              (beacon integrity) and a verification ladder (checklist + opt-in
-              <code>pytest --load</code>).
-            </li>
+            <li>Process-wide rate limit on <code>/client-events</code> bounds beacon volume independently of suggest buckets.</li>
           </ul>
           <details class="shot">
             <summary>UI screenshot — Grafana GenAI ops (API / Client / LLM)</summary>
@@ -402,8 +398,10 @@ flowchart LR
           </ol>
           <p class="note">
             Phoenix is host-side (not Compose). Board + Expectimax alone is enough for a fast product
-            pass; full ops needs Ollama + collector + metrics profile. Deeper “verify without reading
-            code” ladder (incl. opt-in load) is the open verification PR.
+            pass; full ops needs Ollama + collector + metrics profile. For deeper automated proof
+            without reading code (unit, HTTP contract, disconnect cancel, image smokes, and opt-in
+            <code>pytest --load</code>), see the verification checklist in
+            <code>docs/agents/server.md</code>.
           </p>
         </section>
       </main>
