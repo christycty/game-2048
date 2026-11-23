@@ -166,7 +166,6 @@ export function useSuggestSession({
         suggestingRef,
         suggestTokenRef,
         suggestAbortRef,
-        capacityRetriesRef,
         abortInFlightSuggest,
         resetCapacityRetries,
         handleSuggest,

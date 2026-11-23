@@ -24,7 +24,7 @@ Package name: `game-2048-server`. Entry: `app.main:app`. Python ≥ 3.11 (images
 
 | Path | Role |
 |---|---|
-| `app/main.py` | App factory, CORS, hard-ceiling + LLM in-flight gates, disconnect-cancel middleware, `/health`, `/suggest` (async), `/client-events`, `/metrics`. |
+| `app/main.py` | App factory, CORS, hard-ceiling + LLM in-flight gates, disconnect-cancel middleware (pump diagram in module docstring), `/health`, `/suggest` (async; spend refund via `_release_spend_token`), `/client-events`, `/metrics`. |
 | `app/schemas.py` | Request and response models. Tile and mode validation. |
 | `app/suggester.py` | Mode dispatch, LLM retries, fallback, expectimax search; honors per-request cancel. |
 | `app/expectimax.py` | Depth-limited expectimax with spawn chance nodes; checks cancel between depths and inside chance/max nodes. |
@@ -102,6 +102,8 @@ Expectimax depth: open boards (≥8 empties) search to depth 1; tighter boards t
 ## LLM (`OllamaClient`)
 
 `POST {OLLAMA_BASE_URL}/api/chat` with `OLLAMA_MODEL`, non-streaming. The prompt lists the board, legal moves, any rejected moves, and asks for JSON `{"move":"...","reason":"..."}` only.
+
+Each attempt uses its own `httpx` client. Async path: `_post_chat_async` → create_task(POST) → `_wait_chat_post_or_cancel` (50ms poll; cancel → `task.cancel()` → `SuggestCancelled`). Entry is exactly one POST: no running loop → `asyncio.run`; loop already on → fresh thread + `asyncio.run` (never await on the outer loop). Sync MockTransport path stays for unit tests.
 
 `OLLAMA_STRUCTURED_OUTPUT` is off by default. When opted in and `APP_ENV` is not `prod`, the request also sends a JSON schema that constrains `move` to the legal set. Prod always omits that schema so the model must follow the prompt text alone.
 
