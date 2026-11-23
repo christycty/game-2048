@@ -18,7 +18,7 @@ from app.rate_limit import (
     HEADER_SUGGEST_LIMIT,
     LIMIT_REASON_CAPACITY,
     LIMIT_REASON_SPEND,
-    LlmInFlightGate,
+    InFlightGate,
     SuggestRateLimiter,
 )
 from app.schemas import ClientEventRequest, HealthResponse, SuggestRequest, SuggestResponse
@@ -100,7 +100,8 @@ def create_app(
     llm_client: LlmClient | None = None,
     span_processor: SpanProcessor | None = None,
     rate_limiters: dict[str, SuggestRateLimiter] | None = None,
-    llm_in_flight: LlmInFlightGate | None = None,
+    llm_in_flight: InFlightGate | None = None,
+    expectimax_in_flight: InFlightGate | None = None,
     client_events_rate_limiter: SuggestRateLimiter | None = None,
 ) -> FastAPI:
     settings = settings or Settings()
@@ -114,7 +115,10 @@ def create_app(
             window,
         ),
     }
-    in_flight = llm_in_flight or LlmInFlightGate(settings.llm_max_in_flight)
+    capacity_gates = {
+        "llm": llm_in_flight or InFlightGate(settings.llm_max_in_flight),
+        "expectimax": expectimax_in_flight or InFlightGate(settings.expectimax_max_in_flight),
+    }
     beacon_limiter = client_events_rate_limiter or SuggestRateLimiter(
         settings.client_events_rate_limit_requests,
         settings.client_events_rate_limit_window_seconds,
@@ -190,25 +194,24 @@ def create_app(
                     HEADER_SUGGEST_LIMIT: LIMIT_REASON_SPEND,
                 },
             )
-        # Layer 2 (LLM only): in-flight capacity before calling Ollama.
-        # Suggest flow: spend allow → (llm) capacity acquire → to_thread(suggester)
+        # Layer 2: per-mode in-flight capacity (LLM → Ollama; Expectimax → CPU search).
+        # Suggest flow: spend allow → capacity acquire → to_thread(suggester)
         #   → cancel → 499 + refund spend; finally always releases capacity slot.
-        slot: object | None = None
-        if body.mode == "llm":
-            capacity = in_flight.acquire()
-            if capacity.retry_after is not None:
-                # Rejected before Ollama — do not burn the hard-ceiling hit.
-                _release_spend_token(limiters[body.mode], gate.token)
-                record_suggest_limit_reject(LIMIT_REASON_CAPACITY)
-                raise HTTPException(
-                    status_code=429,
-                    detail=DETAIL_MODEL_BUSY,
-                    headers={
-                        "Retry-After": str(capacity.retry_after),
-                        HEADER_SUGGEST_LIMIT: LIMIT_REASON_CAPACITY,
-                    },
-                )
-            slot = capacity.token
+        capacity_gate = capacity_gates[body.mode]
+        capacity = capacity_gate.acquire()
+        if capacity.retry_after is not None:
+            # Rejected before work — do not burn the hard-ceiling hit.
+            _release_spend_token(limiters[body.mode], gate.token)
+            record_suggest_limit_reject(LIMIT_REASON_CAPACITY)
+            raise HTTPException(
+                status_code=429,
+                detail=DETAIL_MODEL_BUSY,
+                headers={
+                    "Retry-After": str(capacity.retry_after),
+                    HEADER_SUGGEST_LIMIT: LIMIT_REASON_CAPACITY,
+                },
+            )
+        slot = capacity.token
         # try starts immediately after acquire so a pre-suggester failure cannot leak the slot
         # (default LLM_MAX_IN_FLIGHT=1 would sticky-429 until restart).
         try:
@@ -229,8 +232,7 @@ def create_app(
             set_json_io(span, output_payload={"detail": "no legal move"})
             raise HTTPException(status_code=409, detail="no legal move") from None
         finally:
-            if slot is not None:
-                in_flight.release(slot)
+            capacity_gate.release(slot)
         mark_chain_io(
             span,
             input_payload={"board": body.board, "mode": body.mode},
