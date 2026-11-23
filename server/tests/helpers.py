@@ -8,6 +8,7 @@ from typing import Any
 
 from app.cancel import SuggestCancelled
 from app.config import Settings
+from app.expectimax import Choice
 from app.llm import ModelSuggestion
 
 # Right-hand column. Left only slides it, which is also the fallback direction.
@@ -60,6 +61,7 @@ ISOLATED_SETTINGS_DEFAULTS: dict[str, object] = {
     "suggest_rate_limit_expectimax_requests": 360,
     "suggest_rate_limit_window_seconds": 60,
     "llm_max_in_flight": 1,
+    "expectimax_max_in_flight": 4,
     "client_events_rate_limit_requests": 60,
     "client_events_rate_limit_window_seconds": 60,
     "client_host_port": 5173,
@@ -218,4 +220,35 @@ class BlockingLLM:
                 raise SuggestCancelled()
             if self.release.is_set():
                 return ModelSuggestion("right", "ok")
+            time.sleep(0.01)
+
+
+class BlockingExpectimax:
+    """Stand-in for choose_move: blocks until cancel or release (real search is too fast)."""
+
+    def __init__(self) -> None:
+        self.started = threading.Event()
+        self.release = threading.Event()
+        self.cancelled_with: threading.Event | None = None
+        self.calls = 0
+        self._lock = threading.Lock()
+
+    def __call__(
+        self,
+        board: list[list[int]],
+        *,
+        depth: int | None = None,
+        budget_seconds: float | None = None,
+        clock: object | None = None,
+        cancel: threading.Event | None = None,
+    ) -> Choice:
+        with self._lock:
+            self.calls += 1
+        self.started.set()
+        while True:
+            if cancel is not None and cancel.is_set():
+                self.cancelled_with = cancel
+                raise SuggestCancelled()
+            if self.release.is_set():
+                return Choice("right", "Score of each direction: Right = 1.0")
             time.sleep(0.01)

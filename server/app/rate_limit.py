@@ -64,13 +64,13 @@ class SuggestRateLimiter:
             self._hits = deque((stamp, hit) for stamp, hit in self._hits if hit is not token)
 
 
-class LlmInFlightGate:
-    """Process-wide concurrency cap for LLM suggestions (Ollama capacity).
+class InFlightGate:
+    """Process-wide concurrency cap for one suggest mode (capacity gate).
 
-    Default max is 1: one in-flight Ollama call at a time. Non-blocking; a full
-    gate returns Retry-After like the sliding-window limiter (v1: no queue).
-    Held tokens are tracked so release only frees that request's slot (same
-    cancel-safe pattern as SuggestRateLimiter under max_in_flight > 1).
+    Used separately for LLM (Ollama) and Expectimax (CPU search). Non-blocking;
+    a full gate returns Retry-After like the sliding-window limiter (v1: no
+    queue). Held tokens are tracked so release only frees that request's slot
+    (same cancel-safe pattern as SuggestRateLimiter under max_in_flight > 1).
     """
 
     # Busy clients should retry soon; we do not know when the holder finishes.
@@ -98,3 +98,7 @@ class LlmInFlightGate:
             return
         with self._lock:
             self._held.discard(token)
+
+
+# Backward-compatible alias (tests / older call sites).
+LlmInFlightGate = InFlightGate

@@ -62,7 +62,7 @@ Dev client mounts `./client` and keeps Linux `node_modules` in a named volume. `
 
 ### Suggestion rate limit
 
-Two layers for **LLM**; Expectimax keeps a separate (higher) spend window so Auto Play does not share the LLM budget.
+Two layers for **both** LLM and Expectimax (separate buckets / gates so modes do not share budget or capacity).
 
 **Layer 1 — hard ceiling (spend / runaway safety):** per-mode sliding window (`SUGGEST_RATE_LIMIT_WINDOW_SECONDS`, default 60s):
 
@@ -71,13 +71,20 @@ Two layers for **LLM**; Expectimax keeps a separate (higher) spend window so Aut
 | LLM | `SUGGEST_RATE_LIMIT_REQUESTS` | 60 |
 | Expectimax | `SUGGEST_RATE_LIMIT_EXPECTIMAX_REQUESTS` | 360 |
 
-Expectimax default is sized for a **design load of ~4 concurrent Auto Play tabs**. `SETTLE_MS` + `AUTO_PLAY_GAP_MS` (~910ms) is an **upper-bound** cadence if search were free (~65/min per tab); real Auto Play is slower because suggest latency is extra. Cap uses that upper bound: `4 × ~65 × ~1.4 cushion ≈ 360` / window. Prove with `pytest --load -m load` (expectimax cadence: full-window soak at 360 with **0** spend `429` and `ok` > 120; undersized cap trips). Raise via env up to 600 if needed. Expectimax is spend-only today (no in-flight gate yet).
+Expectimax spend default is sized for a **design load of ~4 concurrent Auto Play tabs**. `SETTLE_MS` + `AUTO_PLAY_GAP_MS` (~910ms) is an **upper-bound** cadence if search were free (~65/min per tab); real Auto Play is slower because suggest latency is extra. Cap uses that upper bound: `4 × ~65 × ~1.4 cushion ≈ 360` / window. Prove with `pytest --load -m load` (expectimax cadence: full-window soak at 360 with **0** spend `429` and `ok` > 120; undersized spend cap trips; undersized `EXPECTIMAX_MAX_IN_FLIGHT=1` trips capacity). Raise spend via env up to 600 if needed.
 
-**Layer 2 — LLM capacity gate:** `LLM_MAX_IN_FLIGHT` (default `1`) limits concurrent LLM `/suggest` calls admitted to Ollama. This is the real throttle for Auto Play. Expectimax does not take a slot.
+**Layer 2 — capacity gate (real throttle):** independent in-flight caps per mode:
+
+| Mode | Env | Default | Limits |
+|---|---|---|---|
+| LLM | `LLM_MAX_IN_FLIGHT` | `1` | Concurrent Ollama admits |
+| Expectimax | `EXPECTIMAX_MAX_IN_FLIGHT` | `4` | Concurrent CPU searches (matches demo tab count) |
+
+Modes do not share slots. Same `429` contract for both.
 
 Either layer returns `429` with `Retry-After`, but **details differ**: spend uses `detail: "too many suggestions"` + `X-Suggest-Limit: spend`; capacity uses `detail: "model busy"` + `X-Suggest-Limit: capacity` + short `Retry-After: 1`. Spend `Retry-After` is remaining window seconds (often `60` when just filled) but **also collapses to `1` near window end** — prefer detail / `X-Suggest-Limit` over `Retry-After` alone. Auto Play **retries** capacity a few times with that backoff, and **stops** on spend. The caps are not per browser: in prod the only caller is nginx. A mid-run cancel (`499`) releases **that request’s** hard-ceiling token and its in-flight slot so Stop/disconnect does not burn the mode cap, a sibling’s hit, or capacity. Auto Play may still hit the hard ceiling only as a safety net; under normal serial play the capacity gate dominates.
 
-**Verify (no code reading):** from `server/`, `pytest tests/test_rate_limit.py tests/test_suggest.py tests/test_suggest_http_contract.py tests/test_cancel.py -q` — expect gate unit tests, capacity (`model busy`) vs spend (`too many suggestions`) HTTP cases (incl. spend `Retry-After` collapse to `1`), cancel frees the in-flight slot, and concurrent LLM isolation with `LLM_MAX_IN_FLIGHT=2`. Full ladder (incl. opt-in `--load` + image smokes): [server.md](server.md#verification-checklist) / parent `plan/verification-ladder.md`.
+**Verify (no code reading):** from `server/`, `pytest tests/test_rate_limit.py tests/test_suggest.py tests/test_suggest_http_contract.py tests/test_cancel.py -q` — expect gate unit tests, capacity (`model busy`) vs spend (`too many suggestions`) HTTP cases for **LLM and Expectimax** (incl. spend `Retry-After` collapse to `1`), cancel frees LLM and Expectimax in-flight slots **and** refunds each mode’s spend hit, mid-flight occupancy under `max_in_flight=2` for both modes, and concurrent isolation with `LLM_MAX_IN_FLIGHT=2` / `EXPECTIMAX_MAX_IN_FLIGHT=4`. Full ladder (incl. opt-in `--load` + image smokes): [server.md](server.md#verification-checklist) / parent `plan/verification-ladder.md`.
 
 ### Client-events integrity gate
 

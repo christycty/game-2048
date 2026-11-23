@@ -8,6 +8,7 @@ import {
     HINT_CAPACITY_RETRYING,
     HINT_SPEND_CAP,
     HINT_SUGGEST_FAILED,
+    HINT_SUGGEST_RETRYING,
 } from "./suggestHints.js";
 
 describe("capitalize", () => {
@@ -32,6 +33,18 @@ describe("hintForSuggestFailure", () => {
         assert.equal(
             hintForSuggestFailure({ isCapacityBusy: true, isSpendCap: false, retrying: true }),
             HINT_CAPACITY_RETRYING,
+        );
+    });
+
+    it("uses model-miss retry copy while Auto Play is retrying a fallback", () => {
+        assert.equal(
+            hintForSuggestFailure({
+                isCapacityBusy: false,
+                isSpendCap: false,
+                isModelMiss: true,
+                retrying: true,
+            }),
+            HINT_SUGGEST_RETRYING,
         );
     });
 
