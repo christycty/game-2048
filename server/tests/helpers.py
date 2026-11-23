@@ -250,5 +250,5 @@ class BlockingExpectimax:
                 self.cancelled_with = cancel
                 raise SuggestCancelled()
             if self.release.is_set():
-                return Choice("right", "Score of each direction: Right = 1.0")
+                return Choice("right", "Expected score vs Right: Left +0.0, Up +0.0, Down +0.0")
             time.sleep(0.01)

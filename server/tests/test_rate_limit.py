@@ -2,7 +2,7 @@
 
 import pytest
 
-from app.rate_limit import InFlightGate, LlmInFlightGate
+from app.rate_limit import InFlightGate
 
 
 def test_in_flight_rejects_non_positive_max() -> None:
@@ -46,7 +46,3 @@ def test_in_flight_release_only_frees_matching_token() -> None:
     assert gate.acquire().token is None
     gate.release(b.token)
     gate.release(third.token)
-
-
-def test_llm_in_flight_alias_is_in_flight_gate() -> None:
-    assert LlmInFlightGate is InFlightGate

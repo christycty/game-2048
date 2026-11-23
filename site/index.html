@@ -99,12 +99,13 @@ flowchart LR
           <figure class="figure">
             <img
               src="./assets/ui-suggest.png"
-              alt="2048 UI with Expectimax suggestion, per-direction scores, and Play Left"
-              width="1550"
-              height="808"
+              class="portrait"
+              alt="2048 UI with an Expectimax suggestion comparing the other directions to Up, and Play Up"
+              width="916"
+              height="1488"
             />
             <figcaption>
-              Live UI: Expectimax hint with per-direction scores and confirm via Play.
+              Live UI: Expectimax hint comparing other directions and confirm via Play.
             </figcaption>
           </figure>
         </section>
@@ -213,7 +214,7 @@ flowchart TB
             <li><strong>On <code>ollama chat</code></strong> → prompt/completion, model name, token counts, ERROR on bad JSON / illegal move / transport fail.</li>
             <li><strong>Retries</strong> → multiple <code>ollama chat</code> children under the same suggest.</li>
             <li><strong>Not traced</strong> — <code>/health</code>, <code>/metrics</code>, <code>/client-events</code> (scrape noise).</li>
-            <li>Host collector only (not in Compose). <code>EXPORT_TRACES</code> defaults on; CI turns it off.</li>
+            <li>Host collector only (not in Compose). Opt in with <code>EXPORT_TRACES=true</code> when Phoenix runs.</li>
           </ul>
           <details class="shot">
             <summary>UI screenshot — Phoenix span tree + detail</summary>

@@ -79,10 +79,10 @@ In `APP_ENV=dev`, `/docs` and `/openapi.json` are open. In `prod` they return 40
 | `source` | `llm`, `fallback`, or `expectimax` |
 | `reason` | Non-empty for `source: "llm"` (model text) and `source: "expectimax"` (score line). `null` for `fallback`. |
 
-Expectimax reason shape (illegal directions are `N/A`):
+Expectimax reason shape (each other direction vs the chosen move; illegal moves are `not possible`):
 
 ```text
-Score of each direction: Left = N/A, Right = 1053.4, Up = N/A, Down = 771.2
+Expected score vs Up: Left not possible, Right -146.6, Down -428.8
 ```
 
 ## Suggestion pipeline
@@ -92,12 +92,12 @@ Score of each direction: Left = N/A, Right = 1053.4, Up = N/A, Down = 771.2
 1. Builds the legal move set with the same slide rules as the client.
 2. Picks a fallback via `first_legal_move` (first `FALLBACK_ORDER` direction that is legal: `left`, `up`, `right`, `down`). None → `NoLegalMove` → HTTP 409.
 3. **`expectimax`**: `choose_move` runs depth-limited expectimax (chance node: uniform empty cell, 2 at 90% / 4 at 10%; boards with a tile ≥ 2048 score as a hard win, matching the client). Returns `source: "expectimax"` with the score-line `reason`. If search returns a non-legal move, or returns nothing (budget expired or an unreachable state before any depth finished), substitutes the fallback with `source: "fallback"`. A cut mid-depth keeps the last finished depth.
-4. **`llm`**: up to `LLM_MAX_ATTEMPTS` calls, stopped early when the remaining `LLM_SUGGEST_BUDGET_SECONDS` cannot cover another `LLM_ATTEMPT_TIMEOUT_SECONDS` wait.
+4. **`llm`**: up to `LLM_MAX_ATTEMPTS` calls, stopped early when the remaining `LLM_SUGGEST_BUDGET_SECONDS` cannot cover another `LLM_ATTEMPT_TIMEOUT_SECONDS` wait. A 1s start slack lets the second attempt run after a first attempt that timed out, which overruns its timeout by a few ms. The worst case is budget + 1s (41s by default, under nginx's 50s read timeout).
 5. Accepts a reply only when the move is legal and the reason is a non-blank string after strip.
 6. Retries on illegal moves (recorded as rejected), blank reasons, and `LlmError`.
 7. After exhaustion: `source: "fallback"`, `move` is the fallback, `reason` is null.
 
-Expectimax depth: open boards (≥8 empties) search to depth 1; tighter boards to depth 2. Wall budget ~0.5s with iterative deepening (keeps the last finished depth; if none finished, falls back). `N/A` in the reason means that direction is illegal, not unscored.
+Expectimax depth: open boards (≥8 empties) search to depth 1; tighter boards to depth 2. Wall budget ~0.5s with iterative deepening (keeps the last finished depth; if none finished, falls back). `not possible` in the reason means that direction is illegal, not unscored.
 
 ## LLM (`OllamaClient`)
 
@@ -130,7 +130,7 @@ Loaded from the environment and optional `server/.env` (Compose does not use tha
 | `CLIENT_EVENTS_RATE_LIMIT_REQUESTS` | `60` | 1–600; process-wide `/client-events` integrity cap |
 | `CLIENT_EVENTS_RATE_LIMIT_WINDOW_SECONDS` | `60` | 1–3600; beacon window (separate from suggest) |
 | `CLIENT_HOST_PORT` | `5173` | 1–65535; CORS allowlist |
-| `EXPORT_TRACES` | `true` | Gates **OTLP export** only (instrumentation still loads when `false`). Host uvicorn / one-off image runs honor this env; CI pytest and smoke `docker run` set `false`. Compose `dev`/`prod` hardcode `true` (see [runtime.md](runtime.md)). Metrics / `GET /metrics` stay on regardless. |
+| `EXPORT_TRACES` | `false` | Gates **OTLP export** only (instrumentation still loads when `false`). Opt in when a collector runs; host uvicorn and Compose read this env (see [runtime.md](runtime.md)). CI pytest and smoke `docker run` keep it `false`. Metrics / `GET /metrics` stay on regardless. |
 | `PHOENIX_COLLECTOR_ENDPOINT` | `http://localhost:6006` | Host process default; exporter posts to `{endpoint}/v1/traces` (or a full traces URL). Compose uses `COMPOSE_PHOENIX_COLLECTOR_ENDPOINT`. |
 | `PHOENIX_API_KEY` | unset | Optional bearer; sent only for HTTPS or local/`host.docker.internal` HTTP |
 
@@ -146,7 +146,7 @@ Shared Fake/Blocking LLM doubles and `asgi_suggest` live in `tests/helpers.py` (
 
 - `tests/test_helpers.py` asserts `isolated_settings` pins every `Settings` field and ignores hostile `SUGGEST_RATE_LIMIT_*` / `LLM_MAX_IN_FLIGHT` / `EXPECTIMAX_MAX_IN_FLIGHT` / `CLIENT_EVENTS_RATE_LIMIT_*` env, and verifies `_CLIENT_GAME_JS` (`client/src/game/game.js`) and the Expectimax load cycle parser in default CI.
 - `tests/test_rate_limit.py` covers `InFlightGate` admit/block, token-safe release under `max_in_flight > 1`, and invalid max.
-- `tests/test_suggest.py` covers health, CORS, per-mode hard ceilings before the suggester (including the **default** 60-call LLM hard ceiling and a separate Expectimax bucket), LLM and Expectimax in-flight capacity (LLM: second call `model busy` 429 while first holds; two slots then third blocked; Expectimax: fifth of four blocked; capacity reject does not burn either hard ceiling; modes do not share slots; 422/409 and pre-suggester failure do not leak slots for either mode; held-slot overlap gets fail-fast 429 then frees for LLM and Expectimax), LLM success and reason, illegal-move retry, exhausted fallback, expectimax search + score reason, illegal-search fallback, stuck-board 409, bad payload 422, Ollama HTTP failures, prod schema omission, attempt bounds, and the time budget stop.
+- `tests/test_suggest.py` covers health, CORS, per-mode hard ceilings before the suggester (including the **default** 60-call LLM hard ceiling and a separate Expectimax bucket), LLM and Expectimax in-flight capacity (LLM: second call `model busy` 429 while first holds; two slots then third blocked; Expectimax: fifth of four blocked; capacity reject does not burn either hard ceiling; modes do not share slots; 422/409 and pre-suggester failure do not leak slots for either mode; held-slot overlap gets fail-fast 429 then frees for LLM and Expectimax), LLM success and reason, illegal-move retry, exhausted fallback, expectimax search + score reason, illegal-search fallback, stuck-board 409, bad payload 422, Ollama HTTP failures, prod schema omission, attempt bounds, the time budget stop, and the retry after a timed-out first attempt.
 - `tests/test_suggest_http_contract.py` covers health, `/metrics`, `422` (no rate-limit spend), stuck-board `409`, spend `429` (`too many suggestions` + `X-Suggest-Limit: spend`) vs capacity `429` (`model busy` + `X-Suggest-Limit: capacity`) for **LLM and Expectimax**, spend `Retry-After` collapse to `1` near window end, expectimax search, unreachable-Ollama `fallback`, `/client-events` beacons (`fail` / `rate_limit` / `model_busy` / `cancel`) → scrape series, beacon `422` (no integrity-cap spend), beacon-cap exhaust → `429` with counter unchanged, and independence from the suggest bucket (default suite / CI). Cancel `499` lives in `test_cancel.py`.
 - `tests/test_cancel.py` covers per-request cancel through suggester / expectimax (pre-set and mid-search via `_check`) / Ollama client (pre-set, mid-flight hanging POST with `task.cancel`, and single-POST when the caller already has a running loop), concurrent isolation (cancel A, B still completes; LLM isolation raises `LLM_MAX_IN_FLIGHT`), endpoint `499` mapping, disconnect middleware, concurrent ASGI disconnect cancelling A while B completes (LLM and Expectimax) **and mid-flight occupancy for both modes** (after A’s 499 with `max_in_flight=2`, a third `/suggest` admits while B holds and a fourth is capacity-429), rate-limit token refund and in-flight slot release after cancel (LLM and Expectimax), and concurrent release not popping a sibling’s hit.
 - `tests/test_load_suggest.py` is marked `load` (opt-in soak): **sustained** capacity hold while workers hammer `429`, then drain + completes at `LLM_MAX_IN_FLIGHT` 1 then 2; mixed hard-ceiling + capacity `429` on **one** app with a frozen clock; ASGI disconnect-under-capacity waves with a mid-hold capacity probe; asserts accounting and no slot leak after drain.

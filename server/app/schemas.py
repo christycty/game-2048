@@ -12,6 +12,10 @@ ClientEventOutcome = Literal["fail", "rate_limit", "model_busy", "cancel"]
 MAX_TILE = 1 << 17
 
 
+def _is_tile(cell: int) -> bool:
+    return cell == 0 or (2 <= cell <= MAX_TILE and cell & (cell - 1) == 0)
+
+
 class SuggestRequest(BaseModel):
     board: list[list[int]]
     mode: Mode
@@ -20,8 +24,8 @@ class SuggestRequest(BaseModel):
     def board_is_grid(self) -> "SuggestRequest":
         if len(self.board) != 4 or any(len(row) != 4 for row in self.board):
             raise ValueError("board must be 4x4")
-        if any(cell < 0 or cell > MAX_TILE for row in self.board for cell in row):
-            raise ValueError(f"tile values must be between 0 and {MAX_TILE}")
+        if not all(_is_tile(cell) for row in self.board for cell in row):
+            raise ValueError(f"tile values must be 0 or a power of two from 2 to {MAX_TILE}")
         return self
 
 

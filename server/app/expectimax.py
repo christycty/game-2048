@@ -79,7 +79,7 @@ def choose_move(
             )
         except _SearchBroken:
             return None
-        return Choice(move, _format_reason(scores))
+        return Choice(move, _format_reason(move, scores))
 
     limit = _depth_for(root) if depth is None else depth
     seconds = _BUDGET_SECONDS if budget_seconds is None else budget_seconds
@@ -96,17 +96,31 @@ def choose_move(
         # Budget or an unreachable state mid-depth: keep the last finished depth.
         pass
     if scores is None or best is None:
-        return None  # nothing finished; N/A means illegal, not unscored
-    return Choice(best, _format_reason(scores))
+        return None  # nothing finished; "not possible" means illegal, not unscored
+    return Choice(best, _format_reason(best, scores))
 
 
-def _format_reason(scores: dict[str, float | None]) -> str:
+def _format_reason(best: str, scores: dict[str, float | None]) -> str:
+    # The chosen move is always scored; only illegal directions are None.
+    best_score = scores[best]
+    assert best_score is not None
     parts: list[str] = []
     for direction in DIRECTIONS:
-        value = scores[direction]
-        shown = "N/A" if value is None else f"{value:.1f}"
-        parts.append(f"{_REASON_LABEL[direction]} = {shown}")
-    return "Score of each direction: " + ", ".join(parts)
+        if direction == best:
+            continue
+        label = _REASON_LABEL[direction]
+        score = scores[direction]
+        if score is None:
+            parts.append(f"{label} not possible")
+        elif score <= _GAME_OVER / 2:
+            parts.append(f"{label} loses")
+        elif score >= _GAME_WON / 2:
+            parts.append(f"{label} wins")
+        elif abs(score - best_score) < 0.05:
+            parts.append(f"{label} ties")
+        else:
+            parts.append(f"{label} {score - best_score:+.1f}")
+    return f"Expected score vs {_REASON_LABEL[best]}: " + ", ".join(parts)
 
 
 def _depth_for(board: Board) -> int:

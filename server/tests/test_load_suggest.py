@@ -21,7 +21,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from app.main import create_app
-from app.rate_limit import LlmInFlightGate, SuggestRateLimiter
+from app.rate_limit import InFlightGate, SuggestRateLimiter
 from helpers import OPEN_BOARD, BlockingLLM, FrozenClock, asgi_suggest, isolated_settings
 
 pytestmark = pytest.mark.load
@@ -41,7 +41,7 @@ def _run_load(*, max_in_flight: int) -> None:
     # Holders + completes must stay under Settings max so 429s stay capacity.
     assert max_in_flight + complete_total <= 120
     llm = BlockingLLM()
-    gate = LlmInFlightGate(max_in_flight)
+    gate = InFlightGate(max_in_flight)
     settings = isolated_settings(
         suggest_rate_limit_requests=120,
         llm_max_in_flight=max_in_flight,
@@ -154,7 +154,7 @@ def test_load_mixed_429_layers_classified_by_retry_after() -> None:
     hard_ceiling = 4
     clock = FrozenClock()
     llm = BlockingLLM()
-    gate = LlmInFlightGate(1)
+    gate = InFlightGate(1)
     limiter = SuggestRateLimiter(hard_ceiling, _WINDOW_SECONDS, clock)
     app = create_app(
         isolated_settings(
@@ -243,7 +243,7 @@ def test_load_mixed_429_layers_classified_by_retry_after() -> None:
 def test_load_cancel_under_capacity_accounts_and_drains() -> None:
     """ASGI disconnect under capacity: mid-hold capacity 429; cancels + completes account."""
     llm = BlockingLLM()
-    gate = LlmInFlightGate(2)
+    gate = InFlightGate(2)
     settings = isolated_settings(
         suggest_rate_limit_requests=120,
         llm_max_in_flight=2,

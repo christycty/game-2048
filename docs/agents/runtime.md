@@ -8,7 +8,7 @@ Typical loop:
 
 1. Ollama on the host at `http://localhost:11434`, with the model named in `OLLAMA_MODEL` (default `gemma4:latest`).
 2. API from `server/` on `127.0.0.1:${API_HOST_PORT}` (default `8000`).
-3. Client from `client/` on `127.0.0.1:${CLIENT_HOST_PORT}` (default `5173`; Vite loads those names from the repo-root `.env`).
+3. Client from `client/` on `localhost:${CLIENT_HOST_PORT}` (default `5173`; Vite loads those names from the repo-root `.env`). Vite binds `localhost`, which can resolve to `::1` only, so `127.0.0.1` may be refused.
 
 The page calls **same-origin** `/suggest` (and `/client-events`) by default. Vite proxies those paths to `http://127.0.0.1:${API_HOST_PORT}` (override with `API_PROXY_TARGET`). Set `VITE_API_BASE_URL` to an absolute API origin only when you intentionally bypass the proxy. CORS allows `http://localhost:${CLIENT_HOST_PORT}` and `http://127.0.0.1:${CLIENT_HOST_PORT}` for that absolute-origin case.
 
@@ -30,7 +30,7 @@ Multiple checkouts on one machine collide on Compose project name and on host po
 
 Container-listen ports stay `8000` (API), `5173` / `80` (client), `9090` / `3000` (metrics). Only the **host** mapping moves.
 
-Default LLM attempt timeout is 20s and suggestion budget 40s (budget must cover two attempts). Phoenix export: host uvicorn respects `EXPORT_TRACES` / `PHOENIX_COLLECTOR_ENDPOINT` from `server/.env` (or the shell). Compose `dev` / `prod` API services hardcode `EXPORT_TRACES=true` and inject `COMPOSE_PHOENIX_COLLECTOR_ENDPOINT` the same way they do for Ollama—turning export off for Compose requires changing `docker-compose.yml`. Optional `PHOENIX_API_KEY` is passed through Compose with the same bearer rules as the host. The API stays healthy if the collector is down.
+Default LLM attempt timeout is 20s and suggestion budget 40s (budget must cover two attempts). Phoenix export is opt-in (`EXPORT_TRACES=true`): host uvicorn reads `EXPORT_TRACES` / `PHOENIX_COLLECTOR_ENDPOINT` from `server/.env` (or the shell). Compose `dev` / `prod` pass through `EXPORT_TRACES` from the root `.env` (default `false`) and inject `COMPOSE_PHOENIX_COLLECTOR_ENDPOINT` the same way they do for Ollama. Optional `PHOENIX_API_KEY` is passed through Compose with the same bearer rules as the host. The API stays healthy if export is off or the collector is down.
 
 ## Compose
 
@@ -54,7 +54,7 @@ Published ports bind `127.0.0.1` and `::1` so a LAN peer cannot reach them. Prod
 
 Ollama stays on the host. Inside the API container the default URL is `http://host.docker.internal:11434`. Set `COMPOSE_OLLAMA_BASE_URL` in the root `.env` to override that. Do not set `OLLAMA_BASE_URL` in the root `.env`: that name is for a host uvicorn process (`server/.env.example` uses localhost), and Compose must not replace the container URL with it. Same rule for Phoenix: use `COMPOSE_PHOENIX_COLLECTOR_ENDPOINT`, not `PHOENIX_COLLECTOR_ENDPOINT`, in the root `.env`.
 
-Phoenix (OTLP traces) also stays on the host by default (`http://host.docker.internal:6006`). Override with `COMPOSE_PHOENIX_COLLECTOR_ENDPOINT`. Do not set `PHOENIX_COLLECTOR_ENDPOINT` in the root `.env` for the same reason as Ollama. Dev and prod export traces (`EXPORT_TRACES=true`); CI sets `EXPORT_TRACES=false` on the API image.
+Phoenix (OTLP traces) also stays on the host by default (`http://host.docker.internal:6006`). Override with `COMPOSE_PHOENIX_COLLECTOR_ENDPOINT`. Do not set `PHOENIX_COLLECTOR_ENDPOINT` in the root `.env` for the same reason as Ollama. Set `EXPORT_TRACES=true` in the root `.env` (Compose) or `server/.env` (host uvicorn) once a collector is running; CI keeps export off on the API image.
 
 `host.docker.internal` is added via `host-gateway` so Linux Docker Engine can resolve it. Docker Desktop can reach an Ollama bound to `127.0.0.1` at that name. Linux Docker Engine cannot: start that Ollama with `OLLAMA_HOST=0.0.0.0`.
 
@@ -118,7 +118,7 @@ Server image: `python:3.12-slim`, locked `uv sync --frozen --no-dev` into `/opt/
 - Docs (Python 3.12): script unit tests, `check_doc_links.py` (**fails** on broken links), freshness nudge (`check_docs_freshness.py`, warn-only).
 - Server: locked `uv sync --frozen --extra dev`, `ruff format --check`, `ruff check`, `pytest` (e2e and load off; `EXPORT_TRACES` off for tests). Metrics stay on regardless.
 - Client (Node 22): install, lint, test, build.
-- Docker: build both images; client image smoke (`id="root"`); API image with `APP_ENV=prod` + `EXPORT_TRACES=false` (health); **`scripts/smoke_api_images.sh`** (CI `docker run` + `prod` alias) — health, prod `/docs`+`/openapi.json` 404, expectimax `/suggest` + `/client-events` through nginx, `GET /metrics` with joined `/suggest`+`200` sample + `outcome="fail"`, nginx does not proxy `/health` or `/metrics`; Compose config checks for default Ollama/Phoenix URLs on `host.docker.internal`, loopback publish binds, **prod API unpublished** (client still publishes `${CLIENT_HOST_PORT}`→80), the `api` alias, metrics-profile ports, `API_HOST_PORT` / `CLIENT_HOST_PORT` / `PROMETHEUS_HOST_PORT` / `GRAFANA_HOST_PORT` remaps, Compose API `EXPORT_TRACES=true`, and `COMPOSE_OLLAMA_BASE_URL` / `COMPOSE_PHOENIX_COLLECTOR_ENDPOINT` overrides.
+- Docker: build both images; client image smoke (`id="root"`); API image with `APP_ENV=prod` + `EXPORT_TRACES=false` (health); **`scripts/smoke_api_images.sh`** (CI `docker run` + `prod` alias) — health, prod `/docs`+`/openapi.json` 404, expectimax `/suggest` + `/client-events` through nginx, `GET /metrics` with joined `/suggest`+`200` sample + `outcome="fail"`, nginx does not proxy `/health` or `/metrics`; Compose config checks for default Ollama/Phoenix URLs on `host.docker.internal`, loopback publish binds, **prod API unpublished** (client still publishes `${CLIENT_HOST_PORT}`→80), the `api` alias, metrics-profile ports, `API_HOST_PORT` / `CLIENT_HOST_PORT` / `PROMETHEUS_HOST_PORT` / `GRAFANA_HOST_PORT` remaps, Compose API `EXPORT_TRACES` default `false` plus opt-in `true`, and `COMPOSE_OLLAMA_BASE_URL` / `COMPOSE_PHOENIX_COLLECTOR_ENDPOINT` overrides.
 - **Load** (manual only): `workflow_dispatch` with `run_load` (default on) installs locked deps via `uv sync --frozen --extra dev` and runs `pytest --load -m load` against FakeLLM; set `load_only` to skip docs/lint/client/docker. Not required on every PR. Local checklist: [server.md](server.md#verification-checklist).
 
 ## Not in this layout

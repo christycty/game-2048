@@ -4,9 +4,11 @@ import pytest
 
 from app.expectimax import (
     _BUDGET_SECONDS,
+    _GAME_OVER,
     _GAME_WON,
     _chance_value,
     _evaluate,
+    _format_reason,
     _freeze,
     _SearchBroken,
     choose_move,
@@ -322,8 +324,8 @@ def test_search_broken_keeps_the_last_finished_depth(
     assert calls > 0
 
 
-def test_reason_lists_a_score_or_na_for_each_direction() -> None:
-    # Only right and down change this board. Left and up stay N/A.
+def test_reason_compares_other_directions_to_chosen_move() -> None:
+    # Only right and down change this board. Left and up are illegal.
     board = [
         [2, 0, 0, 0],
         [0, 0, 0, 0],
@@ -333,14 +335,46 @@ def test_reason_lists_a_score_or_na_for_each_direction() -> None:
     choice = choose_move(board, depth=0)
     assert choice is not None
     assert choice.move == "right"
-    assert choice.reason.startswith("Score of each direction: ")
-    assert "Left = N/A" in choice.reason
-    assert "Up = N/A" in choice.reason
-    assert "Right = N/A" not in choice.reason
-    assert "Down = N/A" not in choice.reason
-    # Left, Right, Up, Down — same order the UI can echo.
-    left_at = choice.reason.index("Left =")
-    right_at = choice.reason.index("Right =")
-    up_at = choice.reason.index("Up =")
-    down_at = choice.reason.index("Down =")
-    assert left_at < right_at < up_at < down_at
+    assert choice.reason.startswith("Expected score vs Right: ")
+    assert "Left not possible" in choice.reason
+    assert "Up not possible" in choice.reason
+    assert "Down" in choice.reason
+    left_at = choice.reason.index("Left")
+    up_at = choice.reason.index("Up")
+    down_at = choice.reason.index("Down")
+    assert left_at < up_at < down_at
+
+
+def test_format_reason_not_possible() -> None:
+    scores = {"left": None, "right": 10.0, "up": None, "down": 8.0}
+    assert _format_reason("right", scores) == (
+        "Expected score vs Right: Left not possible, Up not possible, Down -2.0"
+    )
+
+
+def test_format_reason_ties() -> None:
+    scores = {"left": None, "right": 100.0, "up": 99.98, "down": 100.02}
+    reason = _format_reason("right", scores)
+    assert "Up ties" in reason
+    assert "Down ties" in reason
+
+
+def test_format_reason_negative_gap() -> None:
+    scores = {"left": None, "right": 1200.0, "up": 900.0, "down": 771.2}
+    assert _format_reason("right", scores) == (
+        "Expected score vs Right: Left not possible, Up -300.0, Down -428.8"
+    )
+
+
+def test_format_reason_loses() -> None:
+    scores = {"left": _GAME_OVER, "right": 50.0, "up": 40.0, "down": 30.0}
+    assert _format_reason("right", scores) == (
+        "Expected score vs Right: Left loses, Up -10.0, Down -20.0"
+    )
+
+
+def test_format_reason_wins() -> None:
+    scores = {"left": None, "right": _GAME_WON, "up": _GAME_WON + 1, "down": _GAME_WON + 2}
+    assert _format_reason("right", scores) == (
+        "Expected score vs Right: Left not possible, Up wins, Down wins"
+    )
