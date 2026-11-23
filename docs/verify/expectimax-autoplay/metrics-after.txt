@@ -1,0 +1,3 @@
+# HELP suggest_source_total Suggest responses by source (llm / fallback / expectimax).
+# TYPE suggest_source_total counter
+suggest_source_total{suggest_source="expectimax"} 382.0
