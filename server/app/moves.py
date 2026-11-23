@@ -8,10 +8,14 @@ def legal_moves(board: list[list[int]]) -> list[str]:
     return [direction for direction in DIRECTIONS if apply_move(board, direction) != board]
 
 
-def first_legal_move(board: list[list[int]]) -> str | None:
-    legal = set(legal_moves(board))
+def first_legal_move(
+    board: list[list[int]],
+    legal: list[str] | None = None,
+) -> str | None:
+    """First FALLBACK_ORDER direction that is legal (reuse ``legal`` when already computed)."""
+    choices = set(legal if legal is not None else legal_moves(board))
     for direction in FALLBACK_ORDER:
-        if direction in legal:
+        if direction in choices:
             return direction
     return None
 

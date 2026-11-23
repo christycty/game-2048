@@ -112,7 +112,7 @@ The grid is 4×4. Row 0 is the top. Column 0 is the left.
 
 `hasMoves` is true when any cell is empty, or when a horizontal or vertical neighbor matches. Each pair is checked once, from the top or left cell.
 
-`hasWon` is true when any tile value is ≥ `WIN_TILE` (2048).
+`hasWon` is true when any tile value is ≥ 2048 (module-local `WIN_TILE`).
 
 `tilesToBoard` builds the 4×4 value grid the API expects. Empty cells are `0`. Animation fields are dropped.
 
@@ -128,7 +128,7 @@ On each move, a tile is parked on `fromRow` / `fromCol` for one frame with trans
 
 Tiles are rendered in id order so a merge does not reorder DOM nodes mid-slide. The tile sliding into a merge paints above a tile that only changes cell.
 
-A swipe starts on pointer down (left button only for a mouse), captures the pointer so a release outside the board still counts, and ends on pointer up for that same pointer. A release from a different pointer leaves the gesture alone. Pointer cancel drops it. `swipeDirection` ignores a drag shorter than 24px. The longer axis wins. When the distances match, the vertical axis wins.
+A swipe starts on pointer down (left button only for a mouse), captures the pointer so a release outside the board still counts, and ends on pointer up for that same pointer. A release from a different pointer leaves the gesture alone. Pointer cancel drops it. `swipeDirection` ignores a drag shorter than the module-local `SWIPE_THRESHOLD` (24px). The longer axis wins. When the distances match, the vertical axis wins.
 
 `touch-action: none` on the board keeps the browser from scrolling the gesture away.
 

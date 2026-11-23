@@ -7,7 +7,7 @@ from app import telemetry as tel
 from app.cancel import SuggestCancelled
 from app.expectimax import choose_move
 from app.llm import LlmClient, LlmError
-from app.moves import FALLBACK_ORDER, legal_moves
+from app.moves import first_legal_move, legal_moves
 from app.schemas import Mode, SuggestResponse
 
 logger = logging.getLogger(__name__)
@@ -54,7 +54,7 @@ class MoveSuggester:
 
         raise_if_cancelled()
         legal = legal_moves(board)
-        fallback = next((direction for direction in FALLBACK_ORDER if direction in legal), None)
+        fallback = first_legal_move(board, legal)
         if fallback is None:
             raise NoLegalMove()
 

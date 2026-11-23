@@ -50,7 +50,6 @@ class OllamaClient:
             if client is not None
             else settings.ollama_base_url.rstrip("/")
         )
-        self._closed = False
 
     def suggest_move(
         self,
@@ -291,7 +290,7 @@ class OllamaClient:
 
     def close(self) -> None:
         # No long-lived pool; attempts own their clients. Keep the hook for lifespan.
-        self._closed = True
+        pass
 
 
 async def _wait_chat_post_or_cancel(
