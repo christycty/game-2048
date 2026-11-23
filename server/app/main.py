@@ -192,7 +192,8 @@ def create_app(
             )
         # Layer 2: per-mode in-flight capacity (LLM → Ollama; Expectimax → CPU search).
         # Suggest flow: spend allow → capacity acquire → to_thread(suggester)
-        #   → cancel → 499 + refund spend; finally always releases capacity slot.
+        #   → cancel (499) / no legal move (409) / pre-work error → refund spend;
+        #   finally always releases capacity slot.
         capacity_gate = capacity_gates[body.mode]
         capacity = capacity_gate.acquire()
         if capacity.retry_after is not None:
@@ -208,14 +209,21 @@ def create_app(
                 },
             )
         slot = capacity.token
+        suggester_started = False
         # try starts immediately after acquire so a pre-suggester failure cannot leak the slot
-        # (default LLM_MAX_IN_FLIGHT=1 would sticky-429 until restart).
+        # (default LLM_MAX_IN_FLIGHT=1 would sticky-429 until restart) or spend token.
         try:
             span = trace.get_current_span()
             set_json_io(span, input_payload={"board": body.board, "mode": body.mode})
             # Middleware installs a per-request Event; fall back for non-HTTP callers.
             cancel = getattr(request.state, "suggest_cancel", None) or threading.Event()
-            result = await asyncio.to_thread(suggester.suggest, body.board, body.mode, cancel)
+
+            def _run_suggester() -> SuggestResponse:
+                nonlocal suggester_started
+                suggester_started = True
+                return suggester.suggest(body.board, body.mode, cancel)
+
+            result = await asyncio.to_thread(_run_suggester)
         except SuggestCancelled:
             # Refund this request's hit only (token), so concurrent siblings keep theirs.
             _release_spend_token(limiters[body.mode], gate.token)
@@ -224,9 +232,15 @@ def create_app(
             # 499 = client closed request (nginx convention). Best-effort if already gone.
             raise HTTPException(status_code=499, detail="client cancelled") from None
         except NoLegalMove as exc:
+            # Stuck board fails before any Ollama or Expectimax work runs.
+            _release_spend_token(limiters[body.mode], gate.token)
             mark_span_error(span, exc)
             set_json_io(span, output_payload={"detail": "no legal move"})
             raise HTTPException(status_code=409, detail="no legal move") from None
+        except BaseException:
+            if not suggester_started:
+                _release_spend_token(limiters[body.mode], gate.token)
+            raise
         finally:
             capacity_gate.release(slot)
         set_json_io(span, output_payload=result.model_dump())

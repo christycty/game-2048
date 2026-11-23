@@ -80,6 +80,68 @@ class LinkTargetsTests(unittest.TestCase):
             self.assertIn("observability/README.md", errors[0])
             self.assertIn("missing ../docs/agents/missing.md", errors[0])
 
+    def test_ignores_fenced_and_inline_code_while_preserving_exact_line_numbers(self) -> None:
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            content = "\n".join(
+                [
+                    "# Title",  # 1
+                    "Inline `[fake](nonexistent.md)` and `limiters[mode](arg)`.",  # 2
+                    "Double ``[fake2](also-missing.md)`` span.",  # 3
+                    "```python",  # 4
+                    "# [fenced](nonexistent.md)",  # 5
+                    "value = limiters[mode](arg)",  # 6
+                    "```",  # 7
+                    "~~~markdown",  # 8
+                    "[tilde-fenced](nonexistent.md)",  # 9
+                    "~~~",  # 10
+                    "Valid [self](README.md) link.",  # 11
+                    "Real broken [later](docs/missing-later.md) link.",  # 12
+                ]
+            )
+            (root / "README.md").write_text(content + "\n", encoding="utf-8")
+
+            errors, checked, _ = find_broken_links(root)
+            self.assertEqual(checked, 2)
+            self.assertEqual(errors, ["README.md:12: missing docs/missing-later.md"])
+
+    def test_detects_repo_escaping_relative_link(self) -> None:
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as tmp:
+            parent = Path(tmp)
+            (parent / "outside.md").write_text("# Outside\n", encoding="utf-8")
+            root = parent / "repo"
+            (root / "docs").mkdir(parents=True)
+            (root / "docs" / "guide.md").write_text(
+                "Escaping [out](../../outside.md) link.\n",
+                encoding="utf-8",
+            )
+
+            errors, checked, _ = find_broken_links(root)
+            self.assertEqual(checked, 1)
+            self.assertEqual(errors, ["docs/guide.md:1: escapes repo → ../../outside.md"])
+
+    def test_main_returns_one_and_prints_errors_to_stderr(self) -> None:
+        import contextlib
+        import io
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "README.md").write_text("Line 1\n[bad](missing.md)\n", encoding="utf-8")
+            stdout = io.StringIO()
+            stderr = io.StringIO()
+            with contextlib.redirect_stdout(stdout), contextlib.redirect_stderr(stderr):
+                rc = main(root)
+
+            self.assertEqual(rc, 1)
+            self.assertEqual(stdout.getvalue(), "")
+            self.assertIn("Broken relative Markdown links:", stderr.getvalue())
+            self.assertIn("README.md:2: missing missing.md", stderr.getvalue())
+
 
 if __name__ == "__main__":
     unittest.main()

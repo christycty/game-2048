@@ -379,3 +379,77 @@ test("tilesToBoard fills empty cells with 0 for the suggestion API", () => {
         [0, 8, 0, 0],
     ]);
 });
+
+test("visualTiles marks moved tiles as sliding and resolvedTiles clears active slide flags", () => {
+    // Row 0 has a stationary 4 at (0,0) and a 2 at (0,3) that slides left to (0,1).
+    // Row 1 has two 2s at (1,0) and (1,2) where (1,2) slides and merges into stationary (1,0).
+    const start = board([
+        [4, 0, 0, 2],
+        [2, 0, 2, 0],
+        [0, 0, 0, 0],
+        [0, 0, 0, 0],
+    ]);
+    const result = applyMove(start, "left", () => 0.5);
+
+    const stationary = result.visualTiles.find((tile) => tile.row === 0 && tile.col === 0);
+    const mover = result.visualTiles.find((tile) => tile.row === 0 && tile.col === 1);
+    const mergeTarget = result.visualTiles.find((tile) => tile.row === 1 && tile.col === 0 && !tile.absorbing);
+    const absorbed = result.visualTiles.find((tile) => tile.absorbing);
+
+    assert.equal(stationary.sliding, false);
+    assert.equal(stationary.absorbing, false);
+    assert.deepEqual([stationary.fromRow, stationary.fromCol], [0, 0]);
+
+    assert.equal(mover.sliding, true);
+    assert.equal(mover.absorbing, false);
+    assert.deepEqual([mover.fromRow, mover.fromCol], [0, 3]);
+
+    assert.equal(mergeTarget.sliding, false);
+    assert.equal(mergeTarget.absorbing, false);
+    assert.equal(absorbed.sliding, true);
+    assert.equal(absorbed.absorbing, true);
+    assert.deepEqual([absorbed.fromRow, absorbed.fromCol], [1, 2]);
+
+    // After settle, no resolved tile remains sliding or absorbing, and tilesToBoard strips all animation fields.
+    assert.equal(result.resolvedTiles.some((tile) => tile.sliding || tile.absorbing), false);
+    const matrix = tilesToBoard(result.resolvedTiles);
+    assert.ok(matrix.flat().every((cell) => typeof cell === "number"));
+});
+
+test("applyMove does not mutate the caller's tiles array or tile objects", () => {
+    const start = board([
+        [2, 2, 0, 4],
+        [0, 0, 0, 0],
+        [0, 0, 0, 0],
+        [0, 0, 0, 0],
+    ]);
+    const snapshot = structuredClone(start);
+
+    const result = applyMove(start, "left", () => 0.5);
+
+    assert.equal(result.moved, true);
+    assert.deepEqual(start, snapshot);
+    assert.notEqual(result.visualTiles, start);
+    assert.notEqual(result.resolvedTiles, start);
+});
+
+test("applyMove ignores an unknown direction without spawning", () => {
+    const start = board([[2, 0, 0, 0], [0, 0, 0, 0], [0, 0, 0, 0], [0, 0, 0, 0]]);
+    const result = applyMove(start, "invalid", () => {
+        assert.fail("random must not run on an invalid direction");
+    });
+
+    assert.equal(result.moved, false);
+    assert.equal(result.scoreGained, 0);
+    assert.equal(result.visualTiles, start);
+    assert.equal(result.resolvedTiles, start);
+    assert.equal(result.won, false);
+    assert.equal(result.lost, false);
+});
+
+test("hasWon checks tiles below, at, and above WIN_TILE", () => {
+    const empty = [0, 0, 0, 0];
+    assert.equal(hasWon(board([[WIN_TILE / 2, 0, 0, 0], empty, empty, empty])), false);
+    assert.equal(hasWon(board([[WIN_TILE, 0, 0, 0], empty, empty, empty])), true);
+    assert.equal(hasWon(board([[WIN_TILE * 2, 0, 0, 0], empty, empty, empty])), true);
+});

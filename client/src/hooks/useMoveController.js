@@ -73,8 +73,6 @@ export function useMoveController({
 
         const result = applyMove(tilesRef.current, direction);
         if (!result.moved) {
-            // The board is unchanged, so an in-flight suggestion still applies.
-            if (!suggestingRef.current) setBusy(false);
             return false;
         }
 
@@ -115,6 +113,7 @@ export function useMoveController({
                 setWon(Boolean(result.won));
                 setLost(Boolean(result.lost));
                 setBusy(false);
+                clearSuggestion();
                 stopAutoPlayRef.current();
                 return;
             }

@@ -2,7 +2,7 @@ import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
-import { SLIDE_MS } from "../game/game";
+import { SLIDE_MS, WIN_TILE } from "../game/game";
 import Board from "./Board.jsx";
 
 // jsdom does not load the component CSS, so stacking and slide distance use the real file.
@@ -154,13 +154,87 @@ test("another pointer's release keeps the swipe that is still down", () => {
     );
     const board = container.querySelector(".board");
 
-    // Pointer 1 lifts while pointer 2 is still down. Only pointer 2's downward drag counts.
-    fireEvent.pointerDown(board, { clientX: 20, clientY: 20, pointerId: 1, button: 0, pointerType: "touch" });
-    fireEvent.pointerDown(board, { clientX: 40, clientY: 40, pointerId: 2, button: 0, pointerType: "touch" });
-    fireEvent.pointerUp(board, { clientX: 140, clientY: 20, pointerId: 1, pointerType: "touch" });
-    fireEvent.pointerUp(board, { clientX: 40, clientY: 140, pointerId: 2, pointerType: "touch" });
+    // Pointer 1 stays down while a second finger taps/drags and lifts; pointer 1's gesture survives.
+    fireEvent.pointerDown(board, { clientX: 40, clientY: 40, pointerId: 1, button: 0, pointerType: "touch" });
+    fireEvent.pointerDown(board, { clientX: 20, clientY: 20, pointerId: 2, button: 0, pointerType: "touch" });
+    fireEvent.pointerUp(board, { clientX: 140, clientY: 20, pointerId: 2, pointerType: "touch" });
+    fireEvent.pointerCancel(board, { pointerId: 2 });
+    expect(swipes).toEqual([]);
 
+    fireEvent.pointerUp(board, { clientX: 40, clientY: 140, pointerId: 1, pointerType: "touch" });
     expect(swipes).toEqual(["down"]);
+});
+
+test("pointerCancel cancels only the active pointer's swipe", () => {
+    const swipes = [];
+    const { container } = render(
+        <Board
+            tiles={[{ id: 1, row: 0, col: 0, value: 2 }]}
+            lost={false}
+            onSwipe={(direction) => swipes.push(direction)}
+        />,
+    );
+    const board = container.querySelector(".board");
+
+    // Cancelling another pointerId leaves pointer 1's drag intact.
+    fireEvent.pointerDown(board, { clientX: 20, clientY: 20, pointerId: 1, button: 0, pointerType: "touch" });
+    fireEvent.pointerCancel(board, { pointerId: 2 });
+    fireEvent.pointerUp(board, { clientX: 140, clientY: 20, pointerId: 1, pointerType: "touch" });
+    expect(swipes).toEqual(["right"]);
+
+    // Cancelling the active pointerId drops that swipe and frees the board for the next gesture.
+    fireEvent.pointerDown(board, { clientX: 20, clientY: 20, pointerId: 3, button: 0, pointerType: "touch" });
+    fireEvent.pointerCancel(board, { pointerId: 3 });
+    fireEvent.pointerUp(board, { clientX: 20, clientY: 140, pointerId: 3, pointerType: "touch" });
+    expect(swipes).toEqual(["right"]);
+
+    drag(board, { from: [20, 20], to: [20, 140], pointerId: 4 });
+    expect(swipes).toEqual(["right", "down"]);
+});
+
+test("swipes started before or during lost or won are ignored", () => {
+    const swipes = [];
+    const tiles = [{ id: 1, row: 0, col: 0, value: 2 }];
+    const onSwipe = (direction) => swipes.push(direction);
+    const { container, rerender } = render(
+        <Board tiles={tiles} lost={false} won={false} onSwipe={onSwipe} />,
+    );
+    const board = container.querySelector(".board");
+
+    // A drag started while playable and released after loss does not fire, nor does a new drag while lost.
+    fireEvent.pointerDown(board, { clientX: 20, clientY: 20, pointerId: 1, button: 0, pointerType: "touch" });
+    rerender(<Board tiles={tiles} lost won={false} onSwipe={onSwipe} />);
+    fireEvent.pointerUp(board, { clientX: 140, clientY: 20, pointerId: 1, pointerType: "touch" });
+    drag(board, { from: [20, 20], to: [140, 20], pointerId: 2 });
+    expect(swipes).toEqual([]);
+
+    // Same for win: releasing after won flips true or starting a drag while won is ignored.
+    rerender(<Board tiles={tiles} lost={false} won={false} onSwipe={onSwipe} />);
+    fireEvent.pointerDown(board, { clientX: 20, clientY: 20, pointerId: 3, button: 0, pointerType: "touch" });
+    rerender(<Board tiles={tiles} lost={false} won onSwipe={onSwipe} />);
+    fireEvent.pointerUp(board, { clientX: 20, clientY: 140, pointerId: 3, pointerType: "touch" });
+    drag(board, { from: [20, 20], to: [20, 140], pointerId: 4 });
+    expect(swipes).toEqual([]);
+});
+
+test("tiles above WIN_TILE render with tile-value-super", () => {
+    const superValue = WIN_TILE * 2;
+    render(
+        <Board
+            tiles={[
+                { id: 1, row: 0, col: 0, value: WIN_TILE },
+                { id: 2, row: 0, col: 1, value: superValue },
+            ]}
+            lost={false}
+            onSwipe={() => {}}
+        />,
+    );
+
+    const winTile = screen.getByText(String(WIN_TILE));
+    const superTile = screen.getByText(String(superValue));
+    expect(winTile.classList.contains(`tile-value-${WIN_TILE}`)).toBe(true);
+    expect(winTile.classList.contains("tile-value-super")).toBe(false);
+    expect(superTile.classList.contains("tile-value-super")).toBe(true);
 });
 
 test("a release outside the board still counts after the board captures the pointer", () => {
@@ -212,4 +286,5 @@ test("the overlay stays hidden while the game can still be played", () => {
     );
 
     expect(screen.queryByText("Game over")).toBeNull();
+    expect(screen.queryByText("You win!")).toBeNull();
 });

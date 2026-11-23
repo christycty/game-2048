@@ -69,21 +69,40 @@ def test_suggest_non_power_of_two_tile_is_422(board: list[list[int]]) -> None:
 
 
 def test_suggest_bad_payload_is_422_and_skips_rate_limit() -> None:
+    llm = FakeLLM(["right"])
     client = TestClient(
         create_app(
             isolated_settings(
                 app_env="prod",
                 suggest_rate_limit_requests=1,
+                suggest_rate_limit_expectimax_requests=1,
                 suggest_rate_limit_window_seconds=60,
             ),
-            UnusedLLM(),
+            llm,
         )
     )
-    bad = client.post("/suggest", json={"board": [[0]], "mode": "llm"})
-    assert bad.status_code == 422
+    bad_llm = client.post("/suggest", json={"board": [[0]], "mode": "llm"})
+    assert bad_llm.status_code == 422
+    assert llm.calls == 0
     # Validation must not consume the LLM cap.
-    ok = client.post("/suggest", json={"board": SORTED_ROW, "mode": "expectimax"})
-    assert ok.status_code == 200
+    ok_llm = client.post("/suggest", json={"board": SORTED_ROW, "mode": "llm"})
+    assert ok_llm.status_code == 200
+    assert ok_llm.json()["source"] == "llm"
+    assert llm.calls == 1
+    limited_llm = client.post("/suggest", json={"board": SORTED_ROW, "mode": "llm"})
+    assert limited_llm.status_code == 429
+    assert limited_llm.headers.get(HEADER_SUGGEST_LIMIT.lower()) == LIMIT_REASON_SPEND
+
+    bad_ex = client.post("/suggest", json={"board": [[0]], "mode": "expectimax"})
+    assert bad_ex.status_code == 422
+    # Validation must not consume the Expectimax cap either.
+    ok_ex = client.post("/suggest", json={"board": SORTED_ROW, "mode": "expectimax"})
+    assert ok_ex.status_code == 200
+    assert ok_ex.json()["source"] == "expectimax"
+    limited_ex = client.post("/suggest", json={"board": SORTED_ROW, "mode": "expectimax"})
+    assert limited_ex.status_code == 429
+    assert limited_ex.headers.get(HEADER_SUGGEST_LIMIT.lower()) == LIMIT_REASON_SPEND
+    assert llm.calls == 1
 
 
 def test_suggest_stuck_board_is_409() -> None:
@@ -92,6 +111,45 @@ def test_suggest_stuck_board_is_409() -> None:
         response = client.post("/suggest", json={"board": STUCK_BOARD, "mode": mode})
         assert response.status_code == 409, mode
         assert response.json()["detail"] == "no legal move"
+
+
+def test_suggest_stuck_board_does_not_consume_rate_limit() -> None:
+    llm = FakeLLM(["right"])
+    client = TestClient(
+        create_app(
+            isolated_settings(
+                app_env="prod",
+                suggest_rate_limit_requests=1,
+                suggest_rate_limit_expectimax_requests=1,
+                suggest_rate_limit_window_seconds=60,
+            ),
+            llm,
+        )
+    )
+    stuck_llm = client.post("/suggest", json={"board": STUCK_BOARD, "mode": "llm"})
+    assert stuck_llm.status_code == 409
+    assert stuck_llm.json()["detail"] == "no legal move"
+    assert llm.calls == 0
+
+    ok_llm = client.post("/suggest", json={"board": SORTED_ROW, "mode": "llm"})
+    assert ok_llm.status_code == 200
+    assert ok_llm.json()["source"] == "llm"
+    assert llm.calls == 1
+    limited_llm = client.post("/suggest", json={"board": SORTED_ROW, "mode": "llm"})
+    assert limited_llm.status_code == 429
+    assert limited_llm.headers.get(HEADER_SUGGEST_LIMIT.lower()) == LIMIT_REASON_SPEND
+
+    stuck_ex = client.post("/suggest", json={"board": STUCK_BOARD, "mode": "expectimax"})
+    assert stuck_ex.status_code == 409
+    assert stuck_ex.json()["detail"] == "no legal move"
+
+    ok_ex = client.post("/suggest", json={"board": SORTED_ROW, "mode": "expectimax"})
+    assert ok_ex.status_code == 200
+    assert ok_ex.json()["source"] == "expectimax"
+    limited_ex = client.post("/suggest", json={"board": SORTED_ROW, "mode": "expectimax"})
+    assert limited_ex.status_code == 429
+    assert limited_ex.headers.get(HEADER_SUGGEST_LIMIT.lower()) == LIMIT_REASON_SPEND
+    assert llm.calls == 1
 
 
 def test_suggest_rate_limit_is_429_with_retry_after() -> None:
@@ -117,8 +175,13 @@ def test_suggest_rate_limit_is_429_with_retry_after() -> None:
     assert limited.headers.get("retry-after") is not None
     assert limited.headers.get(HEADER_SUGGEST_LIMIT.lower()) == LIMIT_REASON_SPEND
     metrics = client.get("/metrics").text
-    assert PROM_SUGGEST_LIMIT_REJECT in metrics
-    assert f'reason="{LIMIT_REASON_SPEND}"' in metrics
+    assert (
+        labeled_counter(metrics, PROM_SUGGEST_LIMIT_REJECT, f'reason="{LIMIT_REASON_SPEND}"') == 1.0
+    )
+    assert (
+        labeled_counter(metrics, PROM_SUGGEST_LIMIT_REJECT, f'reason="{LIMIT_REASON_CAPACITY}"')
+        == 0.0
+    )
 
 
 def test_capacity_429_uses_model_busy_detail() -> None:
@@ -131,12 +194,13 @@ def test_capacity_429_uses_model_busy_detail() -> None:
     )
     app = create_app(settings, llm, llm_in_flight=InFlightGate(1))
     body = {"board": OPEN_BOARD, "mode": "llm"}
+    holder_status: dict[str, int] = {}
 
     # One TestClient lifespan for holder + probe (nested clients shut down telemetry).
     with TestClient(app) as client:
 
         def hold() -> None:
-            client.post("/suggest", json=body)
+            holder_status["code"] = client.post("/suggest", json=body).status_code
 
         holder = threading.Thread(target=hold)
         holder.start()
@@ -148,13 +212,20 @@ def test_capacity_429_uses_model_busy_detail() -> None:
         assert blocked.headers["retry-after"] == "1"
         assert blocked.headers[HEADER_SUGGEST_LIMIT.lower()] == LIMIT_REASON_CAPACITY
         metrics = client.get("/metrics").text
-        assert PROM_SUGGEST_LIMIT_REJECT in metrics
-        assert f'reason="{LIMIT_REASON_CAPACITY}"' in metrics
+        assert (
+            labeled_counter(metrics, PROM_SUGGEST_LIMIT_REJECT, f'reason="{LIMIT_REASON_CAPACITY}"')
+            == 1.0
+        )
+        assert (
+            labeled_counter(metrics, PROM_SUGGEST_LIMIT_REJECT, f'reason="{LIMIT_REASON_SPEND}"')
+            == 0.0
+        )
         assert not getattr(app.state, "telemetry_shutdown", False)
 
         llm.release.set()
         holder.join(timeout=3)
         assert not holder.is_alive()
+        assert holder_status == {"code": 200}
 
 
 def test_expectimax_capacity_429_uses_model_busy_detail(
@@ -174,11 +245,12 @@ def test_expectimax_capacity_429_uses_model_busy_detail(
         expectimax_in_flight=InFlightGate(1),
     )
     body = {"board": OPEN_BOARD, "mode": "expectimax"}
+    holder_status: dict[str, int] = {}
 
     with TestClient(app) as client:
 
         def hold() -> None:
-            client.post("/suggest", json=body)
+            holder_status["code"] = client.post("/suggest", json=body).status_code
 
         holder = threading.Thread(target=hold)
         holder.start()
@@ -190,13 +262,20 @@ def test_expectimax_capacity_429_uses_model_busy_detail(
         assert blocked.headers["retry-after"] == "1"
         assert blocked.headers[HEADER_SUGGEST_LIMIT.lower()] == LIMIT_REASON_CAPACITY
         metrics = client.get("/metrics").text
-        assert PROM_SUGGEST_LIMIT_REJECT in metrics
-        assert f'reason="{LIMIT_REASON_CAPACITY}"' in metrics
+        assert (
+            labeled_counter(metrics, PROM_SUGGEST_LIMIT_REJECT, f'reason="{LIMIT_REASON_CAPACITY}"')
+            == 1.0
+        )
+        assert (
+            labeled_counter(metrics, PROM_SUGGEST_LIMIT_REJECT, f'reason="{LIMIT_REASON_SPEND}"')
+            == 0.0
+        )
         assert not getattr(app.state, "telemetry_shutdown", False)
 
         search.release.set()
         holder.join(timeout=3)
         assert not holder.is_alive()
+        assert holder_status == {"code": 200}
 
 
 def test_capacity_and_spend_429_have_distinct_details() -> None:
@@ -211,11 +290,12 @@ def test_capacity_and_spend_429_have_distinct_details() -> None:
         llm_in_flight=InFlightGate(1),
     )
     body = {"board": OPEN_BOARD, "mode": "llm"}
+    holder_status: dict[str, int] = {}
 
     with TestClient(app) as client:
 
         def hold() -> None:
-            client.post("/suggest", json=body)
+            holder_status["code"] = client.post("/suggest", json=body).status_code
 
         holder = threading.Thread(target=hold)
         holder.start()
@@ -231,6 +311,7 @@ def test_capacity_and_spend_429_have_distinct_details() -> None:
         llm.release.set()
         holder.join(timeout=3)
         assert not holder.is_alive()
+        assert holder_status == {"code": 200}
 
         assert client.post("/suggest", json=body).status_code == 200
         spend = client.post("/suggest", json=body)
@@ -238,6 +319,15 @@ def test_capacity_and_spend_429_have_distinct_details() -> None:
         assert spend.json()["detail"] == DETAIL_SPEND_CAP
         assert spend.headers["retry-after"] == "60"
         assert spend.headers[HEADER_SUGGEST_LIMIT.lower()] == LIMIT_REASON_SPEND
+        metrics = client.get("/metrics").text
+        assert (
+            labeled_counter(metrics, PROM_SUGGEST_LIMIT_REJECT, f'reason="{LIMIT_REASON_CAPACITY}"')
+            == 1.0
+        )
+        assert (
+            labeled_counter(metrics, PROM_SUGGEST_LIMIT_REJECT, f'reason="{LIMIT_REASON_SPEND}"')
+            == 1.0
+        )
 
     assert capacity.json()["detail"] != spend.json()["detail"]
 
@@ -261,11 +351,12 @@ def test_expectimax_capacity_and_spend_429_have_distinct_details(
         expectimax_in_flight=InFlightGate(1),
     )
     body = {"board": OPEN_BOARD, "mode": "expectimax"}
+    holder_status: dict[str, int] = {}
 
     with TestClient(app) as client:
 
         def hold() -> None:
-            client.post("/suggest", json=body)
+            holder_status["code"] = client.post("/suggest", json=body).status_code
 
         holder = threading.Thread(target=hold)
         holder.start()
@@ -281,6 +372,7 @@ def test_expectimax_capacity_and_spend_429_have_distinct_details(
         search.release.set()
         holder.join(timeout=3)
         assert not holder.is_alive()
+        assert holder_status == {"code": 200}
 
         assert client.post("/suggest", json=body).status_code == 200
         spend = client.post("/suggest", json=body)
@@ -288,6 +380,15 @@ def test_expectimax_capacity_and_spend_429_have_distinct_details(
         assert spend.json()["detail"] == DETAIL_SPEND_CAP
         assert spend.headers["retry-after"] == "60"
         assert spend.headers[HEADER_SUGGEST_LIMIT.lower()] == LIMIT_REASON_SPEND
+        metrics = client.get("/metrics").text
+        assert (
+            labeled_counter(metrics, PROM_SUGGEST_LIMIT_REJECT, f'reason="{LIMIT_REASON_CAPACITY}"')
+            == 1.0
+        )
+        assert (
+            labeled_counter(metrics, PROM_SUGGEST_LIMIT_REJECT, f'reason="{LIMIT_REASON_SPEND}"')
+            == 1.0
+        )
 
     assert capacity.json()["detail"] != spend.json()["detail"]
 
@@ -377,11 +478,11 @@ def test_client_events_beacons_and_metrics() -> None:
     assert client.post("/client-events", json={"outcome": "success"}).status_code == 422
 
     text = client.get("/metrics").text
-    assert PROM_CLIENT_SUGGEST_OUTCOME in text
-    assert 'outcome="fail"' in text
-    assert 'outcome="rate_limit"' in text
-    assert 'outcome="model_busy"' in text
-    assert 'outcome="cancel"' in text
+    assert labeled_counter(text, PROM_CLIENT_SUGGEST_OUTCOME, 'outcome="fail"') == 1.0
+    assert labeled_counter(text, PROM_CLIENT_SUGGEST_OUTCOME, 'outcome="rate_limit"') == 1.0
+    assert labeled_counter(text, PROM_CLIENT_SUGGEST_OUTCOME, 'outcome="model_busy"') == 1.0
+    assert labeled_counter(text, PROM_CLIENT_SUGGEST_OUTCOME, 'outcome="cancel"') == 1.0
+    assert labeled_counter(text, PROM_CLIENT_SUGGEST_OUTCOME, 'outcome="success"') == 0.0
 
 
 def test_client_events_rate_limit_is_429_and_skips_counter() -> None:

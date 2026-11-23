@@ -66,19 +66,18 @@ function abortError(error) {
     return isAbortError(error) ? error : new DOMException("Aborted", "AbortError");
 }
 
-function parseRetryAfter(headers) {
+export function parseRetryAfter(headers) {
     const raw = headers?.get?.("retry-after");
     if (raw == null || raw === "") return null;
     const seconds = Number.parseInt(raw, 10);
     return Number.isFinite(seconds) && seconds > 0 ? seconds : null;
 }
 
-/** Classify a 429 from detail / X-Suggest-Limit; unknown → spend (safe stop). */
+/** Classify a 429 from X-Suggest-Limit first, then detail; unknown → spend (safe stop). */
 export function classifySuggestLimit(detail, headerReason) {
-    if (headerReason === LIMIT_CAPACITY || detail === DETAIL_MODEL_BUSY) {
-        return LIMIT_CAPACITY;
-    }
-    return LIMIT_SPEND;
+    if (headerReason === LIMIT_CAPACITY) return LIMIT_CAPACITY;
+    if (headerReason === LIMIT_SPEND) return LIMIT_SPEND;
+    return detail === DETAIL_MODEL_BUSY ? LIMIT_CAPACITY : LIMIT_SPEND;
 }
 
 async function readSuggestErrorBody(response) {

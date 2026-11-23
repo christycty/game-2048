@@ -205,7 +205,7 @@ class OllamaClient:
         self,
         payload: dict[str, object],
         cancel: threading.Event | None,
-    ) -> dict:
+    ) -> object:
         """POST /api/chat; abort this call only if cancel fires (siblings keep going).
 
         Production uses ``httpx.AsyncClient`` + ``task.cancel()`` so a mid-flight
@@ -223,7 +223,7 @@ class OllamaClient:
         self,
         payload: dict[str, object],
         cancel: threading.Event | None,
-    ) -> dict:
+    ) -> object:
         assert self._injected is not None
         timeout = self._attempt_timeout
         client = httpx.Client(
@@ -247,15 +247,13 @@ class OllamaClient:
             raise
         finally:
             client.close()
-        if not isinstance(body, dict):
-            raise ValueError("ollama response is not an object")
         return body
 
     def _post_chat_async(
         self,
         payload: dict[str, object],
         cancel: threading.Event | None,
-    ) -> dict:
+    ) -> object:
         """POST /api/chat on a dedicated async client with cancel polling.
 
         Sync-vs-async entry (exactly one POST; never fall through both branches)::
@@ -269,7 +267,7 @@ class OllamaClient:
         """
         timeout = self._attempt_timeout
 
-        async def _run() -> dict:
+        async def _run() -> object:
             async with httpx.AsyncClient(base_url=self._base_url, timeout=timeout) as client:
                 task = asyncio.create_task(client.post("/api/chat", json=payload))
                 return await _wait_chat_post_or_cancel(task, cancel)
@@ -296,16 +294,13 @@ class OllamaClient:
         error = outcome.get("error")
         if error is not None:
             raise error
-        body = outcome.get("body")
-        if not isinstance(body, dict):
-            raise LlmError("ollama response is not an object", error_type="response")
-        return body
+        return outcome.get("body")
 
 
 async def _wait_chat_post_or_cancel(
     task: asyncio.Task,
     cancel: threading.Event | None,
-) -> dict:
+) -> object:
     """Poll cancel while an httpx POST task runs; map cancel to SuggestCancelled."""
     while True:
         if cancel is not None and cancel.is_set():
@@ -328,13 +323,15 @@ async def _wait_chat_post_or_cancel(
             raise
         if cancel is not None and cancel.is_set():
             raise SuggestCancelled()
-        response.raise_for_status()
         try:
+            response.raise_for_status()
             body = response.json()
-        except json.JSONDecodeError as exc:
-            raise ValueError("ollama response is not json") from exc
-        if not isinstance(body, dict):
-            raise ValueError("ollama response is not an object")
+        except (httpx.HTTPError, httpx.StreamError, ValueError, json.JSONDecodeError) as exc:
+            if cancel is not None and cancel.is_set():
+                raise SuggestCancelled() from exc
+            if isinstance(exc, json.JSONDecodeError):
+                raise ValueError("ollama response is not json") from exc
+            raise
         return body
 
 

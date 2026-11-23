@@ -65,12 +65,32 @@ def evaluate_freshness(files: list[str]) -> tuple[str, str]:
 
 def changed_files(root: Path, base_ref: str | None) -> list[str]:
     if base_ref:
-        subprocess.run(
-            ["git", "fetch", "--no-tags", "--depth=1", "origin", base_ref],
+        shallow = subprocess.run(
+            ["git", "rev-parse", "--is-shallow-repository"],
+            cwd=root,
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+        is_shallow = shallow.returncode == 0 and shallow.stdout.strip() == "true"
+        refspec = f"+refs/heads/{base_ref}:refs/remotes/origin/{base_ref}"
+        fetch_cmd = ["git", "fetch", "--no-tags"]
+        if is_shallow:
+            fetch_cmd.append("--unshallow")
+        fetch_cmd.extend(["origin", refspec])
+        fetched = subprocess.run(
+            fetch_cmd,
             cwd=root,
             check=False,
             capture_output=True,
         )
+        if is_shallow and fetched.returncode != 0:
+            subprocess.run(
+                ["git", "fetch", "--no-tags", "origin", refspec],
+                cwd=root,
+                check=False,
+                capture_output=True,
+            )
         spec = f"origin/{base_ref}...HEAD"
         proc = subprocess.run(
             ["git", "diff", "--name-only", spec],
@@ -79,7 +99,7 @@ def changed_files(root: Path, base_ref: str | None) -> list[str]:
             capture_output=True,
             text=True,
         )
-        if proc.returncode == 0 and proc.stdout.strip():
+        if proc.returncode == 0:
             return [line.strip() for line in proc.stdout.splitlines() if line.strip()]
 
     proc = subprocess.run(
