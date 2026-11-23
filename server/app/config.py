@@ -21,7 +21,11 @@ class Settings(BaseSettings):
     # LLM hard ceiling (spend safety net). Raised so Auto Play rarely hits it;
     # the real LLM throttle is llm_max_in_flight.
     suggest_rate_limit_requests: int = Field(default=60, ge=1, le=120)
-    suggest_rate_limit_expectimax_requests: int = Field(default=30, ge=1, le=120)
+    # Expectimax spend: settle+gap ≈910ms is an upper-bound cadence if search were
+    # free (~65/min/tab); real demand is lower (search adds to the cycle). Design
+    # load: 4 demo tabs → ~4×65 × ~1.4 cushion = 360 / window. Spend-only today
+    # (no expectimax in-flight gate yet).
+    suggest_rate_limit_expectimax_requests: int = Field(default=360, ge=1, le=600)
     suggest_rate_limit_window_seconds: float = Field(default=60, ge=1, le=3600)
     # Concurrent LLM /suggest calls admitted to Ollama (capacity gate).
     llm_max_in_flight: int = Field(default=1, ge=1, le=8)

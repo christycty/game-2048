@@ -62,14 +62,16 @@ Dev client mounts `./client` and keeps Linux `node_modules` in a named volume. `
 
 ### Suggestion rate limit
 
-Two layers for **LLM**; Expectimax keeps a separate cheap window.
+Two layers for **LLM**; Expectimax keeps a separate (higher) spend window so Auto Play does not share the LLM budget.
 
 **Layer 1 — hard ceiling (spend / runaway safety):** per-mode sliding window (`SUGGEST_RATE_LIMIT_WINDOW_SECONDS`, default 60s):
 
 | Mode | Env | Default |
 |---|---|---|
 | LLM | `SUGGEST_RATE_LIMIT_REQUESTS` | 60 |
-| Expectimax | `SUGGEST_RATE_LIMIT_EXPECTIMAX_REQUESTS` | 30 |
+| Expectimax | `SUGGEST_RATE_LIMIT_EXPECTIMAX_REQUESTS` | 360 |
+
+Expectimax default is sized for a **design load of ~4 concurrent Auto Play tabs**. `SETTLE_MS` + `AUTO_PLAY_GAP_MS` (~910ms) is an **upper-bound** cadence if search were free (~65/min per tab); real Auto Play is slower because suggest latency is extra. Cap uses that upper bound: `4 × ~65 × ~1.4 cushion ≈ 360` / window. Prove with `pytest --load -m load` (expectimax cadence: full-window soak at 360 with **0** spend `429` and `ok` > 120; undersized cap trips). Raise via env up to 600 if needed. Expectimax is spend-only today (no in-flight gate yet).
 
 **Layer 2 — LLM capacity gate:** `LLM_MAX_IN_FLIGHT` (default `1`) limits concurrent LLM `/suggest` calls admitted to Ollama. This is the real throttle for Auto Play. Expectimax does not take a slot.
 
