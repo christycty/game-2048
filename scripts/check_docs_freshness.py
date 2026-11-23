@@ -19,6 +19,7 @@ ROOT = Path(__file__).resolve().parents[1]
 CODE_PREFIXES = (
     "client/",
     "server/",
+    "observability/",
     "docker-compose.yml",
     ".env.example",
     ".github/workflows/",

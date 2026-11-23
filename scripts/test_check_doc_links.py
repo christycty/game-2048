@@ -52,6 +52,33 @@ class LinkTargetsTests(unittest.TestCase):
         names = {str(p.relative_to(REPO_ROOT)) for p in markdown_files(REPO_ROOT)}
         self.assertIn("docs/agents/writing-docs.md", names)
         self.assertIn("AGENTS.md", names)
+        self.assertIn("observability/README.md", names)
+        self.assertIn("site/assets/README.md", names)
+
+    def test_markdown_files_discovers_nested_entrypoints_and_checks_links(self) -> None:
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "docs" / "agents").mkdir(parents=True)
+            (root / "docs" / "agents" / "runtime.md").write_text("# Runtime\n", encoding="utf-8")
+            (root / "observability").mkdir()
+            (root / "observability" / "README.md").write_text(
+                "[ok](../docs/agents/runtime.md)\n[bad](../docs/agents/missing.md)\n",
+                encoding="utf-8",
+            )
+            (root / "site" / "assets").mkdir(parents=True)
+            (root / "site" / "assets" / "README.md").write_text("# Assets\n", encoding="utf-8")
+
+            discovered = {str(p.relative_to(root)) for p in markdown_files(root)}
+            self.assertIn("observability/README.md", discovered)
+            self.assertIn("site/assets/README.md", discovered)
+
+            errors, checked, _ = find_broken_links(root)
+            self.assertEqual(checked, 2)
+            self.assertEqual(len(errors), 1)
+            self.assertIn("observability/README.md", errors[0])
+            self.assertIn("missing ../docs/agents/missing.md", errors[0])
 
 
 if __name__ == "__main__":

@@ -11,6 +11,8 @@ class MatchesTests(unittest.TestCase):
     def test_code_prefixes(self) -> None:
         self.assertTrue(matches("client/src/App.jsx", CODE_PREFIXES))
         self.assertTrue(matches("server/app/main.py", CODE_PREFIXES))
+        self.assertTrue(matches("observability/grafana/dashboards/genai.json", CODE_PREFIXES))
+        self.assertTrue(matches("observability/prometheus.yml", CODE_PREFIXES))
         self.assertTrue(matches("docker-compose.yml", CODE_PREFIXES))
         self.assertTrue(matches(".env.example", CODE_PREFIXES))
         self.assertTrue(matches(".github/workflows/ci.yml", CODE_PREFIXES))
@@ -55,6 +57,12 @@ class EvaluateFreshnessTests(unittest.TestCase):
     def test_workflow_change_counts_as_code(self) -> None:
         kind, _ = evaluate_freshness([".github/workflows/ci.yml"])
         self.assertEqual(kind, "warn")
+
+    def test_observability_change_without_agent_docs_warns(self) -> None:
+        kind, msg = evaluate_freshness(["observability/grafana/dashboards/genai.json"])
+        self.assertEqual(kind, "warn")
+        self.assertIn("without docs/agents", msg)
+        self.assertIn("observability/grafana/dashboards/genai.json", msg)
 
 
 if __name__ == "__main__":
