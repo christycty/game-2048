@@ -23,7 +23,10 @@ from helpers import (
     E2E_RATE_LIMIT_REQUESTS,
     E2E_RUN_COUNT,
     E2E_SUGGEST_CALLS,
+    OPEN_BOARD,
+    asgi_suggest,
     isolated_settings,
+    labeled_counter,
 )
 
 MERGE_BOARD = [
@@ -33,16 +36,9 @@ MERGE_BOARD = [
     [0, 0, 0, 0],
 ]
 
-CORNER_BOARD = [
-    [2, 0, 0, 0],
-    [0, 0, 0, 0],
-    [0, 0, 0, 0],
-    [0, 0, 0, 0],
-]
-
 # One module-scoped app serves every parametrized case. Rate limit is a loose
 # budget (helpers.E2E_RATE_LIMIT_REQUESTS), not an exact post count.
-E2E_BOARDS = [MERGE_BOARD, CORNER_BOARD]
+E2E_BOARDS = [MERGE_BOARD, OPEN_BOARD]
 E2E_RUN_IDS = [1, 2, 3]
 assert len(E2E_BOARDS) == E2E_BOARD_COUNT
 assert len(E2E_RUN_IDS) == E2E_RUN_COUNT
@@ -118,13 +114,13 @@ def test_llm_suggest_with_client_traceparent_header(suggest_client: TestClient) 
     assert TRACEPARENT_RE.match(traceparent)
     response = suggest_client.post(
         "/suggest",
-        json={"board": CORNER_BOARD, "mode": "llm"},
+        json={"board": OPEN_BOARD, "mode": "llm"},
         headers={"traceparent": traceparent},
     )
     assert response.status_code == 200
     body = response.json()
     assert body["source"] == "llm"
-    assert body["move"] in legal_moves(CORNER_BOARD)
+    assert body["move"] in legal_moves(OPEN_BOARD)
 
 
 @pytest.mark.e2e
@@ -145,12 +141,12 @@ def test_metrics_expose_gen_ai_after_real_llm(suggest_client: TestClient) -> Non
 @pytest.mark.e2e
 def test_client_cancel_beacon_increments_scrape_counter(suggest_client: TestClient) -> None:
     before = suggest_client.get("/metrics").text
-    prior = _labeled_counter(before, "client_suggest_outcome", 'outcome="cancel"')
+    prior = labeled_counter(before, "client_suggest_outcome", 'outcome="cancel"')
 
     assert suggest_client.post("/client-events", json={"outcome": "cancel"}).status_code == 204
 
     after = suggest_client.get("/metrics").text
-    assert _labeled_counter(after, "client_suggest_outcome", 'outcome="cancel"') == prior + 1.0
+    assert labeled_counter(after, "client_suggest_outcome", 'outcome="cancel"') == prior + 1.0
 
 
 @pytest.mark.e2e
@@ -164,10 +160,10 @@ def test_asgi_disconnect_cancels_real_ollama_and_records_cancelled(
     app = suggest_client.app
     body = json.dumps({"board": MERGE_BOARD, "mode": "llm"}).encode()
     before = suggest_client.get("/metrics").text
-    prior_cancelled = _labeled_counter(
+    prior_cancelled = labeled_counter(
         before, "gen_ai_client_request_count", 'gen_ai_request_outcome="cancelled"'
     )
-    prior_error = _labeled_counter(
+    prior_error = labeled_counter(
         before, "gen_ai_client_request_count", 'gen_ai_request_outcome="error"'
     )
 
@@ -181,61 +177,25 @@ def test_asgi_disconnect_cancels_real_ollama_and_records_cancelled(
 
     monkeypatch.setattr(OllamaClient, "_post_chat", _post_chat_and_signal)
 
-    async def one_cancelled_call() -> int | None:
-        scope = {
-            "type": "http",
-            "asgi": {"version": "3.0"},
-            "http_version": "1.1",
-            "method": "POST",
-            "scheme": "http",
-            "path": "/suggest",
-            "raw_path": b"/suggest",
-            "query_string": b"",
-            "headers": [
-                (b"host", b"test"),
-                (b"content-type", b"application/json"),
-                (b"content-length", str(len(body)).encode()),
-            ],
-            "client": ("127.0.0.1", 50001),
-            "server": ("test", 80),
-            "state": {},
-        }
-        messages: list[dict] = [{"type": "http.request", "body": body, "more_body": False}]
-        sent: list[dict] = []
+    async def wait_for_ollama() -> None:
+        await asyncio.to_thread(ollama_started.wait, 30)
 
-        async def receive() -> dict:
-            if messages:
-                return messages.pop(0)
-            assert await asyncio.to_thread(ollama_started.wait, 30)
-            return {"type": "http.disconnect"}
-
-        async def send(message: dict) -> None:
-            sent.append(message)
-
-        await app(scope, receive, send)
-        return next(
-            (m.get("status") for m in sent if m.get("type") == "http.response.start"),
-            None,
+    result = asyncio.run(
+        asyncio.wait_for(
+            asgi_suggest(app, body, disconnect_gate=wait_for_ollama),
+            timeout=60,
         )
-
-    status = asyncio.run(asyncio.wait_for(one_cancelled_call(), timeout=60))
-    assert status == 499
+    )
+    assert ollama_started.is_set(), "Ollama /api/chat request never started before disconnect"
+    assert result.status == 499
 
     text = suggest_client.get("/metrics").text
     assert (
-        _labeled_counter(text, "gen_ai_client_request_count", 'gen_ai_request_outcome="cancelled"')
+        labeled_counter(text, "gen_ai_client_request_count", 'gen_ai_request_outcome="cancelled"')
         == prior_cancelled + 1.0
     )
     # Cancel must not be counted as a model error.
     assert (
-        _labeled_counter(text, "gen_ai_client_request_count", 'gen_ai_request_outcome="error"')
+        labeled_counter(text, "gen_ai_client_request_count", 'gen_ai_request_outcome="error"')
         == prior_error
     )
-
-
-def _labeled_counter(body: str, metric: str, label_fragment: str) -> float:
-    prefix = f"{metric}_total{{"
-    for line in body.splitlines():
-        if line.startswith(prefix) and label_fragment in line:
-            return float(line.rsplit(" ", 1)[-1])
-    return 0.0

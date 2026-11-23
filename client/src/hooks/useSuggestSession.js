@@ -1,4 +1,4 @@
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { suggestMove, SuggestError, isAbortError, LIMIT_CAPACITY } from "../suggest/api";
 import {
     AUTO_PLAY_CAPACITY_MAX_RETRIES,
@@ -36,24 +36,62 @@ export function useSuggestSession({
     const suggestingRef = useRef(false);
     const suggestTokenRef = useRef(0);
     const suggestAbortRef = useRef(null);
+    const retryTimerRef = useRef(null);
     const capacityRetriesRef = useRef(0);
     const fallbackRetriesRef = useRef(0);
 
+    function clearRetryTimer() {
+        if (retryTimerRef.current !== null) {
+            window.clearTimeout(retryTimerRef.current);
+            retryTimerRef.current = null;
+        }
+    }
+
     function resetCapacityRetries() {
+        clearRetryTimer();
         capacityRetriesRef.current = 0;
         fallbackRetriesRef.current = 0;
     }
 
-    // Abort the fetch and drop the token so a late response cannot land.
+    // Abort the fetch (or pending retry wait) and drop the token so a late response cannot land.
     // Busy/suggesting cleanup is owned by the caller (Stop vs move vs New Game).
     function abortInFlightSuggest() {
-        suggestAbortRef.current?.abort();
+        const hadPendingRetry = retryTimerRef.current !== null;
+        clearRetryTimer();
+        const controller = suggestAbortRef.current;
         suggestAbortRef.current = null;
-        if (!suggestingRef.current) return;
+        const active = suggestingRef.current || hadPendingRetry;
+        if (active) {
+            suggestTokenRef.current += 1;
+            suggestingRef.current = false;
+            setSuggesting(false);
+        }
+        controller?.abort();
+        return active;
+    }
+
+    function resetSuggestSession() {
+        resetCapacityRetries();
+        const controller = suggestAbortRef.current;
+        suggestAbortRef.current = null;
         suggestTokenRef.current += 1;
         suggestingRef.current = false;
         setSuggesting(false);
+        controller?.abort();
     }
+
+    useEffect(
+        () => () => {
+            clearRetryTimer();
+            const controller = suggestAbortRef.current;
+            suggestAbortRef.current = null;
+            // Match Stop/move/New Game: drop the token so a late resolve cannot land.
+            suggestTokenRef.current += 1;
+            suggestingRef.current = false;
+            controller?.abort();
+        },
+        [],
+    );
 
     async function handleSuggest() {
         if (animatingRef.current || lostRef.current || wonRef.current || suggestingRef.current) return;
@@ -63,6 +101,7 @@ export function useSuggestSession({
             return;
         }
 
+        clearRetryTimer();
         const token = suggestTokenRef.current + 1;
         suggestTokenRef.current = token;
         const controller = new AbortController();
@@ -177,7 +216,9 @@ export function useSuggestSession({
                 setSuggesting(false);
                 if (scheduleRetry) {
                     // Keep busy through the wait (same idea as AUTO_PLAY_GAP_MS).
-                    window.setTimeout(() => {
+                    clearRetryTimer();
+                    retryTimerRef.current = window.setTimeout(() => {
+                        retryTimerRef.current = null;
                         if (suggestTokenRef.current !== token) return;
                         if (!autoPlayingRef.current) {
                             if (!animatingRef.current) setBusy(false);
@@ -194,12 +235,10 @@ export function useSuggestSession({
 
     return {
         suggesting,
-        setSuggesting,
         suggestingRef,
-        suggestTokenRef,
-        suggestAbortRef,
         abortInFlightSuggest,
         resetCapacityRetries,
+        resetSuggestSession,
         handleSuggest,
     };
 }

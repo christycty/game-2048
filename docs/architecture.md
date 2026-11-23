@@ -28,19 +28,16 @@ flowchart TB
 flowchart TD
   A[Receive board + mode] --> V{Valid payload?}
   V -->|no| U[422]
-  V -->|yes| R{Hard ceiling?}
-  R -->|over| TSpend[429 spend<br/>too many suggestions]
-  R -->|ok| M{mode}
-  M -->|expectimax| B{Legal moves?}
-  M -->|llm| Cap{In-flight slot?}
-  Cap -->|full| TBusy[429 capacity<br/>model busy]
-  Cap -->|ok| B
+  V -->|yes| Spend{Spend ceiling?}
+  Spend -->|over| TSpend[429 spend<br/>too many suggestions]
+  Spend -->|ok| Cap{Mode capacity?}
+  Cap -->|full| TBusy[429 capacity + refund spend<br/>model busy]
+  Cap -->|slot| B{Legal moves?}
   B -->|none| C[409]
-  B -->|yes| D{mode work}
-  D -->|expectimax| E[Depth-limited search + score reason]
-  D -->|llm| F[Ollama chat with retries]
-  F -->|valid move + reason| G[source: llm]
-  F -->|exhausted| H[source: fallback<br/>UI treats as failure]
+  B -->|yes, expectimax| E[Expectimax thread]
+  B -->|yes, llm| P[Attempt 1..N]
+  P -->|valid move + reason| G[source: llm]
+  P -->|exhausted| H[source: fallback<br/>UI treats as failure]
   E -->|legal search move| I[source: expectimax]
   E -->|illegal / miss| H
   G --> J[Response]
@@ -48,9 +45,7 @@ flowchart TD
   H --> J
 ```
 
-Validation (`422`) runs before the rate-limit gates; invalid bodies do not consume either mode’s hard ceiling or an LLM in-flight slot.
-
-The API stays healthy when Ollama is down (`GET /health` never calls the model). Expectimax never calls Ollama. The client only offers **Play** (or auto-applies under **Auto Play**) when the suggestion is usable—not on fallback, rate limit, capacity busy, or transport errors. Auto Play is entirely client-side: it loops suggest → apply → settle without changing the API, and **retries** capacity-busy `429`s a few times before stopping; spend `429`s stop immediately. **Stop** / takeover aborts the in-flight `/suggest` fetch; the server watches for disconnect and cancels that request’s LLM/search work only (concurrent clients are supported in-process), responds `499`, refunds that request’s hard-ceiling token, and frees its LLM in-flight slot. The client treats abort and `499` as silent (`AbortError`); a token-matched abort still ends Auto Play so the loop cannot stall.
+Validation (`422`) runs before both per-mode gates (consuming neither the spend ceiling nor a mode in-flight capacity slot), and capacity `429`s refund the spend token before returning `model busy`. `GET /health` never calls Ollama, and Expectimax never calls Ollama. The client offers **Play** (or auto-applies in **Auto Play**) only on usable suggestions—not on fallback, spend/capacity `429`, or transport errors. Auto Play loops suggest → apply → settle client-side, retrying capacity-busy `429`s and model fallbacks briefly while stopping immediately on spend `429`s. **Stop** / takeover aborts the in-flight `/suggest` fetch; on disconnect the server cancels that request’s LLM/search work only (concurrent clients are supported in-process), responds `499`, refunds its spend token, and frees its mode capacity slot. Abort and `499` stay silent in the UI (`AbortError`) while ending Auto Play.
 
 ## Coarse module map
 
@@ -111,6 +106,4 @@ Client owns the playable rules and UI; `App.jsx` wires named hooks for suggest /
 | `prod` | API unpublished + nginx static client (`${CLIENT_HOST_PORT}`→80; nginx proxies `/suggest`) |
 | `metrics` | Prometheus + Grafana (pair with `dev` or `prod`) |
 
-Ollama and Phoenix stay on the host. Compose reaches them via `host.docker.internal` (override with `COMPOSE_OLLAMA_BASE_URL` / `COMPOSE_PHOENIX_COLLECTOR_ENDPOINT`).
-
-More runtime edge cases: [agents/runtime.md](agents/runtime.md).
+Ollama and Phoenix stay on the host. Compose reaches them via `host.docker.internal` (override with `COMPOSE_OLLAMA_BASE_URL` / `COMPOSE_PHOENIX_COLLECTOR_ENDPOINT`). More runtime edge cases: [agents/runtime.md](agents/runtime.md).

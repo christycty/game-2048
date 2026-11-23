@@ -8,13 +8,12 @@ const KEY_DIRECTIONS = {
 };
 
 /**
- * Arrow keys → onMove(direction). On unmount, abort any in-flight suggest and
- * bump the suggest token so a late resolve cannot land (same as Stop/move/New Game).
+ * Arrow keys → onMove(direction).
  *
  * onMove is mirrored into a ref after render so the listener stays bound once;
  * callers must keep move policy on refs (not stale closure state).
  */
-export function useKeyboardMoves({ onMove, suggestAbortRef, suggestTokenRef }) {
+export function useKeyboardMoves({ onMove }) {
     const onMoveRef = useRef(onMove);
 
     useEffect(() => {
@@ -32,10 +31,6 @@ export function useKeyboardMoves({ onMove, suggestAbortRef, suggestTokenRef }) {
         window.addEventListener("keydown", onKeyDown);
         return () => {
             window.removeEventListener("keydown", onKeyDown);
-            suggestAbortRef.current?.abort();
-            suggestAbortRef.current = null;
-            // Match Stop/move/New Game: drop the token so a late resolve cannot land.
-            suggestTokenRef.current += 1;
         };
-    }, [suggestAbortRef, suggestTokenRef]);
+    }, []);
 }

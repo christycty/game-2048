@@ -301,10 +301,6 @@ class OllamaClient:
             raise LlmError("ollama response is not an object", error_type="response")
         return body
 
-    def close(self) -> None:
-        # No long-lived pool; attempts own their clients. Keep the hook for lifespan.
-        pass
-
 
 async def _wait_chat_post_or_cancel(
     task: asyncio.Task,

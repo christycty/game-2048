@@ -45,7 +45,7 @@ Suggestions are optional. The player always keeps control of the board: they can
 | Mode | Product intent today |
 |---|---|
 | **LLM** (default) | Ask a language model for a legal next move and a short reason. |
-| **Expectimax** | Ask for a move from depth-limited expectimax search. The hint lists a score for each direction (`N/A` when that slide is illegal). |
+| **Expectimax** | Ask for a move from depth-limited expectimax search. The hint compares each other direction against the chosen move (`not possible` when illegal, `ties`, `wins` / `loses`, or point gap). |
 
 The player can switch modes before asking. Changing mode drops any suggestion that was waiting for confirmation. Mode radios are locked while Auto Play is running.
 

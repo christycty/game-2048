@@ -41,12 +41,10 @@ function App() {
 
     const {
         suggesting,
-        setSuggesting,
         suggestingRef,
-        suggestTokenRef,
-        suggestAbortRef,
         abortInFlightSuggest,
         resetCapacityRetries,
+        resetSuggestSession,
         handleSuggest,
     } = useSuggestSession({
         animatingRef,
@@ -64,7 +62,7 @@ function App() {
         handleMoveRef,
     });
 
-    const { handleMove, moveTokenRef } = useMoveController({
+    const { handleMove, clearGapTimer, resetMoves } = useMoveController({
         tilesRef,
         scoreRef,
         lostRef,
@@ -86,23 +84,25 @@ function App() {
         handleSuggestRef,
     });
 
-    const { autoPlaying, setAutoPlaying, stopAutoPlay, handleAutoPlayToggle } = useAutoPlayController({
-        animatingRef,
-        suggestingRef,
-        autoPlayingRef,
-        autoApplyingRef,
-        lostRef,
-        wonRef,
-        tilesRef,
-        pendingMove,
-        setBusy,
-        setPendingMove,
-        setHint,
-        abortInFlightSuggest,
-        resetCapacityRetries,
-        handleMove,
-        handleSuggest,
-    });
+    const { autoPlaying, stopAutoPlay, resetAutoPlay, handleAutoPlayToggle } =
+        useAutoPlayController({
+            animatingRef,
+            suggestingRef,
+            autoPlayingRef,
+            autoApplyingRef,
+            lostRef,
+            wonRef,
+            tilesRef,
+            pendingMove,
+            setBusy,
+            setPendingMove,
+            setHint,
+            abortInFlightSuggest,
+            resetCapacityRetries,
+            clearGapTimer,
+            handleMove,
+            handleSuggest,
+        });
 
     useEffect(() => {
         stopAutoPlayRef.current = stopAutoPlay;
@@ -111,26 +111,10 @@ function App() {
     });
 
     function startGame() {
-        const nextTiles = createInitialTiles();
-        moveTokenRef.current += 1;
-        abortInFlightSuggest();
-        suggestTokenRef.current += 1;
-        animatingRef.current = false;
-        suggestingRef.current = false;
-        autoPlayingRef.current = false;
-        autoApplyingRef.current = false;
-        resetCapacityRetries();
-        tilesRef.current = nextTiles;
-        scoreRef.current = 0;
-        lostRef.current = false;
-        wonRef.current = false;
-        setTiles(nextTiles);
-        setCurrentScore(0);
-        setLost(false);
-        setWon(false);
+        resetSuggestSession();
+        resetAutoPlay();
+        resetMoves(createInitialTiles());
         setBusy(false);
-        setSuggesting(false);
-        setAutoPlaying(false);
         clearSuggestion();
     }
 
@@ -143,21 +127,16 @@ function App() {
         if (mode === aiModeRef.current) return;
         aiModeRef.current = mode;
         setAiMode(mode);
-        // Previous mode's in-flight fetch or pending Play must not land.
-        if (suggestingRef.current) {
-            abortInFlightSuggest();
-            if (!animatingRef.current) setBusy(false);
+        // Previous mode's in-flight fetch, retry wait, or pending Play must not land.
+        if (abortInFlightSuggest() && !animatingRef.current) {
+            setBusy(false);
         }
         clearSuggestion();
     }
 
-    useKeyboardMoves({
-        onMove: handleMove,
-        suggestAbortRef,
-        suggestTokenRef,
-    });
+    useKeyboardMoves({ onMove: handleMove });
 
-    const canSuggest = !lost && !won && !busy && hasMoves(tiles);
+    const canSuggest = !lost && !won && !busy && !autoPlaying && hasMoves(tiles);
     const canApplySuggestion = Boolean(pendingMove) && !lost && !won && !busy;
     const canToggleAutoPlay =
         autoPlaying || (!lost && !won && !busy && (Boolean(pendingMove) || hasMoves(tiles)));
@@ -169,7 +148,7 @@ function App() {
             <ActionPanel
                 onNewGame={startGame}
                 onSuggest={handleSuggest}
-                canSuggest={canSuggest && !autoPlaying}
+                canSuggest={canSuggest}
                 suggesting={suggesting}
                 autoPlaying={autoPlaying}
                 onAutoPlayToggle={handleAutoPlayToggle}

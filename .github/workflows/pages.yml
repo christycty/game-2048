@@ -2,7 +2,7 @@ name: pages
 
 on:
   push:
-    branches: [main, presentation-site]
+    branches: [main]
     paths:
       - "site/**"
       - ".github/workflows/pages.yml"

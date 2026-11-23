@@ -11,7 +11,11 @@ import {
     createInitialTiles,
     SETTLE_MS,
 } from "./game/game";
-import { HINT_SUGGEST_FAILED, HINT_SUGGEST_RETRYING } from "./suggest/suggestHints";
+import {
+    HINT_CAPACITY_RETRYING,
+    HINT_SUGGEST_FAILED,
+    HINT_SUGGEST_RETRYING,
+} from "./suggest/suggestHints";
 
 // These tests lock input and score timing. The move rules are covered in game.test.js.
 vi.mock("./game/game", async () => {
@@ -1554,4 +1558,249 @@ test("unmount aborts an in-flight suggest", async () => {
     unmount();
 
     expect(seenSignal.aborted).toBe(true);
+});
+
+test("unmount mid-slide during auto play cancels the pending settle timer", async () => {
+    suggestMove.mockResolvedValue({
+        move: "right",
+        mode: "expectimax",
+        source: "expectimax",
+        reason: null,
+    });
+    applyMove.mockReturnValue({
+        moved: true,
+        scoreGained: 0,
+        visualTiles: [{ id: 1, row: 0, col: 3, value: 2, fromRow: 0, fromCol: 0, sliding: true }],
+        resolvedTiles: [{ id: 1, row: 0, col: 3, value: 2 }],
+        lost: false,
+    });
+
+    const { unmount } = render(<App />);
+    fireEvent.click(screen.getByRole("button", { name: "Auto Play" }));
+
+    await act(async () => {
+        await Promise.resolve();
+    });
+
+    expect(suggestMove).toHaveBeenCalledTimes(1);
+    expect(applyMove).toHaveBeenCalledTimes(1);
+
+    unmount();
+
+    await act(async () => {
+        vi.advanceTimersByTime(SETTLE_MS + AUTO_PLAY_GAP_MS);
+        await Promise.resolve();
+    });
+
+    expect(suggestMove).toHaveBeenCalledTimes(1);
+});
+
+test("unmount during the post-settle auto play gap cancels the pending gap timer", async () => {
+    suggestMove.mockResolvedValue({
+        move: "right",
+        mode: "expectimax",
+        source: "expectimax",
+        reason: null,
+    });
+    applyMove.mockReturnValue({
+        moved: true,
+        scoreGained: 0,
+        visualTiles: [{ id: 1, row: 0, col: 3, value: 2, fromRow: 0, fromCol: 0, sliding: true }],
+        resolvedTiles: [{ id: 1, row: 0, col: 3, value: 2 }],
+        lost: false,
+    });
+
+    const { unmount } = render(<App />);
+    fireEvent.click(screen.getByRole("button", { name: "Auto Play" }));
+
+    await act(async () => {
+        await Promise.resolve();
+    });
+
+    await act(async () => {
+        vi.advanceTimersByTime(SETTLE_MS);
+        await Promise.resolve();
+    });
+
+    expect(suggestMove).toHaveBeenCalledTimes(1);
+    unmount();
+
+    await act(async () => {
+        vi.advanceTimersByTime(AUTO_PLAY_GAP_MS);
+        await Promise.resolve();
+    });
+
+    expect(suggestMove).toHaveBeenCalledTimes(1);
+});
+
+test("unmount during a capacity retry backoff cancels the retry timer", async () => {
+    suggestMove
+        .mockRejectedValueOnce(
+            new SuggestError("model busy", {
+                status: 429,
+                limitReason: LIMIT_CAPACITY,
+                retryAfter: 1,
+            }),
+        )
+        .mockResolvedValue({
+            move: "right",
+            mode: "llm",
+            source: "llm",
+            reason: "ok",
+        });
+
+    const { unmount } = render(<App />);
+    fireEvent.click(screen.getByRole("button", { name: "Auto Play" }));
+
+    await act(async () => {
+        await Promise.resolve();
+    });
+
+    expect(screen.getByRole("status").textContent).toBe(HINT_CAPACITY_RETRYING);
+    expect(suggestMove).toHaveBeenCalledTimes(1);
+
+    unmount();
+
+    await act(async () => {
+        vi.advanceTimersByTime(1000);
+        await Promise.resolve();
+    });
+
+    expect(suggestMove).toHaveBeenCalledTimes(1);
+    expect(applyMove).not.toHaveBeenCalled();
+});
+
+test("unmount during a fallback retry backoff cancels the retry timer", async () => {
+    suggestMove
+        .mockResolvedValueOnce({
+            move: "left",
+            mode: "llm",
+            source: "fallback",
+            reason: null,
+        })
+        .mockResolvedValue({
+            move: "right",
+            mode: "llm",
+            source: "llm",
+            reason: "ok",
+        });
+
+    const { unmount } = render(<App />);
+    fireEvent.click(screen.getByRole("button", { name: "Auto Play" }));
+
+    await act(async () => {
+        await Promise.resolve();
+    });
+
+    expect(screen.getByRole("status").textContent).toBe(HINT_SUGGEST_RETRYING);
+    expect(suggestMove).toHaveBeenCalledTimes(1);
+
+    unmount();
+
+    await act(async () => {
+        vi.advanceTimersByTime(AUTO_PLAY_FALLBACK_RETRY_MS);
+        await Promise.resolve();
+    });
+
+    expect(suggestMove).toHaveBeenCalledTimes(1);
+    expect(applyMove).not.toHaveBeenCalled();
+});
+
+test("stopping auto play during retry backoff clears retrying copy, re-enables AI, and cancels retry", async () => {
+    suggestMove
+        .mockRejectedValueOnce(
+            new SuggestError("model busy", {
+                status: 429,
+                limitReason: LIMIT_CAPACITY,
+                retryAfter: 2,
+            }),
+        )
+        .mockResolvedValue({
+            move: "right",
+            mode: "llm",
+            source: "llm",
+            reason: "ok",
+        });
+
+    render(<App />);
+    fireEvent.click(screen.getByRole("button", { name: "Auto Play" }));
+
+    await act(async () => {
+        await Promise.resolve();
+    });
+
+    expect(screen.getByRole("status").textContent).toBe(HINT_CAPACITY_RETRYING);
+    expect(screen.getByRole("button", { name: "AI" }).disabled).toBe(true);
+
+    fireEvent.click(screen.getByRole("button", { name: "Stop" }));
+
+    const autoPlayButton = screen.getByRole("button", { name: "Auto Play" });
+    expect(autoPlayButton.getAttribute("aria-pressed")).toBe("false");
+    expect(autoPlayButton.disabled).toBe(false);
+    expect(screen.getByRole("button", { name: "AI" }).disabled).toBe(false);
+    expect(screen.queryByRole("status")).toBeNull();
+    expect(applyMove).not.toHaveBeenCalled();
+
+    await act(async () => {
+        vi.advanceTimersByTime(2000);
+        await Promise.resolve();
+    });
+
+    expect(suggestMove).toHaveBeenCalledTimes(1);
+    expect(applyMove).not.toHaveBeenCalled();
+});
+
+test("manual move during retry backoff invalidates the retry token, clears status, and takes control", async () => {
+    let seenShouldReport;
+    suggestMove
+        .mockImplementationOnce((_board, _mode, options = {}) => {
+            seenShouldReport = options.shouldReportOutcome;
+            return Promise.reject(
+                new SuggestError("model busy", {
+                    status: 429,
+                    limitReason: LIMIT_CAPACITY,
+                    retryAfter: 2,
+                }),
+            );
+        })
+        .mockResolvedValue({
+            move: "right",
+            mode: "llm",
+            source: "llm",
+            reason: "ok",
+        });
+    applyMove.mockReturnValue({
+        moved: true,
+        scoreGained: 0,
+        visualTiles: [{ id: 1, row: 3, col: 0, value: 2, fromRow: 0, fromCol: 0, sliding: true }],
+        resolvedTiles: [{ id: 1, row: 3, col: 0, value: 2 }],
+        lost: false,
+    });
+
+    render(<App />);
+    fireEvent.click(screen.getByRole("button", { name: "Auto Play" }));
+
+    await act(async () => {
+        await Promise.resolve();
+    });
+
+    expect(screen.getByRole("status").textContent).toBe(HINT_CAPACITY_RETRYING);
+    expect(seenShouldReport()).toBe(true);
+
+    press("ArrowDown");
+    // Proves abortInFlightSuggest ran before stopAutoPlay cleared retryTimerRef.
+    expect(seenShouldReport()).toBe(false);
+    expect(applyMove).toHaveBeenCalledWith(expect.anything(), "down");
+    expect(screen.getByRole("button", { name: "Auto Play" }).getAttribute("aria-pressed")).toBe(
+        "false",
+    );
+    expect(screen.queryByRole("status")).toBeNull();
+
+    await act(async () => {
+        vi.advanceTimersByTime(SETTLE_MS + 2000);
+        await Promise.resolve();
+    });
+
+    expect(suggestMove).toHaveBeenCalledTimes(1);
+    expect(screen.getByRole("button", { name: "AI" }).disabled).toBe(false);
 });

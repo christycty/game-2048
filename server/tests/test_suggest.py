@@ -29,6 +29,7 @@ from helpers import (
     E2E_SUGGEST_CALLS,
     OPEN_BOARD,
     SORTED_ROW,
+    STUCK_BOARD,
     BlockingExpectimax,
     BlockingLLM,
     FakeLLM,
@@ -41,13 +42,6 @@ MERGE_BOARD = [
     [0, 0, 0, 0],
     [0, 0, 0, 0],
     [0, 0, 0, 0],
-]
-
-STUCK_BOARD = [
-    [2, 4, 8, 16],
-    [32, 64, 128, 256],
-    [512, 1024, 2048, 4096],
-    [8192, 16384, 32768, 65536],
 ]
 
 
@@ -1124,31 +1118,22 @@ def test_a_timed_out_first_attempt_still_gets_its_retry() -> None:
     assert llm.calls == 2
 
 
-def test_lifespan_closes_the_owned_client(monkeypatch: pytest.MonkeyPatch) -> None:
-    closed: list[int] = []
-    real_close = OllamaClient.close
-
-    def spy_close(self: OllamaClient) -> None:
-        closed.append(1)
-        real_close(self)
-
-    monkeypatch.setattr(OllamaClient, "close", spy_close)
-    app = create_app(isolated_settings())
-    with TestClient(app):
-        assert closed == []
-    assert closed == [1]
-
-
-def test_lifespan_leaves_an_injected_client_open() -> None:
+def test_suggest_leaves_an_injected_client_open() -> None:
     def handler(_request: httpx.Request) -> httpx.Response:
-        return httpx.Response(200, json={"models": []})
+        return httpx.Response(
+            200,
+            json={"message": {"content": '{"move": "right", "reason": "Slide the tile."}'}},
+        )
 
     transport = httpx.MockTransport(handler)
     http = httpx.Client(transport=transport, base_url="http://ollama.test")
-    settings = isolated_settings()
-    app = create_app(settings, OllamaClient(settings, client=http))
-    with TestClient(app):
-        pass
-    response = http.get("/api/tags")
-    assert response.status_code == 200
-    http.close()
+    try:
+        settings = isolated_settings()
+        app = create_app(settings, OllamaClient(settings, client=http))
+        with TestClient(app) as client:
+            response = client.post("/suggest", json={"board": OPEN_BOARD, "mode": "llm"})
+            assert response.status_code == 200
+            assert response.json()["source"] == "llm"
+        assert http.is_closed is False
+    finally:
+        http.close()

@@ -1,6 +1,6 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { hasMoves } from "../game/game";
-import { HINT_SUGGEST_FAILED } from "../suggest/suggestHints";
+import { HINT_SUGGEST_FAILED, isRetryingHint } from "../suggest/suggestHints";
 
 /**
  * Auto Play toggle/stop and autoApplyingRef.
@@ -21,16 +21,34 @@ export function useAutoPlayController({
     setHint,
     abortInFlightSuggest,
     resetCapacityRetries,
+    clearGapTimer,
     handleMove,
     handleSuggest,
 }) {
     const [autoPlaying, setAutoPlaying] = useState(false);
 
+    function resetAutoPlay() {
+        autoPlayingRef.current = false;
+        autoApplyingRef.current = false;
+        setAutoPlaying(false);
+    }
+
+    useEffect(
+        () => () => {
+            autoPlayingRef.current = false;
+            autoApplyingRef.current = false;
+        },
+        [autoPlayingRef, autoApplyingRef],
+    );
+
     function stopAutoPlay() {
         if (!autoPlayingRef.current) return;
         autoPlayingRef.current = false;
         setAutoPlaying(false);
+        clearGapTimer();
         resetCapacityRetries();
+        // Stopping cancels any scheduled retry, so transient "… Retrying…" copy must not linger.
+        setHint((current) => (isRetryingHint(current) ? null : current));
         // The post-settle gap keeps busy true so AI stays inactive through the pause.
         // Stopping must release that hold when nothing else is in flight.
         if (!animatingRef.current && !suggestingRef.current) {
@@ -40,10 +58,9 @@ export function useAutoPlayController({
 
     function handleAutoPlayToggle() {
         if (autoPlayingRef.current) {
-            // Stop during Thinking aborts the fetch so the server can cancel the run.
-            if (suggestingRef.current) {
-                abortInFlightSuggest();
-                if (!animatingRef.current) setBusy(false);
+            // Stop during Thinking or retry backoff cancels the active suggest session.
+            if (abortInFlightSuggest() && !animatingRef.current) {
+                setBusy(false);
             }
             stopAutoPlay();
             return;
@@ -70,8 +87,8 @@ export function useAutoPlayController({
 
     return {
         autoPlaying,
-        setAutoPlaying,
         stopAutoPlay,
+        resetAutoPlay,
         handleAutoPlayToggle,
     };
 }

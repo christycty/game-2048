@@ -33,21 +33,7 @@ from app.telemetry import (
     exporter_headers,
     traces_url,
 )
-from helpers import isolated_settings
-
-OPEN_BOARD = [
-    [2, 0, 0, 0],
-    [0, 0, 0, 0],
-    [0, 0, 0, 0],
-    [0, 0, 0, 0],
-]
-
-STUCK_BOARD = [
-    [2, 4, 8, 16],
-    [32, 64, 128, 256],
-    [512, 1024, 2048, 4096],
-    [8192, 16384, 32768, 65536],
-]
+from helpers import OPEN_BOARD, STUCK_BOARD, isolated_settings, labeled_counter
 
 
 class _QuietLLM:
@@ -85,14 +71,6 @@ def _suggest_status_count(body: str, status_code: int) -> float:
     marker = f'http_status_code="{status_code}",http_target="/suggest"'
     for line in body.splitlines():
         if line.startswith("http_server_duration_milliseconds_count") and marker in line:
-            return float(line.rsplit(" ", 1)[-1])
-    return 0.0
-
-
-def _labeled_counter(body: str, metric: str, label_fragment: str) -> float:
-    prefix = f"{metric}_total{{"
-    for line in body.splitlines():
-        if line.startswith(prefix) and label_fragment in line:
             return float(line.rsplit(" ", 1)[-1])
     return 0.0
 
@@ -242,23 +220,19 @@ def test_client_events_increment_scrape_counter() -> None:
     body = client.get("/metrics").text
     assert PROM_CLIENT_SUGGEST_OUTCOME in body
     assert (
-        _labeled_counter(body, PROM_CLIENT_SUGGEST_OUTCOME, f'outcome="{CLIENT_OUTCOME_FAIL}"')
+        labeled_counter(body, PROM_CLIENT_SUGGEST_OUTCOME, f'outcome="{CLIENT_OUTCOME_FAIL}"')
         == 1.0
     )
     assert (
-        _labeled_counter(
-            body, PROM_CLIENT_SUGGEST_OUTCOME, f'outcome="{CLIENT_OUTCOME_RATE_LIMIT}"'
-        )
+        labeled_counter(body, PROM_CLIENT_SUGGEST_OUTCOME, f'outcome="{CLIENT_OUTCOME_RATE_LIMIT}"')
         == 1.0
     )
     assert (
-        _labeled_counter(
-            body, PROM_CLIENT_SUGGEST_OUTCOME, f'outcome="{CLIENT_OUTCOME_MODEL_BUSY}"'
-        )
+        labeled_counter(body, PROM_CLIENT_SUGGEST_OUTCOME, f'outcome="{CLIENT_OUTCOME_MODEL_BUSY}"')
         == 1.0
     )
     assert (
-        _labeled_counter(body, PROM_CLIENT_SUGGEST_OUTCOME, f'outcome="{CLIENT_OUTCOME_CANCEL}"')
+        labeled_counter(body, PROM_CLIENT_SUGGEST_OUTCOME, f'outcome="{CLIENT_OUTCOME_CANCEL}"')
         == 1.0
     )
 
@@ -542,8 +516,8 @@ def test_between_attempt_cancel_records_cancelled() -> None:
     assert posts["n"] == 1
     assert 'gen_ai_request_outcome="cancelled"' in body
     # First attempt still counts as a model error; cancel must not add another.
-    assert _labeled_counter(body, PROM_REQUEST_COUNT, 'gen_ai_request_outcome="error"') == 1.0
-    assert _labeled_counter(body, PROM_REQUEST_COUNT, 'gen_ai_request_outcome="cancelled"') == 1.0
+    assert labeled_counter(body, PROM_REQUEST_COUNT, 'gen_ai_request_outcome="error"') == 1.0
+    assert labeled_counter(body, PROM_REQUEST_COUNT, 'gen_ai_request_outcome="cancelled"') == 1.0
     spans = {span.name: span for span in exporter.get_finished_spans()}
     assert spans["suggest"].status.status_code != StatusCode.ERROR
     ollama_spans = [s for s in exporter.get_finished_spans() if s.name == "ollama chat"]
@@ -600,8 +574,8 @@ def test_metrics_records_suggest_http_status_codes() -> None:
     limited_body = limited_client.get("/metrics").text
     assert _suggest_status_count(limited_body, 429) >= 1.0
     # Rate-limit path must not invent an extra suggest_source beyond the 200.
-    assert _labeled_counter(limited_body, PROM_SUGGEST_SOURCE, 'suggest_source="llm"') == 1.0
-    assert _labeled_counter(limited_body, PROM_SUGGEST_SOURCE, 'suggest_source="fallback"') == 0.0
+    assert labeled_counter(limited_body, PROM_SUGGEST_SOURCE, 'suggest_source="llm"') == 1.0
+    assert labeled_counter(limited_body, PROM_SUGGEST_SOURCE, 'suggest_source="fallback"') == 0.0
 
 
 def test_metrics_counts_response_error_type() -> None:
@@ -866,3 +840,22 @@ def test_stuck_board_marks_http_span_without_llm() -> None:
     assert "65536" in root.attributes[INPUT_VALUE]
     assert "no legal move" in root.attributes[OUTPUT_VALUE]
     assert "failures" not in root.attributes[OUTPUT_VALUE]
+
+
+def test_labeled_counter_sums_matching_subseries() -> None:
+    sample = "\n".join(
+        [
+            "gen_ai_client_request_count_total{"
+            'error_type="parse",gen_ai_request_outcome="error"} 2.0',
+            "gen_ai_client_request_count_total{"
+            'error_type="request",gen_ai_request_outcome="error"} 1.0',
+            'gen_ai_client_request_count_total{gen_ai_request_outcome="cancelled"} 4.0',
+        ]
+    )
+    assert (
+        labeled_counter(sample, "gen_ai_client_request_count", 'gen_ai_request_outcome="error"')
+        == 3.0
+    )
+    assert (
+        labeled_counter(sample, "gen_ai_client_request_count", 'gen_ai_request_outcome="ok"') == 0.0
+    )

@@ -3,8 +3,9 @@ from __future__ import annotations
 import asyncio
 import threading
 import time
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, NoReturn
 
 from app.cancel import SuggestCancelled
 from app.config import Settings
@@ -33,6 +34,13 @@ OPEN_BOARD = [
     [0, 0, 0, 0],
     [0, 0, 0, 0],
     [0, 0, 0, 0],
+]
+
+STUCK_BOARD = [
+    [2, 4, 8, 16],
+    [32, 64, 128, 256],
+    [512, 1024, 2048, 4096],
+    [8192, 16384, 32768, 65536],
 ]
 
 # test_suggest_e2e shares one app across every parametrized /suggest.
@@ -88,6 +96,18 @@ class FrozenClock:
         return self.now
 
 
+def labeled_counter(body: str, metric: str, label_fragment: str) -> float:
+    prefix = f"{metric}_total{{"
+    return sum(
+        (
+            float(line.rsplit(" ", 1)[-1])
+            for line in body.splitlines()
+            if line.startswith(prefix) and label_fragment in line
+        ),
+        0.0,
+    )
+
+
 @dataclass(frozen=True)
 class AsgiSuggestResult:
     status: int | None
@@ -104,7 +124,7 @@ async def asgi_suggest(
     app: Any,
     raw_body: bytes,
     *,
-    disconnect_gate: asyncio.Event | None = None,
+    disconnect_gate: asyncio.Event | Callable[[], Awaitable[Any]] | None = None,
 ) -> AsgiSuggestResult:
     """POST /suggest via raw ASGI (no TestClient lifespan).
 
@@ -137,7 +157,10 @@ async def asgi_suggest(
         if messages:
             return messages.pop(0)
         if disconnect_gate is not None:
-            await disconnect_gate.wait()
+            if isinstance(disconnect_gate, asyncio.Event):
+                await disconnect_gate.wait()
+            else:
+                await disconnect_gate()
             return {"type": "http.disconnect"}
         await asyncio.sleep(60)
         return {"type": "http.disconnect"}
@@ -158,6 +181,13 @@ async def asgi_suggest(
         elif message.get("type") == "http.response.body":
             body += message.get("body") or b""
     return AsgiSuggestResult(status=status, headers=headers, body=body)
+
+
+class UnusedLLM:
+    """Fails immediately if a non-LLM path calls into the model client."""
+
+    def suggest_move(self, *args: object, **kwargs: object) -> NoReturn:
+        raise AssertionError("LLM must not be called")
 
 
 class FakeLLM:

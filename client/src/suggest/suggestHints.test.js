@@ -4,6 +4,7 @@ import {
     capitalize,
     formatSuggestionHint,
     hintForSuggestFailure,
+    isRetryingHint,
     HINT_CAPACITY_BUSY,
     HINT_CAPACITY_RETRYING,
     HINT_SPEND_CAP,
@@ -61,5 +62,16 @@ describe("hintForSuggestFailure", () => {
             hintForSuggestFailure({ isCapacityBusy: false, isSpendCap: false, retrying: false }),
             HINT_SUGGEST_FAILED,
         );
+    });
+});
+
+describe("isRetryingHint", () => {
+    it("matches only transient retrying status strings", () => {
+        assert.equal(isRetryingHint(HINT_CAPACITY_RETRYING), true);
+        assert.equal(isRetryingHint(HINT_SUGGEST_RETRYING), true);
+        assert.equal(isRetryingHint(HINT_CAPACITY_BUSY), false);
+        assert.equal(isRetryingHint(HINT_SUGGEST_FAILED), false);
+        assert.equal(isRetryingHint("Suggested: Right. ok"), false);
+        assert.equal(isRetryingHint(null), false);
     });
 });

@@ -19,6 +19,10 @@ export function formatSuggestionHint(move, reason) {
         : `Suggested: ${capitalize(move)}.`;
 }
 
+export function isRetryingHint(hint) {
+    return hint === HINT_CAPACITY_RETRYING || hint === HINT_SUGGEST_RETRYING;
+}
+
 /** Map a classified suggest failure to status copy (capacity / spend / model miss). */
 export function hintForSuggestFailure({
     isCapacityBusy,
@@ -27,9 +31,7 @@ export function hintForSuggestFailure({
     retrying,
 }) {
     if (retrying) {
-        if (isCapacityBusy) return HINT_CAPACITY_RETRYING;
-        if (isModelMiss) return HINT_SUGGEST_RETRYING;
-        return HINT_CAPACITY_RETRYING;
+        return isModelMiss ? HINT_SUGGEST_RETRYING : HINT_CAPACITY_RETRYING;
     }
     if (isCapacityBusy) return HINT_CAPACITY_BUSY;
     if (isSpendCap) return HINT_SPEND_CAP;
