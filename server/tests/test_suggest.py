@@ -16,7 +16,7 @@ from app.rate_limit import (
     HEADER_SUGGEST_LIMIT,
     LIMIT_REASON_CAPACITY,
     LIMIT_REASON_SPEND,
-    LlmInFlightGate,
+    InFlightGate,
     SuggestRateLimiter,
 )
 from app.schemas import MAX_TILE
@@ -29,6 +29,7 @@ from helpers import (
     E2E_SUGGEST_CALLS,
     OPEN_BOARD,
     SORTED_ROW,
+    BlockingExpectimax,
     BlockingLLM,
     FakeLLM,
     FrozenClock,
@@ -121,6 +122,7 @@ def test_default_llm_hard_ceiling_blocks_after_sixty_calls() -> None:
     with pytest.raises(ValidationError):
         isolated_settings(suggest_rate_limit_expectimax_requests=601)
     assert Settings.model_fields["llm_max_in_flight"].default == 1
+    assert Settings.model_fields["expectimax_max_in_flight"].default == 4
     assert E2E_SUGGEST_CALLS == E2E_BOARD_COUNT * E2E_RUN_COUNT
     assert E2E_SUGGEST_CALLS < 60
     assert E2E_RATE_LIMIT_REQUESTS > E2E_SUGGEST_CALLS
@@ -194,7 +196,7 @@ def test_llm_in_flight_blocks_second_call_while_first_holds() -> None:
 def test_llm_in_flight_two_admits_two_blocks_third() -> None:
     """Capacity gate at 2: two holders pass; a third gets Retry-After 1; drain frees slots."""
     llm = BlockingLLM()
-    gate = LlmInFlightGate(2)
+    gate = InFlightGate(2)
     settings = isolated_settings(suggest_rate_limit_requests=20, llm_max_in_flight=2)
     app = create_app(settings, llm, llm_in_flight=gate)
     body = {"board": OPEN_BOARD, "mode": "llm"}
@@ -261,6 +263,132 @@ def test_expectimax_unaffected_by_llm_in_flight_gate() -> None:
         holder.join(timeout=3)
 
 
+def test_expectimax_in_flight_blocks_when_full(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Expectimax capacity (default 4): fifth parallel search gets model busy 429."""
+    search = BlockingExpectimax()
+    monkeypatch.setattr("app.suggester.choose_move", search)
+    gate = InFlightGate(4)
+    settings = isolated_settings(
+        suggest_rate_limit_expectimax_requests=20,
+        expectimax_max_in_flight=4,
+    )
+    app = create_app(settings, FakeLLM(["right"]), expectimax_in_flight=gate)
+    body = {"board": OPEN_BOARD, "mode": "expectimax"}
+    results: dict[str, int] = {}
+
+    with TestClient(app) as client:
+
+        def hold(name: str) -> None:
+            results[name] = client.post("/suggest", json=body).status_code
+
+        holders = [threading.Thread(target=hold, args=(f"h{i}",)) for i in range(4)]
+        for thread in holders:
+            thread.start()
+        deadline = time.monotonic() + 2
+        while search.calls < 4 and time.monotonic() < deadline:
+            time.sleep(0.01)
+        assert search.calls == 4
+
+        blocked = client.post("/suggest", json=body)
+        assert blocked.status_code == 429
+        assert blocked.json()["detail"] == DETAIL_MODEL_BUSY
+        assert blocked.headers["retry-after"] == "1"
+        assert blocked.headers[HEADER_SUGGEST_LIMIT.lower()] == LIMIT_REASON_CAPACITY
+        assert search.calls == 4
+
+        search.release.set()
+        for thread in holders:
+            thread.join(timeout=3)
+        assert results == {f"h{i}": 200 for i in range(4)}
+        probe = gate.acquire()
+        assert probe.retry_after is None and probe.token is not None
+        gate.release(probe.token)
+        assert client.post("/suggest", json=body).status_code == 200
+
+
+def test_llm_unaffected_by_expectimax_in_flight_gate(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """LLM does not take an Expectimax capacity slot."""
+    search = BlockingExpectimax()
+    monkeypatch.setattr("app.suggester.choose_move", search)
+    settings = isolated_settings(
+        suggest_rate_limit_requests=10,
+        expectimax_max_in_flight=1,
+    )
+    app = create_app(settings, FakeLLM(["right"] * 3))
+    body_ex = {"board": OPEN_BOARD, "mode": "expectimax"}
+
+    with TestClient(app) as client:
+
+        def hold() -> None:
+            client.post("/suggest", json=body_ex)
+
+        holder = threading.Thread(target=hold)
+        holder.start()
+        assert search.started.wait(2)
+
+        llm = client.post("/suggest", json={"board": OPEN_BOARD, "mode": "llm"})
+        assert llm.status_code == 200
+        assert llm.json()["source"] in ("llm", "fallback")
+        # Expectimax still blocked while the holder runs.
+        blocked = client.post("/suggest", json=body_ex)
+        assert blocked.status_code == 429
+        assert blocked.json()["detail"] == DETAIL_MODEL_BUSY
+
+        search.release.set()
+        holder.join(timeout=3)
+
+
+def test_expectimax_capacity_reject_does_not_burn_hard_ceiling(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Expectimax capacity 429 must refund the sliding-window hit."""
+    search = BlockingExpectimax()
+    monkeypatch.setattr("app.suggester.choose_move", search)
+    clock = FrozenClock()
+    limiter = SuggestRateLimiter(2, 60, clock)
+    settings = isolated_settings(
+        suggest_rate_limit_expectimax_requests=2,
+        expectimax_max_in_flight=1,
+    )
+    app = create_app(
+        settings,
+        FakeLLM(["right"]),
+        rate_limiters={
+            "llm": SuggestRateLimiter(30, 60, clock),
+            "expectimax": limiter,
+        },
+        expectimax_in_flight=InFlightGate(1),
+    )
+    body = {"board": OPEN_BOARD, "mode": "expectimax"}
+
+    with TestClient(app) as client:
+
+        def hold() -> None:
+            client.post("/suggest", json=body)
+
+        holder = threading.Thread(target=hold)
+        holder.start()
+        assert search.started.wait(2)
+
+        blocked = client.post("/suggest", json=body)
+        assert blocked.status_code == 429
+        assert blocked.json()["detail"] == DETAIL_MODEL_BUSY
+        assert blocked.headers[HEADER_SUGGEST_LIMIT.lower()] == LIMIT_REASON_CAPACITY
+
+        search.release.set()
+        holder.join(timeout=3)
+        # Cap 2: holder used one; capacity reject refunded — second spend still free.
+        assert client.post("/suggest", json=body).status_code == 200
+        spend = client.post("/suggest", json=body)
+        assert spend.status_code == 429
+        assert spend.json()["detail"] == DETAIL_SPEND_CAP
+        assert spend.headers[HEADER_SUGGEST_LIMIT.lower()] == LIMIT_REASON_SPEND
+
+
 def test_capacity_reject_does_not_burn_hard_ceiling() -> None:
     """A 429 from the in-flight gate must refund the sliding-window hit."""
     llm = BlockingLLM()
@@ -272,7 +400,7 @@ def test_capacity_reject_does_not_burn_hard_ceiling() -> None:
         settings,
         llm,
         rate_limiters={"llm": limiter, "expectimax": SuggestRateLimiter(30, 60, clock)},
-        llm_in_flight=LlmInFlightGate(1),
+        llm_in_flight=InFlightGate(1),
     )
     body = {"board": OPEN_BOARD, "mode": "llm"}
 
@@ -321,6 +449,25 @@ def test_invalid_body_and_stuck_board_do_not_leak_capacity() -> None:
     assert llm.calls == 1
 
 
+def test_stuck_board_does_not_leak_expectimax_capacity() -> None:
+    """409 releases the Expectimax slot so the next search admits."""
+    llm = FakeLLM(["right"])
+    settings = isolated_settings(
+        suggest_rate_limit_expectimax_requests=10,
+        expectimax_max_in_flight=1,
+    )
+    client = TestClient(create_app(settings, llm))
+
+    stuck = client.post("/suggest", json={"board": STUCK_BOARD, "mode": "expectimax"})
+    assert stuck.status_code == 409
+    assert llm.calls == 0
+
+    ok = client.post("/suggest", json={"board": OPEN_BOARD, "mode": "expectimax"})
+    assert ok.status_code == 200
+    assert ok.json()["source"] in ("expectimax", "fallback")
+    assert llm.calls == 0
+
+
 def test_pre_suggester_failure_releases_llm_in_flight_slot(monkeypatch: pytest.MonkeyPatch) -> None:
     """A raise after acquire but before suggester must not sticky-hold capacity."""
     from app import main as main_mod
@@ -342,6 +489,36 @@ def test_pre_suggester_failure_releases_llm_in_flight_slot(monkeypatch: pytest.M
     with TestClient(app) as client:
         assert client.post("/suggest", json={"board": OPEN_BOARD, "mode": "llm"}).status_code == 200
         assert llm.calls == 1
+
+
+def test_pre_suggester_failure_releases_expectimax_in_flight_slot(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Pre-suggester raise must free the Expectimax capacity slot too."""
+    from app import main as main_mod
+
+    llm = FakeLLM(["right"])
+    settings = isolated_settings(
+        suggest_rate_limit_expectimax_requests=10,
+        expectimax_max_in_flight=1,
+    )
+    app = create_app(settings, llm)
+
+    def boom(*_args: object, **_kwargs: object) -> None:
+        raise RuntimeError("span io failed")
+
+    monkeypatch.setattr(main_mod, "set_json_io", boom)
+    with TestClient(app, raise_server_exceptions=False) as client:
+        failed = client.post("/suggest", json={"board": OPEN_BOARD, "mode": "expectimax"})
+        assert failed.status_code == 500
+        assert llm.calls == 0
+
+    monkeypatch.undo()
+    with TestClient(app) as client:
+        ok = client.post("/suggest", json={"board": OPEN_BOARD, "mode": "expectimax"})
+        assert ok.status_code == 200
+        assert ok.json()["source"] in ("expectimax", "fallback")
+        assert llm.calls == 0
 
 
 def test_concurrent_llm_suggests_fail_fast_without_leaking_capacity() -> None:
@@ -386,6 +563,55 @@ def test_concurrent_llm_suggests_fail_fast_without_leaking_capacity() -> None:
         # After drain, the slot is free (v1 has no queue — retries are a follow-up).
         assert client.post("/suggest", json=body).status_code == 200
         assert llm.calls == 2
+
+
+def test_concurrent_expectimax_suggests_fail_fast_without_leaking_capacity(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Held Expectimax slot: overlapping peers get capacity 429; slot frees after drain."""
+    workers = 8
+    search = BlockingExpectimax()
+    monkeypatch.setattr("app.suggester.choose_move", search)
+    settings = isolated_settings(
+        suggest_rate_limit_expectimax_requests=50,
+        expectimax_max_in_flight=1,
+    )
+    app = create_app(settings, FakeLLM(["right"]))
+    body = {"board": OPEN_BOARD, "mode": "expectimax"}
+    holder_status: dict[str, int] = {}
+    extras: list[int] = []
+    lock = threading.Lock()
+
+    with TestClient(app) as client:
+
+        def hold() -> None:
+            holder_status["code"] = client.post("/suggest", json=body).status_code
+
+        holder = threading.Thread(target=hold)
+        holder.start()
+        assert search.started.wait(2)
+
+        def one() -> None:
+            status = client.post("/suggest", json=body).status_code
+            with lock:
+                extras.append(status)
+
+        threads = [threading.Thread(target=one) for _ in range(workers)]
+        for thread in threads:
+            thread.start()
+        for thread in threads:
+            thread.join(timeout=5)
+            assert not thread.is_alive()
+
+        assert extras == [429] * workers
+        assert search.calls == 1
+        assert not getattr(app.state, "telemetry_shutdown", False)
+
+        search.release.set()
+        holder.join(timeout=3)
+        assert holder_status["code"] == 200
+        assert client.post("/suggest", json=body).status_code == 200
+        assert search.calls == 2
 
 
 def test_e2e_rate_limit_covers_shared_fixture_budget() -> None:

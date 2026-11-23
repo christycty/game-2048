@@ -14,43 +14,18 @@ import pytest
 from fastapi.testclient import TestClient
 
 from app.cancel import SuggestCancelled
-from app.expectimax import Choice, choose_move
+from app.expectimax import choose_move
 from app.llm import ModelSuggestion, OllamaClient
 from app.main import DisconnectCancelMiddleware, create_app
-from app.rate_limit import DETAIL_MODEL_BUSY, LlmInFlightGate, SuggestRateLimiter
+from app.rate_limit import DETAIL_MODEL_BUSY, InFlightGate, SuggestRateLimiter
 from app.suggester import MoveSuggester
-from helpers import OPEN_BOARD, BlockingLLM, asgi_suggest, isolated_settings
-
-
-class BlockingExpectimax:
-    """Stand-in for choose_move: blocks until cancel or release (real search is too fast)."""
-
-    def __init__(self) -> None:
-        self.started = threading.Event()
-        self.release = threading.Event()
-        self.cancelled_with: threading.Event | None = None
-        self.calls = 0
-        self._lock = threading.Lock()
-
-    def __call__(
-        self,
-        board: list[list[int]],
-        *,
-        depth: int | None = None,
-        budget_seconds: float | None = None,
-        clock: object | None = None,
-        cancel: threading.Event | None = None,
-    ) -> Choice:
-        with self._lock:
-            self.calls += 1
-        self.started.set()
-        while True:
-            if cancel is not None and cancel.is_set():
-                self.cancelled_with = cancel
-                raise SuggestCancelled()
-            if self.release.is_set():
-                return Choice("right", "Score of each direction: Right = 1.0")
-            time.sleep(0.01)
+from helpers import (
+    OPEN_BOARD,
+    BlockingExpectimax,
+    BlockingLLM,
+    asgi_suggest,
+    isolated_settings,
+)
 
 
 class UnusedLLM:
@@ -367,7 +342,7 @@ def test_disconnect_middleware_sets_cancel_on_disconnect() -> None:
 def test_asgi_disconnect_cancels_blocking_llm() -> None:
     """Disconnect A while B holds (max_in_flight=2): A 499, B 200; A's slot frees mid-flight."""
     llm = BlockingLLM()
-    in_flight = LlmInFlightGate(2)
+    in_flight = InFlightGate(2)
     settings = isolated_settings(
         suggest_rate_limit_requests=10,
         suggest_rate_limit_expectimax_requests=10,
@@ -421,14 +396,15 @@ def test_asgi_disconnect_cancels_blocking_llm() -> None:
 def test_asgi_disconnect_cancels_blocking_expectimax(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Full stack expectimax: disconnect A while both run → A 499, concurrent B still 200."""
+    """Disconnect A while B holds (max_in_flight=2): A 499, B 200; A's slot frees mid-flight."""
     search = BlockingExpectimax()
     monkeypatch.setattr("app.suggester.choose_move", search)
+    in_flight = InFlightGate(2)
     settings = isolated_settings(
-        suggest_rate_limit_requests=10,
         suggest_rate_limit_expectimax_requests=10,
+        expectimax_max_in_flight=2,
     )
-    app = create_app(settings, UnusedLLM())
+    app = create_app(settings, UnusedLLM(), expectimax_in_flight=in_flight)
     body = json.dumps({"board": OPEN_BOARD, "mode": "expectimax"}).encode()
 
     async def run() -> None:
@@ -443,10 +419,30 @@ def test_asgi_disconnect_cancels_blocking_expectimax(
         result_a = await asyncio.wait_for(task_a, timeout=3)
         assert search.cancelled_with is not None
         assert result_a.status == 499
+
+        # While B still holds: exactly one free slot (third admits, fourth capacity-429).
+        task_third = asyncio.create_task(asgi_suggest(app, body, disconnect_gate=None))
+        entered = time.monotonic() + 2
+        while search.calls < 3 and time.monotonic() < entered:
+            await asyncio.sleep(0.01)
+        assert search.calls == 3
+
+        fourth = await asgi_suggest(app, body, disconnect_gate=None)
+        assert fourth.status == 429
+        assert fourth.json()["detail"] == DETAIL_MODEL_BUSY
+        assert fourth.headers["retry-after"] == "1"
+        assert not getattr(app.state, "telemetry_shutdown", False)
+
         search.release.set()
+        result_third = await asyncio.wait_for(task_third, timeout=3)
+        assert result_third.status == 200
         result_b = await asyncio.wait_for(task_b, timeout=3)
         assert result_b.status == 200
         assert not getattr(app.state, "telemetry_shutdown", False)
+
+        probe = in_flight.acquire()
+        assert probe.retry_after is None and probe.token is not None
+        in_flight.release(probe.token)
 
     asyncio.run(run())
 
@@ -454,7 +450,7 @@ def test_asgi_disconnect_cancels_blocking_expectimax(
 def test_cancelled_suggest_releases_llm_in_flight_slot() -> None:
     """499 must free the capacity slot so the next LLM suggest is admitted."""
     llm = BlockingLLM()
-    gate = LlmInFlightGate(1)
+    gate = InFlightGate(1)
     settings = isolated_settings(suggest_rate_limit_requests=10, llm_max_in_flight=1)
     app = create_app(settings, llm, llm_in_flight=gate)
     body = json.dumps({"board": OPEN_BOARD, "mode": "llm"}).encode()
@@ -472,6 +468,37 @@ def test_cancelled_suggest_releases_llm_in_flight_slot() -> None:
     # Slot freed in finally: a fresh suggest must not get capacity 429.
     with TestClient(app) as client:
         assert client.post("/suggest", json={"board": OPEN_BOARD, "mode": "llm"}).status_code == 200
+
+
+def test_cancelled_expectimax_releases_in_flight_slot(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """499 must free the Expectimax capacity slot so the next search is admitted."""
+    search = BlockingExpectimax()
+    monkeypatch.setattr("app.suggester.choose_move", search)
+    gate = InFlightGate(1)
+    settings = isolated_settings(
+        suggest_rate_limit_expectimax_requests=10,
+        expectimax_max_in_flight=1,
+    )
+    app = create_app(settings, UnusedLLM(), expectimax_in_flight=gate)
+    body = json.dumps({"board": OPEN_BOARD, "mode": "expectimax"}).encode()
+
+    async def call_and_disconnect() -> int | None:
+        disconnect = asyncio.Event()
+        task = asyncio.create_task(asgi_suggest(app, body, disconnect_gate=disconnect))
+        assert await asyncio.to_thread(search.started.wait, 2)
+        disconnect.set()
+        result = await asyncio.wait_for(task, timeout=3)
+        return result.status
+
+    assert asyncio.run(call_and_disconnect()) == 499
+    search.release.set()
+    with TestClient(app) as client:
+        assert (
+            client.post("/suggest", json={"board": OPEN_BOARD, "mode": "expectimax"}).status_code
+            == 200
+        )
 
 
 def test_cancelled_suggest_refunds_rate_limit_hit() -> None:
@@ -497,6 +524,34 @@ def test_cancelled_suggest_refunds_rate_limit_hit() -> None:
 
     assert asyncio.run(call_and_disconnect()) == 499
     # Same window, cap 1: after refund the next allow must succeed.
+    assert limiter.allow().retry_after is None
+
+
+def test_cancelled_expectimax_refunds_rate_limit_hit(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """499 after Expectimax acquire must not leave the expectimax spend cap one shorter."""
+    search = BlockingExpectimax()
+    monkeypatch.setattr("app.suggester.choose_move", search)
+    clock = {"now": 0.0}
+    limiter = SuggestRateLimiter(1, 60, lambda: clock["now"])
+    settings = isolated_settings(suggest_rate_limit_expectimax_requests=1)
+    app = create_app(
+        settings,
+        UnusedLLM(),
+        rate_limiters={"llm": SuggestRateLimiter(30, 60), "expectimax": limiter},
+    )
+    body = json.dumps({"board": OPEN_BOARD, "mode": "expectimax"}).encode()
+
+    async def call_and_disconnect() -> int | None:
+        gate = asyncio.Event()
+        task = asyncio.create_task(asgi_suggest(app, body, disconnect_gate=gate))
+        assert await asyncio.to_thread(search.started.wait, 2)
+        gate.set()
+        result = await asyncio.wait_for(task, timeout=3)
+        return result.status
+
+    assert asyncio.run(call_and_disconnect()) == 499
     assert limiter.allow().retry_after is None
 
 

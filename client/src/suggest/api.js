@@ -11,7 +11,7 @@ import { createTraceparent } from "./trace.js";
 
 /** Spend hard-ceiling 429 (stop Auto Play). */
 export const LIMIT_SPEND = "spend";
-/** LLM capacity-gate 429 (Auto Play may retry). */
+/** Per-mode capacity-gate 429 (Auto Play may retry). */
 export const LIMIT_CAPACITY = "capacity";
 export const DETAIL_SPEND_CAP = "too many suggestions";
 export const DETAIL_MODEL_BUSY = "model busy";

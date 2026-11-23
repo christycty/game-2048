@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import threading
 
+import pytest
 from fastapi.testclient import TestClient
 
 from app.main import create_app
@@ -22,13 +23,14 @@ from app.rate_limit import (
     HEADER_SUGGEST_LIMIT,
     LIMIT_REASON_CAPACITY,
     LIMIT_REASON_SPEND,
-    LlmInFlightGate,
+    InFlightGate,
     SuggestRateLimiter,
 )
 from app.telemetry import PROM_CLIENT_SUGGEST_OUTCOME, PROM_SUGGEST_LIMIT_REJECT
 from helpers import (
     OPEN_BOARD,
     SORTED_ROW,
+    BlockingExpectimax,
     BlockingLLM,
     FakeLLM,
     FrozenClock,
@@ -138,7 +140,7 @@ def test_capacity_429_uses_model_busy_detail() -> None:
         suggest_rate_limit_requests=10,
         llm_max_in_flight=1,
     )
-    app = create_app(settings, llm, llm_in_flight=LlmInFlightGate(1))
+    app = create_app(settings, llm, llm_in_flight=InFlightGate(1))
     body = {"board": OPEN_BOARD, "mode": "llm"}
 
     # One TestClient lifespan for holder + probe (nested clients shut down telemetry).
@@ -166,6 +168,48 @@ def test_capacity_429_uses_model_busy_detail() -> None:
         assert not holder.is_alive()
 
 
+def test_expectimax_capacity_429_uses_model_busy_detail(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Expectimax capacity uses the same 429 contract as LLM (detail / header / Retry-After)."""
+    search = BlockingExpectimax()
+    monkeypatch.setattr("app.suggester.choose_move", search)
+    settings = isolated_settings(
+        app_env="prod",
+        suggest_rate_limit_expectimax_requests=10,
+        expectimax_max_in_flight=1,
+    )
+    app = create_app(
+        settings,
+        _UnusedLLM(),
+        expectimax_in_flight=InFlightGate(1),
+    )
+    body = {"board": OPEN_BOARD, "mode": "expectimax"}
+
+    with TestClient(app) as client:
+
+        def hold() -> None:
+            client.post("/suggest", json=body)
+
+        holder = threading.Thread(target=hold)
+        holder.start()
+        assert search.started.wait(2)
+
+        blocked = client.post("/suggest", json=body)
+        assert blocked.status_code == 429
+        assert blocked.json()["detail"] == DETAIL_MODEL_BUSY
+        assert blocked.headers["retry-after"] == "1"
+        assert blocked.headers[HEADER_SUGGEST_LIMIT.lower()] == LIMIT_REASON_CAPACITY
+        metrics = client.get("/metrics").text
+        assert PROM_SUGGEST_LIMIT_REJECT in metrics
+        assert f'reason="{LIMIT_REASON_CAPACITY}"' in metrics
+        assert not getattr(app.state, "telemetry_shutdown", False)
+
+        search.release.set()
+        holder.join(timeout=3)
+        assert not holder.is_alive()
+
+
 def test_capacity_and_spend_429_have_distinct_details() -> None:
     """One scenario surfaces both layers; clients must not treat every 429 alike."""
     clock = FrozenClock()
@@ -175,7 +219,7 @@ def test_capacity_and_spend_429_have_distinct_details() -> None:
         isolated_settings(app_env="prod", suggest_rate_limit_requests=2, llm_max_in_flight=1),
         llm,
         rate_limiters={"llm": limiter, "expectimax": SuggestRateLimiter(30, 60, clock)},
-        llm_in_flight=LlmInFlightGate(1),
+        llm_in_flight=InFlightGate(1),
     )
     body = {"board": OPEN_BOARD, "mode": "llm"}
 
@@ -196,6 +240,56 @@ def test_capacity_and_spend_429_have_distinct_details() -> None:
         assert not getattr(app.state, "telemetry_shutdown", False)
 
         llm.release.set()
+        holder.join(timeout=3)
+        assert not holder.is_alive()
+
+        assert client.post("/suggest", json=body).status_code == 200
+        spend = client.post("/suggest", json=body)
+        assert spend.status_code == 429
+        assert spend.json()["detail"] == DETAIL_SPEND_CAP
+        assert spend.headers["retry-after"] == "60"
+        assert spend.headers[HEADER_SUGGEST_LIMIT.lower()] == LIMIT_REASON_SPEND
+
+    assert capacity.json()["detail"] != spend.json()["detail"]
+
+
+def test_expectimax_capacity_and_spend_429_have_distinct_details(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Expectimax also surfaces distinct capacity vs spend 429 details on one app."""
+    clock = FrozenClock()
+    limiter = SuggestRateLimiter(2, 60, clock)
+    search = BlockingExpectimax()
+    monkeypatch.setattr("app.suggester.choose_move", search)
+    app = create_app(
+        isolated_settings(
+            app_env="prod",
+            suggest_rate_limit_expectimax_requests=2,
+            expectimax_max_in_flight=1,
+        ),
+        _UnusedLLM(),
+        rate_limiters={"llm": SuggestRateLimiter(30, 60, clock), "expectimax": limiter},
+        expectimax_in_flight=InFlightGate(1),
+    )
+    body = {"board": OPEN_BOARD, "mode": "expectimax"}
+
+    with TestClient(app) as client:
+
+        def hold() -> None:
+            client.post("/suggest", json=body)
+
+        holder = threading.Thread(target=hold)
+        holder.start()
+        assert search.started.wait(2)
+
+        capacity = client.post("/suggest", json=body)
+        assert capacity.status_code == 429
+        assert capacity.json()["detail"] == DETAIL_MODEL_BUSY
+        assert capacity.headers["retry-after"] == "1"
+        assert capacity.headers[HEADER_SUGGEST_LIMIT.lower()] == LIMIT_REASON_CAPACITY
+        assert not getattr(app.state, "telemetry_shutdown", False)
+
+        search.release.set()
         holder.join(timeout=3)
         assert not holder.is_alive()
 

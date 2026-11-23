@@ -8,6 +8,10 @@ export const SETTLE_MS = SLIDE_MS + 20;
 export const AUTO_PLAY_GAP_MS = 750;
 // Capacity-busy 429s: retry a few times with Retry-After backoff; spend 429 still stops.
 export const AUTO_PLAY_CAPACITY_MAX_RETRIES = 3;
+// Model miss (HTTP 200 source=fallback): a few Auto Play retries after a short pause
+// so a transient Ollama timeout can recover; manual AI Suggest stays one-shot.
+export const AUTO_PLAY_FALLBACK_MAX_RETRIES = 2;
+export const AUTO_PLAY_FALLBACK_RETRY_MS = 2000;
 // Opening deal: uniform count of 2s across the full board (requirements: random number; classic used exactly 2).
 export const MIN_START_TILES = 1;
 export const MAX_START_TILES = GRID_COUNT;
