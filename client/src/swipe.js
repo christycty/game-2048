@@ -1,4 +1,4 @@
-const SWIPE_THRESHOLD = 24;
+export const SWIPE_THRESHOLD = 24;
 
 // A short drag is ignored. The longer axis picks the direction.
 export function swipeDirection(dx, dy, threshold = SWIPE_THRESHOLD) {

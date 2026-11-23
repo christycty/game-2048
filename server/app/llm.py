@@ -9,8 +9,8 @@ import httpx
 from app import telemetry as tel
 from app.cancel import SuggestCancelled
 from app.config import Settings
+from app.moves import DIRECTIONS
 
-DIRECTIONS = ("up", "down", "left", "right")
 REASON_WORD_LIMIT = 50
 # A single token has one word, so the word cap alone would not bound the payload.
 REASON_CHAR_LIMIT = 400

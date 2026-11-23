@@ -1,5 +1,5 @@
 import { useLayoutEffect, useRef } from "react";
-import { GRID_COUNT, GRID_SIZE, SLIDE_MS } from "../game";
+import { GRID_COUNT, GRID_SIZE, SLIDE_MS, WIN_TILE } from "../game";
 import { swipeDirection } from "../swipe";
 import "./Board.css";
 
@@ -50,8 +50,8 @@ function Tile({ tile }) {
     if (tile.isNew) classes.push("tile-new");
     if (tile.isMerged) classes.push("tile-merged");
 
-    // 4096 and above share one style.
-    const valueClass = tile.value <= 2048 ? `tile-value-${tile.value}` : "tile-value-super";
+    // Above WIN_TILE share one style (CSS defines per-value classes through WIN_TILE).
+    const valueClass = tile.value <= WIN_TILE ? `tile-value-${tile.value}` : "tile-value-super";
 
     return (
         <div

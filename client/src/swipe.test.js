@@ -1,11 +1,11 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { swipeDirection } from "./swipe.js";
+import { SWIPE_THRESHOLD, swipeDirection } from "./swipe.js";
 
 test("a short drag is not a swipe", () => {
-    // Distances are in pixels. 23 is one short of the 24 needed for a swipe.
+    // Distances are in pixels; just under the shared threshold is not a swipe.
     assert.equal(swipeDirection(10, 0), null);
-    assert.equal(swipeDirection(0, -23), null);
+    assert.equal(swipeDirection(0, -(SWIPE_THRESHOLD - 1)), null);
 });
 
 test("the longer axis chooses the swipe direction", () => {

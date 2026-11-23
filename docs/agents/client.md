@@ -112,7 +112,7 @@ The grid is 4×4. Row 0 is the top. Column 0 is the left.
 
 `hasMoves` is true when any cell is empty, or when a horizontal or vertical neighbor matches. Each pair is checked once, from the top or left cell.
 
-`hasWon` is true when any tile value is ≥ 2048 (module-local `WIN_TILE`).
+`hasWon` is true when any tile value is ≥ `WIN_TILE` (2048). Tests import `WIN_TILE` / `SWIPE_THRESHOLD` rather than repeating those numbers.
 
 `tilesToBoard` builds the 4×4 value grid the API expects. Empty cells are `0`. Animation fields are dropped.
 

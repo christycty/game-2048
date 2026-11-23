@@ -11,7 +11,7 @@ export const AUTO_PLAY_CAPACITY_MAX_RETRIES = 3;
 // Opening deal: uniform count of 2s across the full board (requirements: random number; classic used exactly 2).
 export const MIN_START_TILES = 1;
 export const MAX_START_TILES = GRID_COUNT;
-const WIN_TILE = 2048;
+export const WIN_TILE = 2048;
 
 // One step on the board. Row grows downward, column grows to the right.
 const DIRECTIONS = {
