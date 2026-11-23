@@ -1,4 +1,4 @@
-import { useRef } from "react";
+import { useEffect, useRef } from "react";
 import { applyMove, AUTO_PLAY_GAP_MS, SETTLE_MS } from "../game/game";
 
 /**
@@ -27,6 +27,46 @@ export function useMoveController({
     handleSuggestRef,
 }) {
     const moveTokenRef = useRef(0);
+    const settleTimerRef = useRef(null);
+    const gapTimerRef = useRef(null);
+
+    function clearGapTimer() {
+        if (gapTimerRef.current !== null) {
+            window.clearTimeout(gapTimerRef.current);
+            gapTimerRef.current = null;
+        }
+    }
+
+    function clearMoveTimers() {
+        if (settleTimerRef.current !== null) {
+            window.clearTimeout(settleTimerRef.current);
+            settleTimerRef.current = null;
+        }
+        clearGapTimer();
+    }
+
+    function resetMoves(nextTiles) {
+        moveTokenRef.current += 1;
+        clearMoveTimers();
+        animatingRef.current = false;
+        tilesRef.current = nextTiles;
+        scoreRef.current = 0;
+        lostRef.current = false;
+        wonRef.current = false;
+        setTiles(nextTiles);
+        setCurrentScore(0);
+        setLost(false);
+        setWon(false);
+    }
+
+    useEffect(
+        () => () => {
+            moveTokenRef.current += 1;
+            clearMoveTimers();
+            animatingRef.current = false;
+        },
+        [animatingRef],
+    );
 
     function handleMove(direction) {
         if (animatingRef.current || lostRef.current || wonRef.current) return false;
@@ -50,6 +90,7 @@ export function useMoveController({
 
         const token = moveTokenRef.current + 1;
         moveTokenRef.current = token;
+        clearMoveTimers();
         animatingRef.current = true;
         setBusy(true);
         // Auto-play keeps the latest hint visible while the move slides.
@@ -60,7 +101,8 @@ export function useMoveController({
         }
         setTiles(result.visualTiles);
 
-        window.setTimeout(() => {
+        settleTimerRef.current = window.setTimeout(() => {
+            settleTimerRef.current = null;
             if (moveTokenRef.current !== token) return;
             const nextScore = scoreRef.current + result.scoreGained;
             tilesRef.current = result.resolvedTiles;
@@ -80,10 +122,12 @@ export function useMoveController({
             }
             if (autoPlayingRef.current) {
                 // Keep busy through the gap. Stop releases busy when idle; New Game bumps the token.
-                window.setTimeout(() => {
+                clearGapTimer();
+                gapTimerRef.current = window.setTimeout(() => {
+                    gapTimerRef.current = null;
                     if (moveTokenRef.current !== token) return;
                     if (!autoPlayingRef.current) {
-                        setBusy(false);
+                        if (!suggestingRef.current) setBusy(false);
                         return;
                     }
                     void handleSuggestRef.current();
@@ -97,6 +141,7 @@ export function useMoveController({
 
     return {
         handleMove,
-        moveTokenRef,
+        clearGapTimer,
+        resetMoves,
     };
 }

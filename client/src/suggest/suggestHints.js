@@ -27,9 +27,7 @@ export function hintForSuggestFailure({
     retrying,
 }) {
     if (retrying) {
-        if (isCapacityBusy) return HINT_CAPACITY_RETRYING;
-        if (isModelMiss) return HINT_SUGGEST_RETRYING;
-        return HINT_CAPACITY_RETRYING;
+        return isModelMiss ? HINT_SUGGEST_RETRYING : HINT_CAPACITY_RETRYING;
     }
     if (isCapacityBusy) return HINT_CAPACITY_BUSY;
     if (isSpendCap) return HINT_SPEND_CAP;

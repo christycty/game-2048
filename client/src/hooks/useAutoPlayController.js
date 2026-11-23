@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { hasMoves } from "../game/game";
 import { HINT_SUGGEST_FAILED } from "../suggest/suggestHints";
 
@@ -21,15 +21,31 @@ export function useAutoPlayController({
     setHint,
     abortInFlightSuggest,
     resetCapacityRetries,
+    clearGapTimer,
     handleMove,
     handleSuggest,
 }) {
     const [autoPlaying, setAutoPlaying] = useState(false);
 
+    function resetAutoPlay() {
+        autoPlayingRef.current = false;
+        autoApplyingRef.current = false;
+        setAutoPlaying(false);
+    }
+
+    useEffect(
+        () => () => {
+            autoPlayingRef.current = false;
+            autoApplyingRef.current = false;
+        },
+        [autoPlayingRef, autoApplyingRef],
+    );
+
     function stopAutoPlay() {
         if (!autoPlayingRef.current) return;
         autoPlayingRef.current = false;
         setAutoPlaying(false);
+        clearGapTimer();
         resetCapacityRetries();
         // The post-settle gap keeps busy true so AI stays inactive through the pause.
         // Stopping must release that hold when nothing else is in flight.
@@ -70,8 +86,8 @@ export function useAutoPlayController({
 
     return {
         autoPlaying,
-        setAutoPlaying,
         stopAutoPlay,
+        resetAutoPlay,
         handleAutoPlayToggle,
     };
 }
