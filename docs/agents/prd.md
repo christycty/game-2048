@@ -6,7 +6,7 @@ Product rules for implementers and agents. Human-oriented narrative: [../overvie
 
 ## Goals
 
-1. Play 2048 per assignment rules: start with a random count of 2s (1–16), slide and merge, spawn after each successful move, hard win at 2048 / lose when no moves.
+1. Play 2048 per the product rules: start with a random count of 2s (1–16), slide and merge, spawn after each successful move, hard win at 2048 / lose when no moves.
 2. Keep the surface small: current score, best score for the session, and new game. No undo, accounts, or leaderboard.
 3. Offer optional AI help: the player picks a suggestion style, asks for a move, sees the recommendation, and either confirms with **Play** or starts **Auto Play**.
 

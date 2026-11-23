@@ -2,20 +2,20 @@ import pytest
 
 from app.moves import apply_move, legal_moves
 
-# Take-home brief example board (null cells become 0 here).
-ASSIGNMENT_S = [
+# Documented example board (null cells become 0 here).
+EXAMPLE_S = [
     [0, 8, 2, 2],
     [4, 2, 0, 2],
     [0, 0, 0, 0],
     [0, 0, 0, 2],
 ]
 
-ASSIGNMENT_DOWN = [
+EXAMPLE_DOWN = [
     [0, 0, 0, 0],
     [0, 0, 0, 0],
     [0, 8, 0, 2],
     [4, 2, 2, 4],
-]  # Brief gives no Down example; this board is derived by hand.
+]  # No published Down example; this board is derived by hand.
 
 
 def test_left_merges_a_pair_once() -> None:
@@ -124,14 +124,14 @@ def test_single_corner_tile_can_move_right_or_down() -> None:
         ("left", [[8, 4, 0, 0], [4, 4, 0, 0], [0, 0, 0, 0], [2, 0, 0, 0]]),
         ("right", [[0, 0, 8, 4], [0, 0, 4, 4], [0, 0, 0, 0], [0, 0, 0, 2]]),
         ("up", [[4, 8, 2, 4], [0, 2, 0, 2], [0, 0, 0, 0], [0, 0, 0, 0]]),
-        ("down", ASSIGNMENT_DOWN),
+        ("down", EXAMPLE_DOWN),
     ],
 )
-def test_assignment_examples(direction: str, expected: list[list[int]]) -> None:
-    assert apply_move(ASSIGNMENT_S, direction) == expected
+def test_documented_move_examples(direction: str, expected: list[list[int]]) -> None:
+    assert apply_move(EXAMPLE_S, direction) == expected
 
 
-def test_assignment_examples_lose_board_has_no_legal_moves() -> None:
+def test_documented_lose_board_has_no_legal_moves() -> None:
     board = [
         [2, 4, 2, 4],
         [4, 2, 4, 2],

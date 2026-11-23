@@ -299,38 +299,38 @@ test("reaching WIN_TILE wins even when the spawn leaves no moves", () => {
     assert.equal(hasMoves(result.resolvedTiles), false);
 });
 
-// Take-home brief example board (null cells become 0 here).
-const ASSIGNMENT_S = [
+// Documented example board (null cells become 0 here).
+const EXAMPLE_S = [
     [0, 8, 2, 2],
     [4, 2, 0, 2],
     [0, 0, 0, 0],
     [0, 0, 0, 2],
 ];
 
-test("assignment examples: moves from the take-home brief board", () => {
+test("documented examples: moves from the example board", () => {
     const empty = [0, 0, 0, 0];
-    expectMove(ASSIGNMENT_S, "left", [[8, 4, 0, 0], [4, 4, 0, 0], empty, [2, 0, 0, 0]], 8);
-    expectMove(ASSIGNMENT_S, "right", [[0, 0, 8, 4], [0, 0, 4, 4], empty, [0, 0, 0, 2]], 8);
+    expectMove(EXAMPLE_S, "left", [[8, 4, 0, 0], [4, 4, 0, 0], empty, [2, 0, 0, 0]], 8);
+    expectMove(EXAMPLE_S, "right", [[0, 0, 8, 4], [0, 0, 4, 4], empty, [0, 0, 0, 2]], 8);
     expectMove(
-        ASSIGNMENT_S,
+        EXAMPLE_S,
         "up",
         [[4, 8, 2, 4], [0, 2, 0, 2], empty, empty],
         4,
     );
-    // Brief gives no Down example; derived by the same slide/merge rules as the server.
+    // No published Down example; derived by the same slide/merge rules as the server.
     expectMove(
-        ASSIGNMENT_S,
+        EXAMPLE_S,
         "down",
         [empty, empty, [0, 8, 0, 2], [4, 2, 2, 4]],
         4,
     );
 });
 
-test("assignment examples: Move Up then spawn 2 at bottom-left like the brief", () => {
+test("documented examples: Move Up then spawn 2 at bottom-left", () => {
     let calls = 0;
     // Ten empties after up; row-major index 6 is (3, 0). Second roll is not 0 mod 10 → spawn 2.
     const random = () => (calls++ === 0 ? 0.65 : 0.5);
-    const result = applyMove(board(ASSIGNMENT_S), "up", random);
+    const result = applyMove(board(EXAMPLE_S), "up", random);
     assert.equal(result.scoreGained, 4);
     assert.deepEqual(
         result.resolvedTiles
@@ -351,7 +351,7 @@ test("assignment examples: Move Up then spawn 2 at bottom-left like the brief", 
     assert.deepEqual([spawn.row, spawn.col], [3, 0]);
 });
 
-test("assignment examples: full alternating board has no moves", () => {
+test("documented examples: full alternating board has no moves", () => {
     const lose = [
         [2, 4, 2, 4],
         [4, 2, 4, 2],
@@ -361,7 +361,7 @@ test("assignment examples: full alternating board has no moves", () => {
     assert.equal(hasMoves(board(lose)), false);
 });
 
-test("assignment examples: a 2048 on the board is a win", () => {
+test("documented examples: a 2048 on the board is a win", () => {
     const win = [
         [4, 0, 0, 2],
         [2048, 0, 0, 0],

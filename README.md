@@ -35,12 +35,12 @@ cd server && uv run pytest && uv run ruff check . && uv run ruff format --check 
 cd client && npm test && npm run lint && npm run build
 ```
 
-## Requirements map
+## Feature map
 
-| # | Requirement | Code | Tests |
+| # | Feature | Code | Tests |
 |---|---|---|---|
 | 1 | Initial board with a random number of `2`s | [`createInitialTiles`](client/src/game/game.js) | [`game.test.js`](client/src/game/game.test.js) |
-| 2–4 | Move left / right / up / down | [`applyMove`](client/src/game/game.js) (client), [`moves.py`](server/app/moves.py) (server legality) | [`game.test.js`](client/src/game/game.test.js), [`test_moves.py`](server/tests/test_moves.py), both including the brief's example boards |
+| 2–4 | Move left / right / up / down | [`applyMove`](client/src/game/game.js) (client), [`moves.py`](server/app/moves.py) (server legality) | [`game.test.js`](client/src/game/game.test.js), [`test_moves.py`](server/tests/test_moves.py), including the documented example boards |
 | 5 | Spawn a `2` or `4` after each board-changing move | [`applyMove`](client/src/game/game.js) | [`game.test.js`](client/src/game/game.test.js) |
 | 5 | Endgame: lose when no moves, win at 2048 | [`hasMoves` / `hasWon`](client/src/game/game.js), overlay in [`Board.jsx`](client/src/components/Board.jsx) | [`game.test.js`](client/src/game/game.test.js), [`Board.test.jsx`](client/src/components/Board.test.jsx) |
 | 6 | AI suggestion (offline model, no credentials) | [`suggester.py`](server/app/suggester.py), [`llm.py`](server/app/llm.py), [`expectimax.py`](server/app/expectimax.py) | [`test_suggest.py`](server/tests/test_suggest.py), [`test_expectimax.py`](server/tests/test_expectimax.py), [`App.test.jsx`](client/src/App.test.jsx) |
@@ -49,22 +49,22 @@ Suggested reading order: `client/src/game/game.js` → `server/app/moves.py` →
 
 ## Assumptions
 
-Where the brief is silent, the original 2048 decides. Where the two conflict, the brief wins.
+Where product rules are silent, classic 2048 decides. Where they conflict, the product rules win.
 
-- **Opening deal:** a uniform random count from 1 to 16 of `2`s on distinct random cells. The brief asks for a random number. The original deals two tiles.
+- **Opening deal:** a uniform random count from 1 to 16 of `2`s on distinct random cells. The product asks for a random number; classic 2048 deals two tiles.
 - **Spawn:** one tile on a uniformly random empty cell, a `2` 90% of the time and a `4` 10% of the time. A move that changes nothing spawns nothing and scores nothing.
 - **Merging:** each tile merges at most once per move, and pairs nearest the move direction merge first (`[2,2,2,2]` left → `[4,4,_,_]`).
 - **Win is a hard stop:** the game ends on the move that makes a 2048 tile. There is no "keep playing". If that move also fills the board, the win still counts.
-- **Score:** the sum of merged values (as in the original). Best score lasts for the page session only.
-- **API board format:** `0` stands for an empty cell (the brief uses `null`). The server accepts only 4×4 boards whose tiles are `0` or powers of two.
+- **Score:** the sum of merged values (as in classic 2048). Best score lasts for the page session only.
+- **API board format:** `0` stands for an empty cell (some write-ups use `null`). The server accepts only 4×4 boards whose tiles are `0` or powers of two.
 - **AI suggestions are advisory.** The player confirms with **Play** or ignores the hint. The server checks every move for legality before returning it. When the LLM fails after retries, the server returns a deterministic legal move marked `source: "fallback"`, and the UI says the AI could not suggest rather than presenting it as advice.
-- **Two AI modes.** The LLM is the primary mode because the brief frames the feature as an AI model. Expectimax is a depth-limited search that plays noticeably better than a small local model, so it is offered alongside.
+- **Two AI modes.** The LLM is the primary mode because the coach is framed as an AI model. Expectimax is a depth-limited search that plays noticeably better than a small local model, so it is offered alongside.
 - **Local model only:** Ollama on the host, with no API keys anywhere. A remote provider would be another `LlmClient` implementation.
-- **Single-user, local deployment:** there are no accounts or persistence. Undo and leaderboards are out of scope.
+- **No accounts or persistence:** games are not saved, and there is no auth. Multiple browser sessions can share one API (spend and capacity caps are process-wide, not per player). Undo and leaderboards are out of scope.
 
 ## Production readiness
 
-The extra machinery hardens the one AI endpoint, which is the part that talks to a slow, unreliable model. It is not a set of extra game features.
+`/suggest` can be slow, concurrent, and cancelled mid-flight. These controls keep that path reliable, bounded, and observable:
 
 - **Reliability:** each LLM call has a timeout, retries happen within an overall time budget, and the retry prompt explains what was wrong with the last reply. The reply is validated and its reason length capped, and a legal fallback move is always available. When the browser disconnects (Stop, New Game, a manual move), the server cancels the in-flight model call or search.
 - **Abuse and cost limits:** for each mode, a sliding-window ceiling on requests caps total spend, and a cap on concurrent calls stops the model being overloaded. The two return distinct `429` responses, so Auto Play can retry when the model is busy but stops when the spend limit is hit.
