@@ -30,9 +30,18 @@ describe("formatSuggestionHint", () => {
 });
 
 describe("hintForSuggestFailure", () => {
-    it("prefers capacity retry copy while Auto Play is retrying", () => {
+    it("uses capacity retry copy when retrying a non-model-miss failure", () => {
         assert.equal(
             hintForSuggestFailure({ isCapacityBusy: true, isSpendCap: false, retrying: true }),
+            HINT_CAPACITY_RETRYING,
+        );
+        assert.equal(
+            hintForSuggestFailure({
+                isCapacityBusy: false,
+                isSpendCap: false,
+                isModelMiss: false,
+                retrying: true,
+            }),
             HINT_CAPACITY_RETRYING,
         );
     });

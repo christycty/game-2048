@@ -5,6 +5,7 @@ import {
     SuggestError,
     isAbortError,
     classifySuggestLimit,
+    parseRetryAfter,
     LIMIT_CAPACITY,
     LIMIT_SPEND,
     DETAIL_MODEL_BUSY,
@@ -74,9 +75,13 @@ test("suggestMove passes an AbortSignal through to fetch", async () => {
 });
 
 test("classifySuggestLimit prefers header then detail; unknown is spend", () => {
+    assert.equal(classifySuggestLimit(DETAIL_MODEL_BUSY, LIMIT_SPEND), LIMIT_SPEND);
+    assert.equal(classifySuggestLimit(DETAIL_SPEND_CAP, LIMIT_CAPACITY), LIMIT_CAPACITY);
     assert.equal(classifySuggestLimit(DETAIL_MODEL_BUSY, null), LIMIT_CAPACITY);
-    assert.equal(classifySuggestLimit(DETAIL_SPEND_CAP, "capacity"), LIMIT_CAPACITY);
-    assert.equal(classifySuggestLimit(DETAIL_SPEND_CAP, "spend"), LIMIT_SPEND);
+    assert.equal(classifySuggestLimit(DETAIL_SPEND_CAP, null), LIMIT_SPEND);
+    assert.equal(classifySuggestLimit("other", "unknown"), LIMIT_SPEND);
+    assert.equal(classifySuggestLimit(DETAIL_MODEL_BUSY, "unknown"), LIMIT_CAPACITY);
+    assert.equal(classifySuggestLimit(DETAIL_SPEND_CAP, LIMIT_SPEND), LIMIT_SPEND);
     assert.equal(classifySuggestLimit(null, null), LIMIT_SPEND);
 });
 
@@ -150,6 +155,42 @@ test("suggestMove beacons model_busy on capacity 429", async () => {
     const beacon = calls.find((c) => c.url === "/client-events");
     assert.ok(beacon);
     assert.deepEqual(JSON.parse(beacon.options.body), { outcome: "model_busy" });
+});
+
+test("suggestMove lets X-Suggest-Limit spend header override model busy detail", async () => {
+    const calls = [];
+    const headers = new Headers({
+        "retry-after": "30",
+        "x-suggest-limit": LIMIT_SPEND,
+    });
+    const fetchImpl = async (url, options) => {
+        calls.push({ url, options });
+        if (url.endsWith("/client-events")) {
+            return { ok: true, status: 204, async json() { return {}; } };
+        }
+        return {
+            ok: false,
+            status: 429,
+            headers,
+            async json() {
+                return { detail: DETAIL_MODEL_BUSY };
+            },
+        };
+    };
+
+    await assert.rejects(
+        () => suggestMove(BOARD, "llm", { fetch: fetchImpl }),
+        (error) =>
+            error instanceof SuggestError &&
+            error.status === 429 &&
+            error.message === DETAIL_SPEND_CAP &&
+            error.limitReason === LIMIT_SPEND &&
+            error.retryAfter === 30,
+    );
+
+    const beacons = calls.filter((c) => c.url === "/client-events");
+    assert.equal(beacons.length, 1);
+    assert.deepEqual(JSON.parse(beacons[0].options.body), { outcome: "rate_limit" });
 });
 
 test("suggestMove beacons fail on non-429 HTTP errors", async () => {
@@ -461,4 +502,100 @@ test("suggestMove abort still beacons cancel when shouldReportOutcome is false",
     const beacon = calls.find((c) => c.url === "/client-events");
     assert.ok(beacon);
     assert.deepEqual(JSON.parse(beacon.options.body), { outcome: "cancel" });
+});
+
+test("suggestMove treats abort while reading 429 error body as AbortError and beacons cancel", async () => {
+    const controller = new AbortController();
+    const calls = [];
+    const fetchImpl = async (url, options) => {
+        calls.push({ url, options });
+        if (url.endsWith("/client-events")) {
+            return { ok: true, status: 204, async json() { return {}; } };
+        }
+        return {
+            ok: false,
+            status: 429,
+            headers: new Headers({ "retry-after": "2", "x-suggest-limit": LIMIT_CAPACITY }),
+            async json() {
+                controller.abort();
+                return { detail: DETAIL_MODEL_BUSY };
+            },
+        };
+    };
+
+    await assert.rejects(
+        () => suggestMove(BOARD, "llm", { fetch: fetchImpl, signal: controller.signal }),
+        (error) => isAbortError(error) && !(error instanceof SuggestError),
+    );
+    const beacons = calls.filter((c) => c.url === "/client-events");
+    assert.equal(beacons.length, 1);
+    assert.deepEqual(JSON.parse(beacons[0].options.body), { outcome: "cancel" });
+});
+
+test("suggestMove treats json rejection on 200 when signal is aborted as AbortError and beacons cancel", async () => {
+    const controller = new AbortController();
+    const calls = [];
+    const fetchImpl = async (url, options) => {
+        calls.push({ url, options });
+        if (url.endsWith("/client-events")) {
+            return { ok: true, status: 204, async json() { return {}; } };
+        }
+        return {
+            ok: true,
+            status: 200,
+            async json() {
+                controller.abort();
+                throw new SyntaxError("Unexpected end of JSON input");
+            },
+        };
+    };
+
+    await assert.rejects(
+        () => suggestMove(BOARD, "llm", { fetch: fetchImpl, signal: controller.signal }),
+        (error) => isAbortError(error) && !(error instanceof SuggestError),
+    );
+    const beacons = calls.filter((c) => c.url === "/client-events");
+    assert.equal(beacons.length, 1);
+    assert.deepEqual(JSON.parse(beacons[0].options.body), { outcome: "cancel" });
+});
+
+test("parseRetryAfter and suggestMove handle Retry-After edge cases", async () => {
+    assert.equal(parseRetryAfter(new Headers({ "retry-after": "3" })), 3);
+    assert.equal(parseRetryAfter(new Headers({ "retry-after": "0" })), null);
+    assert.equal(parseRetryAfter(new Headers({ "retry-after": "-5" })), null);
+    assert.equal(parseRetryAfter(new Headers({ "retry-after": "abc" })), null);
+    assert.equal(parseRetryAfter(new Headers()), null);
+    assert.equal(parseRetryAfter(null), null);
+
+    const cases = [
+        [new Headers({ "retry-after": "3", "x-suggest-limit": LIMIT_CAPACITY }), 3],
+        [new Headers({ "retry-after": "0", "x-suggest-limit": LIMIT_CAPACITY }), null],
+        [new Headers({ "retry-after": "-5", "x-suggest-limit": LIMIT_CAPACITY }), null],
+        [new Headers({ "retry-after": "abc", "x-suggest-limit": LIMIT_CAPACITY }), null],
+        [new Headers({ "x-suggest-limit": LIMIT_CAPACITY }), null],
+    ];
+
+    for (const [headers, expectedRetryAfter] of cases) {
+        const fetchImpl = async (url) => {
+            if (url.endsWith("/client-events")) {
+                return { ok: true, status: 204, async json() { return {}; } };
+            }
+            return {
+                ok: false,
+                status: 429,
+                headers,
+                async json() {
+                    return { detail: DETAIL_MODEL_BUSY };
+                },
+            };
+        };
+
+        await assert.rejects(
+            () => suggestMove(BOARD, "llm", { fetch: fetchImpl }),
+            (error) =>
+                error instanceof SuggestError &&
+                error.status === 429 &&
+                error.retryAfter === expectedRetryAfter,
+        );
+    }
 });

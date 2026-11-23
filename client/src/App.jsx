@@ -7,9 +7,11 @@ import { useAutoPlayController } from "./hooks/useAutoPlayController";
 import { useKeyboardMoves } from "./hooks/useKeyboardMoves";
 import { useMoveController } from "./hooks/useMoveController";
 import { useSuggestSession } from "./hooks/useSuggestSession";
+import { HINT_SUGGEST_FAILED } from "./suggest/suggestHints";
 import "./App.css";
 
 function App() {
+    const [gameId, setGameId] = useState(0);
     const [currentScore, setCurrentScore] = useState(0);
     const [bestScore, setBestScore] = useState(0);
     const [tiles, setTiles] = useState(createInitialTiles);
@@ -111,6 +113,7 @@ function App() {
     });
 
     function startGame() {
+        setGameId((id) => id + 1);
         resetSuggestSession();
         resetAutoPlay();
         resetMoves(createInitialTiles());
@@ -120,14 +123,19 @@ function App() {
 
     function handleApplySuggestion() {
         if (!pendingMove || animatingRef.current || lostRef.current || wonRef.current) return;
-        handleMove(pendingMove);
+        const moved = handleMove(pendingMove);
+        if (!moved) {
+            setPendingMove(null);
+            setHint(HINT_SUGGEST_FAILED);
+        }
     }
 
     function handleModeChange(mode) {
         if (mode === aiModeRef.current) return;
+        if (autoPlayingRef.current) return;
         aiModeRef.current = mode;
         setAiMode(mode);
-        // Previous mode's in-flight fetch, retry wait, or pending Play must not land.
+        // Previous mode's in-flight fetch or pending Play must not land.
         if (abortInFlightSuggest() && !animatingRef.current) {
             setBusy(false);
         }
@@ -144,7 +152,7 @@ function App() {
     return (
         <div className="app">
             <ScoreCard score={currentScore} bestScore={bestScore}></ScoreCard>
-            <Board tiles={tiles} lost={lost} won={won} onSwipe={handleMove}></Board>
+            <Board key={gameId} tiles={tiles} lost={lost} won={won} onSwipe={handleMove}></Board>
             <ActionPanel
                 onNewGame={startGame}
                 onSuggest={handleSuggest}

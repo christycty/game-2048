@@ -1,4 +1,4 @@
-import { useLayoutEffect, useRef } from "react";
+import { useEffect, useLayoutEffect, useRef } from "react";
 import { GRID_COUNT, GRID_SIZE, SLIDE_MS, WIN_TILE } from "../game/game";
 import { swipeDirection } from "../game/swipe";
 import "./Board.css";
@@ -67,9 +67,17 @@ function Tile({ tile }) {
 function Board({ tiles, lost, won = false, onSwipe }) {
     const swipeRef = useRef(null);
 
+    useEffect(() => {
+        if (lost || won) swipeRef.current = null;
+    }, [lost, won]);
+
     function onPointerDown(event) {
         // A right-click is not a swipe.
         if (event.pointerType === "mouse" && event.button !== 0) return;
+        // Ignore a second concurrent pointer, while allowing the same pointerId to restart cleanly.
+        if (lost || won || (swipeRef.current !== null && swipeRef.current.pointerId !== event.pointerId)) {
+            return;
+        }
         swipeRef.current = {
             x: event.clientX,
             y: event.clientY,
@@ -84,6 +92,10 @@ function Board({ tiles, lost, won = false, onSwipe }) {
     }
 
     function finishSwipe(event) {
+        if (lost || won) {
+            swipeRef.current = null;
+            return;
+        }
         const start = swipeRef.current;
         // Another pointer ending must not cancel the gesture that is still down.
         if (!start || start.pointerId !== event.pointerId) return;
@@ -101,9 +113,11 @@ function Board({ tiles, lost, won = false, onSwipe }) {
                     style={{ "--slide": `${SLIDE_MS}ms`, "--size": GRID_SIZE }}
                     onPointerDown={onPointerDown}
                     onPointerUp={finishSwipe}
-                    onPointerCancel={() => {
+                    onPointerCancel={(event) => {
                         // The browser took the pointer, so this drag is not a swipe.
-                        swipeRef.current = null;
+                        if (swipeRef.current?.pointerId === event.pointerId) {
+                            swipeRef.current = null;
+                        }
                     }}
                 >
                     {/* Empty cells stay put. Tiles live in their own layer so they can slide across them. */}
