@@ -17,7 +17,7 @@ from app.cancel import SuggestCancelled
 from app.expectimax import choose_move
 from app.llm import ModelSuggestion, OllamaClient
 from app.main import DisconnectCancelMiddleware, create_app
-from app.rate_limit import DETAIL_MODEL_BUSY, LlmInFlightGate, SuggestRateLimiter
+from app.rate_limit import DETAIL_MODEL_BUSY, InFlightGate, SuggestRateLimiter
 from app.suggester import MoveSuggester
 from helpers import (
     OPEN_BOARD,
@@ -342,7 +342,7 @@ def test_disconnect_middleware_sets_cancel_on_disconnect() -> None:
 def test_asgi_disconnect_cancels_blocking_llm() -> None:
     """Disconnect A while B holds (max_in_flight=2): A 499, B 200; A's slot frees mid-flight."""
     llm = BlockingLLM()
-    in_flight = LlmInFlightGate(2)
+    in_flight = InFlightGate(2)
     settings = isolated_settings(
         suggest_rate_limit_requests=10,
         suggest_rate_limit_expectimax_requests=10,
@@ -399,7 +399,7 @@ def test_asgi_disconnect_cancels_blocking_expectimax(
     """Disconnect A while B holds (max_in_flight=2): A 499, B 200; A's slot frees mid-flight."""
     search = BlockingExpectimax()
     monkeypatch.setattr("app.suggester.choose_move", search)
-    in_flight = LlmInFlightGate(2)
+    in_flight = InFlightGate(2)
     settings = isolated_settings(
         suggest_rate_limit_expectimax_requests=10,
         expectimax_max_in_flight=2,
@@ -450,7 +450,7 @@ def test_asgi_disconnect_cancels_blocking_expectimax(
 def test_cancelled_suggest_releases_llm_in_flight_slot() -> None:
     """499 must free the capacity slot so the next LLM suggest is admitted."""
     llm = BlockingLLM()
-    gate = LlmInFlightGate(1)
+    gate = InFlightGate(1)
     settings = isolated_settings(suggest_rate_limit_requests=10, llm_max_in_flight=1)
     app = create_app(settings, llm, llm_in_flight=gate)
     body = json.dumps({"board": OPEN_BOARD, "mode": "llm"}).encode()
@@ -476,7 +476,7 @@ def test_cancelled_expectimax_releases_in_flight_slot(
     """499 must free the Expectimax capacity slot so the next search is admitted."""
     search = BlockingExpectimax()
     monkeypatch.setattr("app.suggester.choose_move", search)
-    gate = LlmInFlightGate(1)
+    gate = InFlightGate(1)
     settings = isolated_settings(
         suggest_rate_limit_expectimax_requests=10,
         expectimax_max_in_flight=1,

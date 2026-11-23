@@ -16,7 +16,7 @@ from app.rate_limit import (
     HEADER_SUGGEST_LIMIT,
     LIMIT_REASON_CAPACITY,
     LIMIT_REASON_SPEND,
-    LlmInFlightGate,
+    InFlightGate,
     SuggestRateLimiter,
 )
 from app.schemas import MAX_TILE
@@ -196,7 +196,7 @@ def test_llm_in_flight_blocks_second_call_while_first_holds() -> None:
 def test_llm_in_flight_two_admits_two_blocks_third() -> None:
     """Capacity gate at 2: two holders pass; a third gets Retry-After 1; drain frees slots."""
     llm = BlockingLLM()
-    gate = LlmInFlightGate(2)
+    gate = InFlightGate(2)
     settings = isolated_settings(suggest_rate_limit_requests=20, llm_max_in_flight=2)
     app = create_app(settings, llm, llm_in_flight=gate)
     body = {"board": OPEN_BOARD, "mode": "llm"}
@@ -269,7 +269,7 @@ def test_expectimax_in_flight_blocks_when_full(
     """Expectimax capacity (default 4): fifth parallel search gets model busy 429."""
     search = BlockingExpectimax()
     monkeypatch.setattr("app.suggester.choose_move", search)
-    gate = LlmInFlightGate(4)
+    gate = InFlightGate(4)
     settings = isolated_settings(
         suggest_rate_limit_expectimax_requests=20,
         expectimax_max_in_flight=4,
@@ -361,7 +361,7 @@ def test_expectimax_capacity_reject_does_not_burn_hard_ceiling(
             "llm": SuggestRateLimiter(30, 60, clock),
             "expectimax": limiter,
         },
-        expectimax_in_flight=LlmInFlightGate(1),
+        expectimax_in_flight=InFlightGate(1),
     )
     body = {"board": OPEN_BOARD, "mode": "expectimax"}
 
@@ -400,7 +400,7 @@ def test_capacity_reject_does_not_burn_hard_ceiling() -> None:
         settings,
         llm,
         rate_limiters={"llm": limiter, "expectimax": SuggestRateLimiter(30, 60, clock)},
-        llm_in_flight=LlmInFlightGate(1),
+        llm_in_flight=InFlightGate(1),
     )
     body = {"board": OPEN_BOARD, "mode": "llm"}
 
